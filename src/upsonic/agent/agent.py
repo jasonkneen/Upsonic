@@ -1,7 +1,5 @@
 import asyncio
 import copy
-import inspect
-import time
 import uuid
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Dict, List, Literal, Optional, Union, TYPE_CHECKING
@@ -9,40 +7,33 @@ from typing import Any, AsyncIterator, Dict, List, Literal, Optional, Union, TYP
 PromptCompressor = None
 
 from upsonic.utils.logging_config import sentry_sdk
-from upsonic import _utils
 from upsonic.agent.base import BaseAgent
 from upsonic.agent.run_result import RunResult, StreamRunResult
 from upsonic._utils import now_utc
 from upsonic.utils.retry import retryable
-from upsonic.utils.validators import validate_attachments_exist
 from upsonic.tools.processor import ExternalExecutionPause
-from upsonic.messages import FinalResultEvent
 
 if TYPE_CHECKING:
-    from upsonic.models import Model, ModelRequest, ModelMessage, ModelRequestParameters, ModelResponse
-    from upsonic.messages import ModelResponseStreamEvent, FinalResultEvent, PartStartEvent, PartDeltaEvent, TextPart, ToolCallPart, ToolReturnPart
+    from upsonic.models import Model, ModelRequest, ModelRequestParameters, ModelResponse
+    from upsonic.messages import ModelResponseStreamEvent, ToolCallPart, ToolReturnPart
     from upsonic.tasks.tasks import Task
     from upsonic.storage.memory.memory import Memory
     from upsonic.canvas.canvas import Canvas
     from upsonic.models.settings import ModelSettings
     from upsonic.profiles import ModelProfile
-    from upsonic.reflection import ReflectionConfig, ReflectionProcessor
+    from upsonic.reflection import ReflectionConfig
     from upsonic.safety_engine.base import Policy
-    from upsonic.safety_engine.exceptions import DisallowedOperation
-    from upsonic.safety_engine.models import PolicyInput, RuleOutput
-    from upsonic.tools import ToolManager, ToolMetrics, ToolDefinition
+    from upsonic.tools import ToolDefinition
     from upsonic.usage import RequestUsage
     from upsonic.agent.context_managers import (
-        CallManager, ContextManager, ReliabilityManager, 
-        MemoryManager, SystemPromptManager, TaskManager
+        MemoryManager
     )
     from upsonic.graph.graph import State
-    from ..db.database import DatabaseBase
+    from upsonic.db.database import DatabaseBase
     from upsonic.models.model_selector import ModelRecommendation
 else:
     Model = "Model"
     ModelRequest = "ModelRequest"
-    ModelMessage = "ModelMessage"
     ModelRequestParameters = "ModelRequestParameters"
     ModelResponse = "ModelResponse"
     Task = "Task"
@@ -51,24 +42,13 @@ else:
     ModelSettings = "ModelSettings"
     ModelProfile = "ModelProfile"
     ReflectionConfig = "ReflectionConfig"
-    ReflectionProcessor = "ReflectionProcessor"
     Policy = "Policy"
-    DisallowedOperation = "DisallowedOperation"
-    PolicyInput = "PolicyInput"
-    RuleOutput = "RuleOutput"
-    ToolManager = "ToolManager"
-    ToolMetrics = "ToolMetrics"
     ToolDefinition = "ToolDefinition"
     RequestUsage = "RequestUsage"
-    validate_attachments_exist = "validate_attachments_exist"
-    CallManager = "CallManager"
-    ContextManager = "ContextManager"
-    ReliabilityManager = "ReliabilityManager"
     MemoryManager = "MemoryManager"
-    SystemPromptManager = "SystemPromptManager"
-    TaskManager = "TaskManager"
     State = "State"
     ModelRecommendation = "ModelRecommendation"
+    DatabaseBase = "DatabaseBase"
 
 RetryMode = Literal["raise", "return_false"]
 
@@ -148,6 +128,11 @@ class Agent(BaseAgent):
         agent_policy: Optional[Union["Policy", List["Policy"]]] = None,
         tool_policy_pre: Optional[Union["Policy", List["Policy"]]] = None,
         tool_policy_post: Optional[Union["Policy", List["Policy"]]] = None,
+        # Policy feedback loop settings
+        user_policy_feedback: bool = False,
+        agent_policy_feedback: bool = False,
+        user_policy_feedback_loop: int = 1,
+        agent_policy_feedback_loop: int = 1,
         settings: Optional["ModelSettings"] = None,
         profile: Optional["ModelProfile"] = None,
         reflection_config: Optional["ReflectionConfig"] = None,
@@ -212,6 +197,10 @@ class Agent(BaseAgent):
             reasoning_format: Reasoning format for Groq models ("hidden", "raw", "parsed")
             tool_policy_pre: Tool safety policy for pre-execution validation (single policy or list of policies)
             tool_policy_post: Tool safety policy for post-execution validation (single policy or list of policies)
+            user_policy_feedback: Enable feedback loop for user policy violations (returns helpful message instead of blocking)
+            agent_policy_feedback: Enable feedback loop for agent policy violations (re-executes agent with feedback)
+            user_policy_feedback_loop: Maximum retry count for user policy feedback (default 1)
+            agent_policy_feedback_loop: Maximum retry count for agent policy feedback (default 1)
         """
         from upsonic.models import infer_model
         self.model = infer_model(model)
@@ -300,8 +289,26 @@ class Agent(BaseAgent):
         
         # Initialize policy managers
         from upsonic.agent.policy_manager import PolicyManager
-        self.user_policy_manager = PolicyManager(policies=user_policy, debug=self.debug)
-        self.agent_policy_manager = PolicyManager(policies=agent_policy, debug=self.debug)
+        self.user_policy_manager = PolicyManager(
+            policies=user_policy,
+            debug=self.debug,
+            enable_feedback=user_policy_feedback,
+            feedback_loop_count=user_policy_feedback_loop,
+            policy_type="user_policy"
+        )
+        self.agent_policy_manager = PolicyManager(
+            policies=agent_policy,
+            debug=self.debug,
+            enable_feedback=agent_policy_feedback,
+            feedback_loop_count=agent_policy_feedback_loop,
+            policy_type="agent_policy"
+        )
+        
+        # Store feedback settings for reference
+        self.user_policy_feedback = user_policy_feedback
+        self.agent_policy_feedback = agent_policy_feedback
+        self.user_policy_feedback_loop = user_policy_feedback_loop
+        self.agent_policy_feedback_loop = agent_policy_feedback_loop
         
         # Keep backward compatibility - expose as single policy if only one
         self.user_policy = user_policy
@@ -555,8 +562,6 @@ class Agent(BaseAgent):
             
             if validation_result.should_block():
                 # Handle blocking based on action type
-                from upsonic.safety_engine.exceptions import DisallowedOperation
-                
                 # If DisallowedOperation was raised by a RAISE action policy, re-raise it
                 if validation_result.disallowed_exception:
                     raise validation_result.disallowed_exception
@@ -1303,7 +1308,13 @@ class Agent(BaseAgent):
         Apply user policy to task input.
         
         This method now uses PolicyManager to handle multiple policies.
-        Kept for backward compatibility.
+        When feedback is enabled, returns a helpful message to the user instead
+        of hard blocking, explaining what was wrong and how to correct it.
+        
+        Returns:
+            tuple: (task, should_continue)
+                - task: The task (possibly modified with feedback response)
+                - should_continue: False if task should stop (blocked or feedback given)
         """
         if not self.user_policy_manager.has_policies() or not task.description:
             return task, True
@@ -1318,11 +1329,21 @@ class Agent(BaseAgent):
         
         if result.should_block():
             # Re-raise DisallowedOperation if it was caught by PolicyManager
-            if result.disallowed_exception:
+            # (unless feedback was generated - then we want to return the feedback)
+            if result.disallowed_exception and not result.feedback_message:
                 raise result.disallowed_exception
             
             task.task_end()
+            # Use feedback message if available (gives helpful guidance to user)
             task._response = result.get_final_message()
+            
+            # Print feedback info if debug mode and feedback was generated
+            if self.debug and result.feedback_message:
+                from upsonic.utils.printing import user_policy_feedback_returned
+                user_policy_feedback_returned(
+                    policy_name=result.violated_policy_name or "Unknown Policy",
+                    feedback_message=result.feedback_message
+                )
             return task, False
         elif result.action_taken in ["REPLACE", "ANONYMIZE"]:
             task.description = result.final_output or task.description
@@ -1501,7 +1522,7 @@ class Agent(BaseAgent):
             result = self._prompt_compressor.compress_prompt(
                 context.split('\n'),
                 instruction=instruction,
-                ratio=ratio
+                rate=ratio
             )
             return result['compressed_prompt']
         except Exception as e:
@@ -1639,15 +1660,21 @@ class Agent(BaseAgent):
         return self._model_recommendation
     
 
-    async def _apply_agent_policy(self, task: "Task") -> "Task":
+    async def _apply_agent_policy(self, task: "Task") -> tuple["Task", Optional[str]]:
         """
         Apply agent policy to task output.
         
-        This method now uses PolicyManager to handle multiple policies.
-        Kept for backward compatibility.
+        This method uses PolicyManager to handle multiple policies.
+        When feedback is enabled and a violation occurs, it returns the feedback
+        message along with the task so the caller can decide to retry.
+        
+        Returns:
+            tuple: (task, feedback_message_or_none)
+                - task: The task (possibly modified with blocked response)
+                - feedback_message: If not None, agent should retry with this feedback
         """
         if not self.agent_policy_manager.has_policies() or not task or not task.response:
-            return task
+            return task, None
         
         from upsonic.safety_engine.models import PolicyInput
         
@@ -1660,26 +1687,33 @@ class Agent(BaseAgent):
         else:
             response_text = str(task.response)
         
-        if response_text:
-            agent_policy_input = PolicyInput(input_texts=[response_text])
-            result = await self.agent_policy_manager.execute_policies_async(
-                agent_policy_input,
-                check_type="Agent Output Check"
-            )
-            
-            # Apply the result
-            if result.should_block():
-                # Re-raise DisallowedOperation if it was caught by PolicyManager
-                if result.disallowed_exception:
-                    raise result.disallowed_exception
-                
-                task._response = result.get_final_message()
-            elif result.action_taken in ["REPLACE", "ANONYMIZE"]:
-                task._response = result.final_output or "Response modified by agent policy."
-            elif result.final_output:
-                task._response = result.final_output
+        if not response_text:
+            return task, None
         
-        return task
+        agent_policy_input = PolicyInput(input_texts=[response_text])
+        result = await self.agent_policy_manager.execute_policies_async(
+            agent_policy_input,
+            check_type="Agent Output Check"
+        )
+        
+        # Check if retry with feedback should be attempted
+        if result.should_retry_with_feedback() and self.agent_policy_manager.can_retry():
+            # Return feedback message for retry - don't modify task yet
+            return task, result.feedback_message
+        
+        # Apply the result (no retry - either passed or exhausted retries)
+        if result.should_block():
+            # Re-raise DisallowedOperation if it was caught by PolicyManager
+            if result.disallowed_exception and not result.feedback_message:
+                raise result.disallowed_exception
+            
+            task._response = result.get_final_message()
+        elif result.action_taken in ["REPLACE", "ANONYMIZE"]:
+            task._response = result.final_output or "Response modified by agent policy."
+        elif result.final_output:
+            task._response = result.final_output
+        
+        return task, None
     
     @asynccontextmanager
     async def _managed_storage_connection(self):
@@ -1785,7 +1819,8 @@ class Agent(BaseAgent):
                 task=task,
                 agent=self,
                 model=model,
-                state=state
+                state=state,
+                is_streaming=False
             )
             
             await pipeline.execute(context)
@@ -1961,13 +1996,19 @@ class Agent(BaseAgent):
         """Stream text content from the model response.
         
         This method extracts and yields text from streaming events.
+        If stream_result is provided, events are also tracked for statistics.
         Note: Event storage and accumulation are already handled by the pipeline.
         """
         from upsonic.messages import FinalResultEvent
+        from upsonic.agent.events import AgentEvent
         
         # The pipeline already handles event storage, text accumulation, and metrics
-        # We just extract and yield text here
+        # We extract and yield text here, and optionally track events for stats
         async for event in self._create_stream_iterator(task, model, debug, retry, state, graph_execution_id):
+            # Track events in stream_result if provided (for get_streaming_stats())
+            if stream_result and isinstance(event, AgentEvent):
+                stream_result._streaming_events.append(event)
+            
             text_content = self._extract_text_from_stream_event(event)
             if text_content:
                 yield text_content
@@ -1981,22 +2022,40 @@ class Agent(BaseAgent):
         state: Optional["State"] = None,
         graph_execution_id: Optional[str] = None,
         stream_result: Optional[StreamRunResult] = None
-    ) -> AsyncIterator["ModelResponseStreamEvent"]:
-        """Stream raw events from the model response.
+    ) -> AsyncIterator[Any]:
+        """Stream all Agent events from the execution pipeline.
         
-        This method handles event streaming and text accumulation.
-        Note: Event storage and text accumulation are already handled by the pipeline.
-        This method just yields the events.
+        This method yields comprehensive Agent events for full pipeline visibility:
+        - Pipeline start/end events
+        - Step start/end events  
+        - Step-specific events (cache, policy, tools, model selection, etc.)
+        - Text streaming events (TextDeltaEvent, TextCompleteEvent)
+        - Tool call and result events
+        - Final output events
+        
+        Only Agent events are yielded - raw LLM events are converted internally.
+        
+        This is the recommended method for applications that need full
+        control and visibility over the agent execution.
         """
-        # The pipeline already handles event storage, text accumulation, and metrics
-        # We just yield the events here
+        # Yield all Agent events from the pipeline
         async for event in self._create_stream_iterator(task, model, debug, retry, state, graph_execution_id):
             yield event
     
-    def _extract_text_from_stream_event(self, event: "ModelResponseStreamEvent") -> Optional[str]:
-        """Extract text content from a streaming event."""
-        from upsonic.messages import PartStartEvent, PartDeltaEvent, TextPart, TextPartDelta
+    def _extract_text_from_stream_event(self, event: Any) -> Optional[str]:
+        """Extract text content from a streaming event.
         
+        Handles both Agent events (TextDeltaEvent) and raw LLM events
+        (PartStartEvent, PartDeltaEvent).
+        """
+        from upsonic.messages import PartStartEvent, PartDeltaEvent, TextPart, TextPartDelta
+        from upsonic.agent.events import TextDeltaEvent
+        
+        # Handle Agent events (new event system)
+        if isinstance(event, TextDeltaEvent):
+            return event.content
+        
+        # Handle raw LLM events (legacy/internal)
         if isinstance(event, PartStartEvent) and isinstance(event.part, TextPart):
             return event.part.content
         elif isinstance(event, PartDeltaEvent):
