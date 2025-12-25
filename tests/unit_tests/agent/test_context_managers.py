@@ -485,6 +485,154 @@ class TestSystemPromptManager:
             assert "Test Goal" in prompt
             assert "Test Instructions" in prompt
 
+    @pytest.mark.asyncio
+    @patch("upsonic.context.default_prompt.default_prompt")
+    async def test_system_prompt_empty_string_no_default_prompt(
+        self, mock_default_prompt
+    ):
+        """Test that empty string system_prompt does NOT trigger default prompt."""
+        agent = MockAgent()
+        agent.system_prompt = ""  # Explicitly empty string
+        agent.role = None
+        agent.goal = None
+        agent.instructions = None
+        agent.enable_thinking_tool = False
+        task = MockTask()
+        manager = SystemPromptManager(agent, task)
+
+        from upsonic.context.default_prompt import DefaultPrompt
+        mock_default_prompt.return_value = DefaultPrompt(prompt="Default prompt text")
+
+        async with manager.manage_system_prompt():
+            prompt = manager.get_system_prompt()
+            # Default prompt should NOT be added when system_prompt is explicitly ""
+            assert "Default prompt text" not in prompt
+            # The prompt should be empty or minimal
+            assert prompt.strip() == ""
+
+    @pytest.mark.asyncio
+    @patch("upsonic.context.default_prompt.default_prompt")
+    async def test_system_prompt_none_adds_default_prompt(
+        self, mock_default_prompt
+    ):
+        """Test that None system_prompt DOES trigger default prompt when no other info."""
+        agent = MockAgent()
+        agent.system_prompt = None  # Not provided
+        agent.role = None
+        agent.goal = None
+        agent.instructions = None
+        agent.enable_thinking_tool = False
+        task = MockTask()
+        manager = SystemPromptManager(agent, task)
+
+        from upsonic.context.default_prompt import DefaultPrompt
+        mock_default_prompt.return_value = DefaultPrompt(prompt="Default prompt text")
+
+        async with manager.manage_system_prompt():
+            prompt = manager.get_system_prompt()
+            # Default prompt SHOULD be added when system_prompt is None
+            assert "Default prompt text" in prompt
+
+    @pytest.mark.asyncio
+    @patch("upsonic.context.default_prompt.default_prompt")
+    async def test_system_prompt_custom_no_default_prompt(
+        self, mock_default_prompt
+    ):
+        """Test that custom system_prompt does NOT trigger default prompt."""
+        agent = MockAgent()
+        agent.system_prompt = "Custom system prompt"
+        agent.role = None
+        agent.goal = None
+        agent.instructions = None
+        agent.enable_thinking_tool = False
+        task = MockTask()
+        manager = SystemPromptManager(agent, task)
+
+        from upsonic.context.default_prompt import DefaultPrompt
+        mock_default_prompt.return_value = DefaultPrompt(prompt="Default prompt text")
+
+        async with manager.manage_system_prompt():
+            prompt = manager.get_system_prompt()
+            # Default prompt should NOT be added when custom system_prompt is provided
+            assert "Default prompt text" not in prompt
+            # Custom prompt should be present
+            assert "Custom system prompt" in prompt
+
+    @pytest.mark.asyncio
+    @patch("upsonic.context.default_prompt.default_prompt")
+    async def test_system_prompt_none_with_role_no_default_prompt(
+        self, mock_default_prompt
+    ):
+        """Test that default prompt is NOT added when role is present even if system_prompt is None."""
+        agent = MockAgent()
+        agent.system_prompt = None
+        agent.role = "Test Role"  # has_any_info will be True
+        agent.goal = None
+        agent.instructions = None
+        agent.enable_thinking_tool = False
+        task = MockTask()
+        manager = SystemPromptManager(agent, task)
+
+        from upsonic.context.default_prompt import DefaultPrompt
+        mock_default_prompt.return_value = DefaultPrompt(prompt="Default prompt text")
+
+        async with manager.manage_system_prompt():
+            prompt = manager.get_system_prompt()
+            # Default prompt should NOT be added when has_any_info is True
+            assert "Default prompt text" not in prompt
+            # Role should be present
+            assert "Test Role" in prompt
+
+    @pytest.mark.asyncio
+    @patch("upsonic.context.default_prompt.default_prompt")
+    async def test_system_prompt_none_with_thinking_no_default_prompt(
+        self, mock_default_prompt
+    ):
+        """Test that default prompt is NOT added when thinking is enabled even if system_prompt is None."""
+        agent = MockAgent()
+        agent.system_prompt = None
+        agent.role = None
+        agent.goal = None
+        agent.instructions = None
+        agent.enable_thinking_tool = True  # is_thinking_enabled will be True
+        task = MockTask()
+        manager = SystemPromptManager(agent, task)
+
+        from upsonic.context.default_prompt import DefaultPrompt
+        mock_default_prompt.return_value = DefaultPrompt(prompt="Default prompt text")
+
+        async with manager.manage_system_prompt():
+            prompt = manager.get_system_prompt()
+            # Default prompt should NOT be added when thinking is enabled
+            assert "Default prompt text" not in prompt
+            # Thinking instructions should be present
+            assert "MISSION BRIEFING" in prompt or "OPERATION" in prompt
+
+    @pytest.mark.asyncio
+    @patch("upsonic.context.default_prompt.default_prompt")
+    async def test_system_prompt_empty_string_with_role_no_default_prompt(
+        self, mock_default_prompt
+    ):
+        """Test that empty string system_prompt with role does NOT add default prompt."""
+        agent = MockAgent()
+        agent.system_prompt = ""  # Explicitly empty
+        agent.role = "Test Role"
+        agent.goal = None
+        agent.instructions = None
+        agent.enable_thinking_tool = False
+        task = MockTask()
+        manager = SystemPromptManager(agent, task)
+
+        from upsonic.context.default_prompt import DefaultPrompt
+        mock_default_prompt.return_value = DefaultPrompt(prompt="Default prompt text")
+
+        async with manager.manage_system_prompt():
+            prompt = manager.get_system_prompt()
+            # Default prompt should NOT be added
+            assert "Default prompt text" not in prompt
+            # Role should be present
+            assert "Test Role" in prompt
+
 
 # ============================================================================
 # Test ContextManager
