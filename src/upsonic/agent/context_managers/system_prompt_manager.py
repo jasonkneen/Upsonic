@@ -222,7 +222,7 @@ class SystemPromptManager:
             if culture_context:
                 prompt_parts.append(culture_context)
 
-        if self.agent.system_prompt:
+        if self.agent.system_prompt is not None:
             base_prompt = self.agent.system_prompt
         
         has_any_info = False
@@ -258,7 +258,7 @@ class SystemPromptManager:
             
         
         
-        if not self.agent.system_prompt and not has_any_info and not is_thinking_enabled:
+        if self.agent.system_prompt is None and not has_any_info and not is_thinking_enabled:
             base_prompt = default_prompt().prompt
         
         prompt_parts.append(base_prompt.strip())
