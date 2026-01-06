@@ -27,11 +27,22 @@ class TestMilvusKnowledgeBaseIntegration:
     def teardown_method(self):
         """Clean up test database files after each test."""
         import glob
+        import time
+        # Give Milvus embedded server time to release file handles and shut down
+        # This is especially important for Python 3.11/3.12 where cleanup timing can be stricter
+        time.sleep(0.2)
         # Clean up any test database files
         for db_file in glob.glob("test_milvus_*.db"):
             try:
                 if os.path.exists(db_file):
                     os.remove(db_file)
+            except Exception:
+                pass
+        # Also clean up any Milvus data directories
+        for db_dir in glob.glob("test_milvus_*"):
+            try:
+                if os.path.isdir(db_dir):
+                    shutil.rmtree(db_dir, ignore_errors=True)
             except Exception:
                 pass
     
@@ -75,7 +86,16 @@ class TestMilvusKnowledgeBaseIntegration:
     @pytest.fixture
     def milvus_hybrid_provider(self, milvus_hybrid_config):
         """Create a MilvusProvider with hybrid search configuration."""
-        return MilvusProvider(milvus_hybrid_config)
+        provider = MilvusProvider(milvus_hybrid_config)
+        yield provider
+        # Ensure cleanup after test - force cleanup if still connected
+        try:
+            if provider._is_connected:
+                provider._async_client = None
+                provider._sync_client = None
+                provider._is_connected = False
+        except Exception:
+            pass
     
     @pytest.fixture
     def mock_embedding_provider(self):
@@ -94,8 +114,21 @@ class TestMilvusKnowledgeBaseIntegration:
     
     @pytest.fixture
     def milvus_provider(self, milvus_config):
-        """Create a MilvusProvider instance."""
-        return MilvusProvider(milvus_config)
+        """Create a MilvusProvider instance with automatic cleanup."""
+        provider = MilvusProvider(milvus_config)
+        yield provider
+        # Ensure cleanup after test - disconnect if still connected
+        # Note: We can't use asyncio.run() here because pytest-asyncio manages the event loop
+        # The cleanup will happen in the finally blocks of individual tests
+        # This is just a safety net to force cleanup if a test didn't properly disconnect
+        try:
+            if provider._is_connected:
+                # Force cleanup - set to None to prevent resource leaks
+                provider._async_client = None
+                provider._sync_client = None
+                provider._is_connected = False
+        except Exception:
+            pass
     
     @pytest.fixture
     def knowledge_base(self, milvus_provider, mock_embedding_provider, mock_chunker, mock_loader):
@@ -450,19 +483,29 @@ class TestMilvusKnowledgeBaseIntegration:
     @pytest.mark.asyncio
     async def test_milvus_collection_recreation(self, milvus_provider):
         """Test MilvusProvider collection recreation (mocked)."""
-        # Mock collection operations
-        milvus_provider.connect = AsyncMock()
-        milvus_provider.create_collection = AsyncMock()
-        milvus_provider.collection_exists = AsyncMock(return_value=True)
-        
-        # Test collection creation
-        await milvus_provider.connect()
-        await milvus_provider.create_collection()
-        assert await milvus_provider.collection_exists()
-        
-        # Test recreation
-        await milvus_provider.create_collection()  # Should not raise error
-        assert await milvus_provider.collection_exists()
+        try:
+            # Mock collection operations
+            milvus_provider.connect = AsyncMock()
+            milvus_provider.create_collection = AsyncMock()
+            milvus_provider.collection_exists = AsyncMock(return_value=True)
+            
+            # Test collection creation
+            await milvus_provider.connect()
+            await milvus_provider.create_collection()
+            assert await milvus_provider.collection_exists()
+            
+            # Test recreation
+            await milvus_provider.create_collection()  # Should not raise error
+            assert await milvus_provider.collection_exists()
+        finally:
+            # Ensure cleanup even for mocked tests
+            if milvus_provider._is_connected:
+                try:
+                    await milvus_provider.disconnect()
+                except Exception:
+                    milvus_provider._async_client = None
+                    milvus_provider._sync_client = None
+                    milvus_provider._is_connected = False
     
     def test_milvus_distance_metrics(self, milvus_provider):
         """Test MilvusProvider distance metrics (mocked)."""
