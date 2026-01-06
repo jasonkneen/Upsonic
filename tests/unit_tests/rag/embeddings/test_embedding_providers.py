@@ -1,12 +1,11 @@
 import pytest
-import asyncio
 import os
 import tempfile
 import shutil
+import time
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Union
-from unittest.mock import Mock, patch, AsyncMock, MagicMock
-import numpy as np
+from unittest.mock import Mock, patch, AsyncMock
 
 from upsonic.embeddings.base import EmbeddingProvider, EmbeddingConfig, EmbeddingMode, EmbeddingMetrics
 from upsonic.embeddings.openai_provider import OpenAIEmbedding, OpenAIEmbeddingConfig
@@ -20,7 +19,7 @@ from upsonic.embeddings.factory import create_embedding_provider, list_available
 
 from upsonic.knowledge_base.knowledge_base import KnowledgeBase
 from upsonic.vectordb.providers.faiss import FaissProvider
-from upsonic.vectordb.config import Config, Mode, DistanceMetric, IndexType
+from upsonic.vectordb.config import DistanceMetric
 from upsonic.schemas.data_models import Chunk, Document
 from upsonic.text_splitter.base import BaseChunker
 from upsonic.loaders.base import BaseLoader
@@ -218,7 +217,7 @@ class TestEmbeddingProviders:
     def mock_fastembed_model(self):
         """Mock FastEmbed model."""
         mock_model = Mock()
-        mock_embeddings = [np.array([0.1] * 384) for _ in range(3)]
+        mock_embeddings = [[0.1] * 384 for _ in range(3)]
         mock_model.embed.return_value = iter(mock_embeddings)
         return mock_model
     
@@ -253,7 +252,7 @@ class TestEmbeddingProviders:
     
     def test_bedrock_embedding_creation(self, mock_bedrock_client):
         """Test AWS Bedrock embedding provider creation."""
-        with patch('upsonic.embeddings.bedrock_provider.boto3.Session') as mock_session:
+        with patch('boto3.Session') as mock_session:
             mock_session.return_value.client.return_value = mock_bedrock_client
             
             config = BedrockEmbeddingConfig(
@@ -269,7 +268,7 @@ class TestEmbeddingProviders:
     
     def test_gemini_embedding_creation(self, mock_gemini_client):
         """Test Google Gemini embedding provider creation."""
-        with patch('upsonic.embeddings.gemini_provider.genai.Client', return_value=mock_gemini_client):
+        with patch('google.genai.Client', return_value=mock_gemini_client):
             with patch.dict(os.environ, {'GOOGLE_API_KEY': 'test-key'}):
                 config = GeminiEmbeddingConfig(
                     model_name="gemini-embedding-001",
@@ -302,8 +301,8 @@ class TestEmbeddingProviders:
         """Test HuggingFace embedding provider creation."""
         mock_model, mock_tokenizer = mock_huggingface_model
         
-        with patch('upsonic.embeddings.huggingface_provider.AutoModel.from_pretrained', return_value=mock_model):
-            with patch('upsonic.embeddings.huggingface_provider.AutoTokenizer.from_pretrained', return_value=mock_tokenizer):
+        with patch('transformers.AutoModel.from_pretrained', return_value=mock_model):
+            with patch('transformers.AutoTokenizer.from_pretrained', return_value=mock_tokenizer):
                 config = HuggingFaceEmbeddingConfig(
                     model_name="sentence-transformers/all-MiniLM-L6-v2",
                     use_local=True,
@@ -419,7 +418,11 @@ class TestKnowledgeBaseIntegration:
     @pytest.fixture
     def mock_vectordb(self, mock_vectordb_config):
         """Create mock vector database provider."""
-        return FaissProvider(mock_vectordb_config)
+        try:
+            import faiss
+            return FaissProvider(mock_vectordb_config)
+        except ImportError:
+            pytest.skip("faiss-cpu not available")
     
     @pytest.fixture
     def sample_documents(self):
@@ -568,8 +571,8 @@ class TestEmbeddingProviderFactory:
     
     def test_create_embedding_provider_huggingface(self):
         """Test creating HuggingFace embedding provider via factory."""
-        with patch('upsonic.embeddings.huggingface_provider.AutoModel.from_pretrained'):
-            with patch('upsonic.embeddings.huggingface_provider.AutoTokenizer.from_pretrained'):
+        with patch('transformers.AutoModel.from_pretrained'):
+            with patch('transformers.AutoTokenizer.from_pretrained'):
                 provider = create_embedding_provider(
                     "huggingface", 
                     model_name="sentence-transformers/all-MiniLM-L6-v2"
@@ -597,7 +600,7 @@ class TestEmbeddingProviderFactory:
     def test_create_embedding_provider_gemini(self):
         """Test creating Gemini embedding provider via factory."""
         with patch.dict(os.environ, {'GOOGLE_API_KEY': 'test-key'}):
-            with patch('upsonic.embeddings.gemini_provider.genai.Client'):
+            with patch('google.genai.Client'):
                 provider = create_embedding_provider("gemini", model_name="gemini-embedding-001")
                 
                 assert isinstance(provider, GeminiEmbedding)
@@ -630,7 +633,7 @@ class TestEmbeddingProviderErrorHandling:
     
     def test_bedrock_missing_credentials(self):
         """Test Bedrock provider with missing credentials."""
-        with patch('upsonic.embeddings.bedrock_provider.boto3.Session') as mock_session:
+        with patch('boto3.Session') as mock_session:
             mock_session.side_effect = Exception("No credentials found")
             
             with pytest.raises(ConfigurationError) as exc_info:
@@ -681,9 +684,9 @@ class TestEmbeddingProviderPerformance:
         for batch_size in batch_sizes:
             texts = [f"Test text {i}" for i in range(batch_size)]
             
-            start_time = asyncio.get_event_loop().time()
+            start_time = time.time()
             embeddings = await provider.embed_texts(texts)
-            end_time = asyncio.get_event_loop().time()
+            end_time = time.time()
             
             assert len(embeddings) == batch_size
             assert all(len(emb) == 384 for emb in embeddings)
@@ -708,7 +711,8 @@ class TestEmbeddingProviderPerformance:
         memory_usage = sys.getsizeof(embeddings)
         assert memory_usage < 10 * 1024 * 1024  # Less than 10MB
     
-    def test_embedding_metrics_collection(self):
+    @pytest.mark.asyncio
+    async def test_embedding_metrics_collection(self):
         """Test embedding metrics collection."""
         provider = MockEmbeddingProvider()
         
@@ -718,7 +722,7 @@ class TestEmbeddingProviderPerformance:
         assert initial_metrics.embedding_time_ms == 0
         
         # After embedding operation
-        asyncio.run(provider.embed_texts(["test1", "test2", "test3"]))
+        await provider.embed_texts(["test1", "test2", "test3"])
         
         final_metrics = provider.get_metrics()
         assert final_metrics.total_chunks == 3

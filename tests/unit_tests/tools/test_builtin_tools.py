@@ -84,9 +84,9 @@ class TestBuiltinTools:
     @patch("upsonic.tools.builtin_tools._DDGS_AVAILABLE", False)
     def test_web_search_function_missing_dependency(self):
         """Test WebSearch with missing dependency."""
-        with patch("upsonic.utils.printing.import_error") as mock_error:
-            WebSearch("test")
-            mock_error.assert_called_once()
+        with patch("upsonic.tools.builtin_tools._DDGS_AVAILABLE", False):
+            with pytest.raises(ImportError, match="Missing required package"):
+                WebSearch("test")
 
     @patch("upsonic.tools.builtin_tools._REQUESTS_AVAILABLE", True)
     @patch("upsonic.tools.builtin_tools._BEAUTIFULSOUP_AVAILABLE", True)

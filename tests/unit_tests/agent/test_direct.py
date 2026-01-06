@@ -403,27 +403,27 @@ class TestDirectInternalMethods(unittest.TestCase):
 
         self.assertEqual(model._settings, mock_settings)
 
-    def test_direct_build_messages_from_task(self):
+    @pytest.mark.asyncio
+    async def test_direct_build_messages_from_task(self):
         """Test _build_messages_from_task() method."""
-        import asyncio
         direct = Direct(model=self.mock_model)
         task = Task("Test task description")
 
-        messages = asyncio.run(direct._build_messages_from_task(task))
+        messages = await direct._build_messages_from_task(task)
 
         self.assertIsInstance(messages, list)
         self.assertEqual(len(messages), 1)
         self.assertEqual(messages[0].parts[0].content, "Test task description")
 
-    def test_direct_build_messages_from_task_with_attachments(self):
+    @pytest.mark.asyncio
+    async def test_direct_build_messages_from_task_with_attachments(self):
         """Test _build_messages_from_task() with attachments."""
-        import asyncio
         direct = Direct(model=self.mock_model)
         task = Task("Test task", attachments=["/path/to/file.txt"])
 
         with patch("builtins.open", mock_open(read_data=b"file content")):
             with patch("mimetypes.guess_type", return_value=("text/plain", None)):
-                messages = asyncio.run(direct._build_messages_from_task(task))
+                messages = await direct._build_messages_from_task(task)
 
         self.assertEqual(len(messages), 1)
         self.assertEqual(len(messages[0].parts), 2)  # UserPromptPart + BinaryContent

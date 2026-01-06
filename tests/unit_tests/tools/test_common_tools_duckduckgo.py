@@ -65,9 +65,8 @@ class TestDuckDuckGoSearch:
     @patch("upsonic.tools.common_tools.duckduckgo._DDGS_AVAILABLE", False)
     def test_duckduckgo_search_tool_missing_dependency(self):
         """Test tool creation with missing dependency."""
-        with patch("upsonic.utils.printing.import_error") as mock_error:
+        with pytest.raises(ImportError, match="Missing required package"):
             duckduckgo_search_tool()
-            mock_error.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_duckduckgo_search_with_none_max_results(self, mock_ddgs_client):

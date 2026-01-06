@@ -757,7 +757,8 @@ async def test_team_context_sharing():
     print("✓ Team context sharing works!")
 
 
-def test_team_error_handling():
+@pytest.mark.asyncio
+async def test_team_error_handling():
     """
     Test error handling.
 
@@ -777,17 +778,13 @@ def test_team_error_handling():
     team = Team(agents=agents, mode="coordinate", model=None)
 
     with pytest.raises(ValueError, match="A `model` must be set"):
-        import asyncio
-
-        asyncio.run(team.multi_agent_async(agents, [task]))
+        await team.multi_agent_async(agents, [task])
 
     # Test route mode without model
     team_route = Team(agents=agents, mode="route", model=None)
 
     with pytest.raises(ValueError, match="A `model` must be set"):
-        import asyncio
-
-        asyncio.run(team_route.multi_agent_async(agents, [task]))
+        await team_route.multi_agent_async(agents, [task])
 
     print("✓ Team error handling works!")
 
