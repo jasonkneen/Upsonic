@@ -42,25 +42,6 @@ class PipelineManager:
     - Handling errors and early termination
     - Providing execution statistics
     - Emitting events for streaming visibility
-    
-    Usage:
-        ```python
-        manager = PipelineManager(steps=[
-            CacheCheckStep(),
-            ModelExecutionStep(),
-            FinalizationStep()
-        ])
-        
-        context = StepContext(task=task, agent=agent)
-        result = await manager.execute(context)
-        
-        # Or for streaming with events:
-        async for event in manager.execute_stream(context):
-            if isinstance(event, StepStartEvent):
-                print(f"Starting: {event.step_name}")
-            elif isinstance(event, TextDeltaEvent):
-                print(event.content, end='')
-        ```
     """
     
     def __init__(
