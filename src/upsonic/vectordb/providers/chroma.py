@@ -224,7 +224,10 @@ class ChromaProvider(BaseVectorDBProvider):
         debug_log("Disconnecting from ChromaDB...", context="ChromaVectorDB")
         
         try:
-            await asyncio.to_thread(self._client.reset)
+            # Add timeout to prevent hanging on reset
+            await asyncio.wait_for(asyncio.to_thread(self._client.reset), timeout=5.0)
+        except asyncio.TimeoutError:
+            debug_log("ChromaDB reset timed out, forcing cleanup...", context="ChromaVectorDB")
         except Exception:
             pass
         finally:

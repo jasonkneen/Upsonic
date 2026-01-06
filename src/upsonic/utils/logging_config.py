@@ -131,6 +131,12 @@ def setup_sentry() -> None:
     # Eğer daha önce konfigüre edildiyse, skip et
     if _SENTRY_CONFIGURED:
         return
+    
+    # Skip Sentry on Python 3.14+ due to pydantic/fastapi compatibility issues
+    import sys
+    if sys.version_info >= (3, 14):
+        _SENTRY_CONFIGURED = True
+        return
 
     # Get configuration from environment
     the_dsn = os.getenv(
