@@ -64,7 +64,7 @@ async def test_medical_info_block_phi(mock_infer_model):
     
     phi_task = Task(description="Patient John Doe, medical record number MR123456, has a diagnosis of diabetes. Please review his health information.")
     
-    result = agent_with_medical_policy.do(phi_task)
+    result = await agent_with_medical_policy.do_async(phi_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -108,7 +108,7 @@ async def test_medical_info_block_insurance(mock_infer_model):
 
     insurance_task = Task(description="My health insurance policy number is INS123456789 and my Medicare number is 123-45-6789A.")
     
-    result = agent_with_medical_policy.do(insurance_task)
+    result = await agent_with_medical_policy.do_async(insurance_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -154,7 +154,7 @@ async def test_medical_info_anonymize_prescription(mock_infer_model):
     
     prescription_task = Task(description="Prescription number RX123456789 for medication XYZ. Can you help me with dosage information?")
     
-    result = agent_with_anonymize_policy.do(prescription_task)
+    result = await agent_with_anonymize_policy.do_async(prescription_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -198,7 +198,7 @@ async def test_medical_info_replace_lab_results(mock_infer_model):
     
     lab_results_task = Task(description="Lab order number LAB123456 shows blood test results. Can you help me interpret them?")
     
-    result = agent_with_replace_policy.do(lab_results_task)
+    result = await agent_with_replace_policy.do_async(lab_results_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -243,7 +243,7 @@ async def test_medical_info_agent_policy_exception(mock_infer_model):
     
     medical_task = Task(description="Please provide an update on the patient's medical condition.")
     
-    result = agent_with_medical_exception.do(medical_task)
+    result = await agent_with_medical_exception.do_async(medical_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -288,7 +288,7 @@ async def test_medical_info_llm_policy(mock_infer_model):
     
     complex_medical_task = Task(description="I need help with my patient's mental health condition and psychiatric evaluation. This involves sensitive medical information.")
     
-    result = agent_with_llm_policy.do(complex_medical_task)
+    result = await agent_with_llm_policy.do_async(complex_medical_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -328,7 +328,7 @@ async def test_medical_info_all_clear(mock_infer_model):
     
     safe_task = Task(description="What's the weather like today?")
     
-    result = plain_agent.do(safe_task)
+    result = await plain_agent.do_async(safe_task)
 
     # Final result check
     assert isinstance(result, str)

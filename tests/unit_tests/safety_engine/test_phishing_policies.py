@@ -64,7 +64,7 @@ async def test_phishing_block_urgent_action(mock_infer_model):
     
     phishing_task = Task(description="URGENT: Your account will be suspended in 24 hours! Click here now to verify your information immediately!")
     
-    result = agent_with_phishing_policy.do(phishing_task)
+    result = await agent_with_phishing_policy.do_async(phishing_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -108,7 +108,7 @@ async def test_phishing_block_credential_harvesting(mock_infer_model):
 
     credential_harvesting_task = Task(description="Please enter your username and password to verify your account. Your social security number is also required.")
     
-    result = agent_with_phishing_policy.do(credential_harvesting_task)
+    result = await agent_with_phishing_policy.do_async(credential_harvesting_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -154,7 +154,7 @@ async def test_phishing_anonymize_impersonation(mock_infer_model):
     
     impersonation_task = Task(description="Microsoft support team calling - your account has been compromised and needs immediate verification.")
     
-    result = agent_with_anonymize_policy.do(impersonation_task)
+    result = await agent_with_anonymize_policy.do_async(impersonation_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -198,7 +198,7 @@ async def test_phishing_replace_prize_scam(mock_infer_model):
     
     prize_scam_task = Task(description="Congratulations! You won a free iPhone! Click here to claim your prize now!")
     
-    result = agent_with_replace_policy.do(prize_scam_task)
+    result = await agent_with_replace_policy.do_async(prize_scam_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -243,7 +243,7 @@ async def test_phishing_agent_policy_exception(mock_infer_model):
     
     phishing_task = Task(description="Please explain email security concepts.")
     
-    result = agent_with_phishing_exception.do(phishing_task)
+    result = await agent_with_phishing_exception.do_async(phishing_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -289,7 +289,7 @@ async def test_phishing_llm_policy(mock_infer_model):
     
     complex_phishing_task = Task(description="Your PayPal account has been suspended due to suspicious activity. Click here immediately to verify your banking information and credit card details to restore access.")
     
-    result = agent_with_llm_policy.do(complex_phishing_task)
+    result = await agent_with_llm_policy.do_async(complex_phishing_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -329,7 +329,7 @@ async def test_phishing_all_clear(mock_infer_model):
     
     safe_task = Task(description="What's the weather like today?")
     
-    result = plain_agent.do(safe_task)
+    result = await plain_agent.do_async(safe_task)
 
     # Final result check
     assert isinstance(result, str)

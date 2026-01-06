@@ -64,7 +64,7 @@ async def test_technical_security_block_api_key(mock_infer_model):
     
     api_key_task = Task(description="My OpenAI API key is sk-1234567890abcdef1234567890abcdef12345678. Can you help me configure it?")
     
-    result = agent_with_technical_policy.do(api_key_task)
+    result = await agent_with_technical_policy.do_async(api_key_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -108,7 +108,7 @@ async def test_technical_security_block_password(mock_infer_model):
 
     password_task = Task(description="The database password is 'MySecretPassword123!'. Please help me connect to the database.")
     
-    result = agent_with_technical_policy.do(password_task)
+    result = await agent_with_technical_policy.do_async(password_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -154,7 +154,7 @@ async def test_technical_security_anonymize_token(mock_infer_model):
     
     token_task = Task(description="My JWT token is eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c. Can you help me decode it?")
     
-    result = agent_with_anonymize_policy.do(token_task)
+    result = await agent_with_anonymize_policy.do_async(token_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -198,7 +198,7 @@ async def test_technical_security_replace_certificate(mock_infer_model):
     
     certificate_task = Task(description="Here's my private key: -----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC...\n-----END PRIVATE KEY-----. Can you help me with SSL configuration?")
     
-    result = agent_with_replace_policy.do(certificate_task)
+    result = await agent_with_replace_policy.do_async(certificate_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -243,7 +243,7 @@ async def test_technical_security_agent_policy_exception(mock_infer_model):
     
     technical_task = Task(description="Please configure my AWS credentials.")
     
-    result = agent_with_technical_exception.do(technical_task)
+    result = await agent_with_technical_exception.do_async(technical_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -288,7 +288,7 @@ async def test_technical_security_llm_policy(mock_infer_model):
     
     complex_technical_task = Task(description="I need help with my database configuration. The connection string is mysql://user:password123@localhost:3306/mydb and my GitHub token is ghp_1234567890abcdef1234567890abcdef12345678.")
     
-    result = agent_with_llm_policy.do(complex_technical_task)
+    result = await agent_with_llm_policy.do_async(complex_technical_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -328,7 +328,7 @@ async def test_technical_security_all_clear(mock_infer_model):
     
     safe_task = Task(description="What's the weather like today?")
     
-    result = plain_agent.do(safe_task)
+    result = await plain_agent.do_async(safe_task)
 
     # Final result check
     assert isinstance(result, str)

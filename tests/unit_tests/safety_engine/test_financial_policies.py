@@ -64,7 +64,7 @@ async def test_financial_info_block_credit_card(mock_infer_model):
     
     credit_card_task = Task(description="My credit card number is 4532-1234-5678-9012. Can you help me with this?")
     
-    result = agent_with_financial_policy.do(credit_card_task)
+    result = await agent_with_financial_policy.do_async(credit_card_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -108,7 +108,7 @@ async def test_financial_info_block_ssn(mock_infer_model):
 
     ssn_task = Task(description="My social security number is 123-45-6789. Please help me with my account.")
     
-    result = agent_with_financial_policy.do(ssn_task)
+    result = await agent_with_financial_policy.do_async(ssn_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -154,7 +154,7 @@ async def test_financial_info_anonymize_bank_account(mock_infer_model):
     
     bank_account_task = Task(description="My bank account number is 1234567890. Can you help me check my balance?")
     
-    result = agent_with_anonymize_policy.do(bank_account_task)
+    result = await agent_with_anonymize_policy.do_async(bank_account_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -198,7 +198,7 @@ async def test_financial_info_replace_crypto(mock_infer_model):
     
     crypto_task = Task(description="My Bitcoin address is 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa. Can you help me track it?")
     
-    result = agent_with_replace_policy.do(crypto_task)
+    result = await agent_with_replace_policy.do_async(crypto_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -243,7 +243,7 @@ async def test_financial_info_agent_policy_exception(mock_infer_model):
     
     financial_task = Task(description="Please confirm my credit card processing.")
     
-    result = agent_with_financial_exception.do(financial_task)
+    result = await agent_with_financial_exception.do_async(financial_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -289,7 +289,7 @@ async def test_financial_info_llm_policy(mock_infer_model):
     
     complex_financial_task = Task(description="I need help with my investment portfolio. My account balance is $50,000 and my routing number is 123456789.")
     
-    result = agent_with_llm_policy.do(complex_financial_task)
+    result = await agent_with_llm_policy.do_async(complex_financial_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -329,7 +329,7 @@ async def test_financial_info_all_clear(mock_infer_model):
     
     safe_task = Task(description="What's the weather like today?")
     
-    result = plain_agent.do(safe_task)
+    result = await plain_agent.do_async(safe_task)
 
     # Final result check
     assert isinstance(result, str)
