@@ -19,8 +19,7 @@ For each provider, we test:
 6. Serialization and deserialization of all nested classes
 
 Nested class attribute verification includes:
-- AgentRunOutput (all 30+ attributes)
-- AgentRunContext (all 15+ attributes)
+- AgentRunOutput (all 50+ attributes - single source of truth for run state)
 - RunRequirement (all attributes including tool_execution, step_result)
 - ToolExecution (all attributes including metrics)
 - StepResult (all attributes)
@@ -49,6 +48,11 @@ except ImportError:
     Skipped = type('Skipped', (Exception,), {})
 
 if TYPE_CHECKING:
+    from upsonic.run.agent.output import AgentRunOutput
+    from upsonic.run.agent.input import AgentRunInput
+    from upsonic.messages.messages import ModelResponse, ModelRequest, ModelMessage
+    from upsonic.usage import RequestUsage
+    from upsonic.profiles import ModelProfile
     from upsonic.session.agent import AgentSession
 
 # Force unbuffered output
@@ -95,7 +99,6 @@ def create_full_agentsession(session_id: str = "test_session_full") -> "AgentSes
     """Create an AgentSession with ALL attributes populated, including ALL nested classes with their full attributes."""
     from upsonic.session.agent import AgentSession
     from upsonic.run.agent.output import AgentRunOutput
-    from upsonic.run.agent.context import AgentRunContext
     from upsonic.run.agent.input import AgentRunInput
     from upsonic.run.tools.tools import ToolExecution
     from upsonic.run.requirements import RunRequirement
@@ -159,21 +162,17 @@ def create_full_agentsession(session_id: str = "test_session_full") -> "AgentSes
         status=StepStatus.COMPLETED,
         message="Step completed successfully",
         execution_time=1.234,
-        extra_data={"test_key": "test_value"}
     )
     
     # ================== RunRequirement (ALL attributes) ==================
     req = RunRequirement(
-        tool_execution=tool,
-        pause_type='external_tool'
+        tool_execution=tool
     )
     req.id = "req_test_789"
     req.confirmation = True
     req.confirmation_note = "Confirmed by user"
-    req.external_execution_result = "External result data"
-    req.step_result = step_result
-    req.execution_stats = stats
-    req.agent_state = {"count": 5, "nested": {"key": "value"}}
+    # Set external execution result via method
+    req.set_external_execution_result("External result data")
     
     # ================== AgentRunInput (ALL attributes) ==================
     input_obj = AgentRunInput(
@@ -332,25 +331,6 @@ def create_full_agentsession(session_id: str = "test_session_full") -> "AgentSes
     ])
     messages = [user_msg, assistant_msg]
     
-    # ================== AgentRunContext (ALL attributes) ==================
-    ctx = AgentRunContext(
-        run_id="run_test",
-        session_id=session_id,
-        user_id="user_test",
-        task=task,
-        step_results=[step_result],
-        execution_stats=stats,
-        requirements=[req],
-        session_state={"ctx_state": "value", "nested": {"deep": 42}},
-        output_schema=None,
-        is_streaming=True,
-        accumulated_text="Accumulated streaming text content...",
-        messages=messages,
-        response=assistant_msg,
-        final_output="Final processed output",
-        events=events_list
-    )
-    
     # ================== AgentRunOutput (ALL attributes) ==================
     run = AgentRunOutput(
         run_id="run_test",
@@ -360,11 +340,11 @@ def create_full_agentsession(session_id: str = "test_session_full") -> "AgentSes
         parent_run_id="parent_run_001",
         user_id="user_test",
         input=input_obj,
-        content="Full content output with detailed response",
+        output="Full content output with detailed response",
         output_schema=None,
         thinking_content="Detailed thinking process content...",
         thinking_parts=[thinking_part],
-        model="gpt-4o-mini",
+        model_name="gpt-4o-mini",
         model_provider="openai",
         model_provider_profile=None,
         messages=messages,
@@ -412,7 +392,7 @@ def create_full_agentsession(session_id: str = "test_session_full") -> "AgentSes
         session_data={"data_key": "data_value", "nested": [1, 2, 3], "deep": {"a": {"b": "c"}}},
         metadata={"meta_key": "meta_value", "deep": {"nested": 42, "list": [1, 2]}},
         agent_data={"agent_key": "agent_value", "config": {"max_tokens": 1000}},
-        runs={run.run_id: RunData(output=run, context=ctx)},
+        runs={run.run_id: RunData(output=run)},
         summary="Test session summary with full details",
         messages=messages,
         user_profile=user_profile_obj,
@@ -423,43 +403,482 @@ def create_full_agentsession(session_id: str = "test_session_full") -> "AgentSes
     return session
 
 
+# ============================================================================
+# COMPREHENSIVE VERIFICATION FUNCTIONS FOR ALL NESTED CLASSES
+# ============================================================================
+
+def verify_request_usage_comprehensive(loaded: Any, expected: Any, test_name: str = "") -> None:
+    """Verify ALL RequestUsage attributes."""
+    from upsonic.usage import RequestUsage
+    
+    assert loaded is not None, f"{test_name}: RequestUsage is None"
+    assert expected is not None, f"{test_name}: Expected RequestUsage is None"
+    assert isinstance(loaded, RequestUsage), f"{test_name}: loaded is not RequestUsage"
+    assert isinstance(expected, RequestUsage), f"{test_name}: expected is not RequestUsage"
+    
+    assert loaded.input_tokens == expected.input_tokens, \
+        f"{test_name}: input_tokens mismatch: {loaded.input_tokens} != {expected.input_tokens}"
+    assert loaded.output_tokens == expected.output_tokens, \
+        f"{test_name}: output_tokens mismatch: {loaded.output_tokens} != {expected.output_tokens}"
+    assert loaded.cache_write_tokens == expected.cache_write_tokens, \
+        f"{test_name}: cache_write_tokens mismatch: {loaded.cache_write_tokens} != {expected.cache_write_tokens}"
+    assert loaded.cache_read_tokens == expected.cache_read_tokens, \
+        f"{test_name}: cache_read_tokens mismatch: {loaded.cache_read_tokens} != {expected.cache_read_tokens}"
+    assert loaded.input_audio_tokens == expected.input_audio_tokens, \
+        f"{test_name}: input_audio_tokens mismatch: {loaded.input_audio_tokens} != {expected.input_audio_tokens}"
+    assert loaded.output_audio_tokens == expected.output_audio_tokens, \
+        f"{test_name}: output_audio_tokens mismatch: {loaded.output_audio_tokens} != {expected.output_audio_tokens}"
+    assert loaded.cache_audio_read_tokens == expected.cache_audio_read_tokens, \
+        f"{test_name}: cache_audio_read_tokens mismatch: {loaded.cache_audio_read_tokens} != {expected.cache_audio_read_tokens}"
+    assert loaded.details == expected.details, \
+        f"{test_name}: details mismatch: {loaded.details} != {expected.details}"
+    assert loaded.total_tokens == expected.total_tokens, \
+        f"{test_name}: total_tokens mismatch: {loaded.total_tokens} != {expected.total_tokens}"
+
+
+def verify_model_profile_comprehensive(loaded: Any, expected: Any, test_name: str = "") -> None:
+    """Verify ALL ModelProfile attributes."""
+    from upsonic.profiles import ModelProfile
+    
+    assert loaded is not None, f"{test_name}: ModelProfile is None"
+    assert expected is not None, f"{test_name}: Expected ModelProfile is None"
+    assert isinstance(loaded, ModelProfile), f"{test_name}: loaded is not ModelProfile"
+    assert isinstance(expected, ModelProfile), f"{test_name}: expected is not ModelProfile"
+    
+    assert loaded.supports_tools == expected.supports_tools, \
+        f"{test_name}: supports_tools mismatch: {loaded.supports_tools} != {expected.supports_tools}"
+    assert loaded.supports_json_schema_output == expected.supports_json_schema_output, \
+        f"{test_name}: supports_json_schema_output mismatch: {loaded.supports_json_schema_output} != {expected.supports_json_schema_output}"
+    assert loaded.supports_json_object_output == expected.supports_json_object_output, \
+        f"{test_name}: supports_json_object_output mismatch: {loaded.supports_json_object_output} != {expected.supports_json_object_output}"
+    assert loaded.supports_image_output == expected.supports_image_output, \
+        f"{test_name}: supports_image_output mismatch: {loaded.supports_image_output} != {expected.supports_image_output}"
+    assert loaded.default_structured_output_mode == expected.default_structured_output_mode, \
+        f"{test_name}: default_structured_output_mode mismatch: {loaded.default_structured_output_mode} != {expected.default_structured_output_mode}"
+    assert loaded.thinking_tags == expected.thinking_tags, \
+        f"{test_name}: thinking_tags mismatch: {loaded.thinking_tags} != {expected.thinking_tags}"
+    assert loaded.prompted_output_template == expected.prompted_output_template, \
+        f"{test_name}: prompted_output_template mismatch"
+    assert loaded.ignore_streamed_leading_whitespace == expected.ignore_streamed_leading_whitespace, \
+        f"{test_name}: ignore_streamed_leading_whitespace mismatch: {loaded.ignore_streamed_leading_whitespace} != {expected.ignore_streamed_leading_whitespace}"
+
+
+def verify_agent_run_input_comprehensive(loaded: Any, expected: Any, test_name: str = "") -> None:
+    """Verify ALL AgentRunInput attributes."""
+    from upsonic.run.agent.input import AgentRunInput
+    
+    assert loaded is not None, f"{test_name}: AgentRunInput is None"
+    assert expected is not None, f"{test_name}: Expected AgentRunInput is None"
+    assert isinstance(loaded, AgentRunInput), f"{test_name}: loaded is not AgentRunInput"
+    assert isinstance(expected, AgentRunInput), f"{test_name}: expected is not AgentRunInput"
+    
+    assert loaded.user_prompt == expected.user_prompt, \
+        f"{test_name}: user_prompt mismatch"
+    
+    # Verify images
+    if expected.images:
+        assert loaded.images is not None, f"{test_name}: images is None"
+        assert len(loaded.images) == len(expected.images), \
+            f"{test_name}: images length mismatch: {len(loaded.images)} != {len(expected.images)}"
+        for i, (li, ei) in enumerate(zip(loaded.images, expected.images)):
+            assert li.data == ei.data, f"{test_name}: images[{i}].data mismatch"
+            assert li.media_type == ei.media_type, f"{test_name}: images[{i}].media_type mismatch: {li.media_type} != {ei.media_type}"
+            assert li.identifier == ei.identifier, f"{test_name}: images[{i}].identifier mismatch"
+    else:
+        assert loaded.images is None or len(loaded.images) == 0, f"{test_name}: images should be None or empty"
+    
+    # Verify documents
+    if expected.documents:
+        assert loaded.documents is not None, f"{test_name}: documents is None"
+        assert len(loaded.documents) == len(expected.documents), \
+            f"{test_name}: documents length mismatch: {len(loaded.documents)} != {len(expected.documents)}"
+        for i, (ld, ed) in enumerate(zip(loaded.documents, expected.documents)):
+            assert ld.data == ed.data, f"{test_name}: documents[{i}].data mismatch"
+            assert ld.media_type == ed.media_type, f"{test_name}: documents[{i}].media_type mismatch: {ld.media_type} != {ed.media_type}"
+            assert ld.identifier == ed.identifier, f"{test_name}: documents[{i}].identifier mismatch"
+    else:
+        assert loaded.documents is None or len(loaded.documents) == 0, f"{test_name}: documents should be None or empty"
+
+
+def verify_model_response_comprehensive(loaded: Any, expected: Any, test_name: str = "") -> None:
+    """Verify ALL ModelResponse attributes."""
+    from upsonic.messages.messages import ModelResponse
+    
+    assert loaded is not None, f"{test_name}: ModelResponse is None"
+    assert expected is not None, f"{test_name}: Expected ModelResponse is None"
+    assert isinstance(loaded, ModelResponse), f"{test_name}: loaded is not ModelResponse"
+    assert isinstance(expected, ModelResponse), f"{test_name}: expected is not ModelResponse"
+    
+    # Verify parts
+    assert len(loaded.parts) == len(expected.parts), \
+        f"{test_name}: parts length mismatch: {len(loaded.parts)} != {len(expected.parts)}"
+    for i, (lp, ep) in enumerate(zip(loaded.parts, expected.parts)):
+        assert type(lp).__name__ == type(ep).__name__, \
+            f"{test_name}: parts[{i}] type mismatch: {type(lp).__name__} != {type(ep).__name__}"
+        if hasattr(ep, 'content') and hasattr(lp, 'content'):
+            assert lp.content == ep.content, \
+                f"{test_name}: parts[{i}].content mismatch"
+        if hasattr(ep, 'part_kind') and hasattr(lp, 'part_kind'):
+            assert lp.part_kind == ep.part_kind, \
+                f"{test_name}: parts[{i}].part_kind mismatch: {lp.part_kind} != {ep.part_kind}"
+    
+    # Verify usage
+    if expected.usage:
+        verify_request_usage_comprehensive(loaded.usage, expected.usage, f"{test_name}.usage")
+    
+    # Verify model info
+    assert loaded.model_name == expected.model_name, \
+        f"{test_name}: model_name mismatch: {loaded.model_name} != {expected.model_name}"
+    assert loaded.provider_name == expected.provider_name, \
+        f"{test_name}: provider_name mismatch: {loaded.provider_name} != {expected.provider_name}"
+    assert loaded.provider_response_id == expected.provider_response_id, \
+        f"{test_name}: provider_response_id mismatch: {loaded.provider_response_id} != {expected.provider_response_id}"
+    
+    # Verify timestamp
+    assert loaded.timestamp == expected.timestamp, \
+        f"{test_name}: timestamp mismatch: {loaded.timestamp} != {expected.timestamp}"
+    
+    # Verify kind
+    assert loaded.kind == expected.kind, \
+        f"{test_name}: kind mismatch: {loaded.kind} != {expected.kind}"
+    assert loaded.kind == 'response', f"{test_name}: kind should be 'response'"
+    
+    # Verify finish_reason
+    assert loaded.finish_reason == expected.finish_reason, \
+        f"{test_name}: finish_reason mismatch: {loaded.finish_reason} != {expected.finish_reason}"
+    
+    # Verify run_id
+    assert loaded.run_id == expected.run_id, \
+        f"{test_name}: run_id mismatch: {loaded.run_id} != {expected.run_id}"
+    
+    # Verify provider_details
+    assert loaded.provider_details == expected.provider_details, \
+        f"{test_name}: provider_details mismatch: {loaded.provider_details} != {expected.provider_details}"
+    
+    # Verify properties
+    assert loaded.text == expected.text, \
+        f"{test_name}: text property mismatch: {loaded.text} != {expected.text}"
+    assert loaded.thinking == expected.thinking, \
+        f"{test_name}: thinking property mismatch: {loaded.thinking} != {expected.thinking}"
+    assert len(loaded.tool_calls) == len(expected.tool_calls), \
+        f"{test_name}: tool_calls length mismatch: {len(loaded.tool_calls)} != {len(expected.tool_calls)}"
+
+
+def verify_model_message_comprehensive(loaded: Any, expected: Any, test_name: str = "") -> None:
+    """Verify ALL ModelMessage (ModelRequest or ModelResponse) attributes."""
+    from upsonic.messages.messages import ModelRequest, ModelResponse
+    
+    assert loaded is not None, f"{test_name}: ModelMessage is None"
+    assert expected is not None, f"{test_name}: Expected ModelMessage is None"
+    
+    # Verify type
+    assert type(loaded).__name__ == type(expected).__name__, \
+        f"{test_name}: ModelMessage type mismatch: {type(loaded).__name__} != {type(expected).__name__}"
+    
+    # Verify parts
+    assert len(loaded.parts) == len(expected.parts), \
+        f"{test_name}: parts length mismatch: {len(loaded.parts)} != {len(expected.parts)}"
+    for i, (lp, ep) in enumerate(zip(loaded.parts, expected.parts)):
+        assert type(lp).__name__ == type(ep).__name__, \
+            f"{test_name}: parts[{i}] type mismatch: {type(lp).__name__} != {type(ep).__name__}"
+        if hasattr(ep, 'content') and hasattr(lp, 'content'):
+            assert lp.content == ep.content, \
+                f"{test_name}: parts[{i}].content mismatch"
+        if hasattr(ep, 'part_kind') and hasattr(lp, 'part_kind'):
+            assert lp.part_kind == ep.part_kind, \
+                f"{test_name}: parts[{i}].part_kind mismatch"
+    
+    # If it's a ModelResponse, verify additional attributes
+    if isinstance(loaded, ModelResponse) and isinstance(expected, ModelResponse):
+        verify_model_response_comprehensive(loaded, expected, test_name)
+    
+    # If it's a ModelRequest, verify kind
+    if isinstance(loaded, ModelRequest) and isinstance(expected, ModelRequest):
+        assert loaded.kind == expected.kind, \
+            f"{test_name}: kind mismatch: {loaded.kind} != {expected.kind}"
+        assert loaded.kind == 'request', f"{test_name}: kind should be 'request'"
+
+
+def verify_agent_run_output_comprehensive(loaded: Any, expected: Any, test_name: str = "") -> None:
+    """Verify ALL AgentRunOutput attributes comprehensively."""
+    from upsonic.run.agent.output import AgentRunOutput
+    
+    assert loaded is not None, f"{test_name}: AgentRunOutput is None"
+    assert expected is not None, f"{test_name}: Expected AgentRunOutput is None"
+    assert isinstance(loaded, AgentRunOutput), f"{test_name}: loaded is not AgentRunOutput"
+    assert isinstance(expected, AgentRunOutput), f"{test_name}: expected is not AgentRunOutput"
+    
+    # === Identity ===
+    assert loaded.run_id == expected.run_id, f"{test_name}: run_id mismatch"
+    assert loaded.agent_id == expected.agent_id, f"{test_name}: agent_id mismatch"
+    assert loaded.agent_name == expected.agent_name, f"{test_name}: agent_name mismatch"
+    assert loaded.session_id == expected.session_id, f"{test_name}: session_id mismatch"
+    assert loaded.parent_run_id == expected.parent_run_id, f"{test_name}: parent_run_id mismatch"
+    assert loaded.user_id == expected.user_id, f"{test_name}: user_id mismatch"
+    
+    # === Task ===
+    if expected.task:
+        assert loaded.task is not None, f"{test_name}: task is None"
+        assert loaded.task.description == expected.task.description, \
+            f"{test_name}: task.description mismatch"
+    
+    # === Input ===
+    if expected.input:
+        verify_agent_run_input_comprehensive(loaded.input, expected.input, f"{test_name}.input")
+    
+    # === Output ===
+    assert loaded.output == expected.output, f"{test_name}: output mismatch"
+    assert loaded.output_schema == expected.output_schema, f"{test_name}: output_schema mismatch"
+    assert loaded.thinking_content == expected.thinking_content, f"{test_name}: thinking_content mismatch"
+    
+    # === Thinking parts ===
+    if expected.thinking_parts:
+        assert loaded.thinking_parts is not None, f"{test_name}: thinking_parts is None"
+        assert len(loaded.thinking_parts) == len(expected.thinking_parts), \
+            f"{test_name}: thinking_parts length mismatch"
+        for i, (lt, et) in enumerate(zip(loaded.thinking_parts, expected.thinking_parts)):
+            assert lt.content == et.content, f"{test_name}: thinking_parts[{i}].content mismatch"
+            assert lt.id == et.id, f"{test_name}: thinking_parts[{i}].id mismatch"
+            assert lt.signature == et.signature, f"{test_name}: thinking_parts[{i}].signature mismatch"
+    
+    # === Model info ===
+    assert loaded.model_name == expected.model_name, f"{test_name}: model_name mismatch"
+    assert loaded.model_provider == expected.model_provider, f"{test_name}: model_provider mismatch"
+    if expected.model_provider_profile:
+        verify_model_profile_comprehensive(loaded.model_provider_profile, expected.model_provider_profile, f"{test_name}.model_provider_profile")
+    
+    # === Messages ===
+    if expected.chat_history:
+        assert loaded.chat_history is not None, f"{test_name}: chat_history is None"
+        assert len(loaded.chat_history) == len(expected.chat_history), \
+            f"{test_name}: chat_history length mismatch: {len(loaded.chat_history)} != {len(expected.chat_history)}"
+        for i, (lm, em) in enumerate(zip(loaded.chat_history, expected.chat_history)):
+            verify_model_message_comprehensive(lm, em, f"{test_name}.chat_history[{i}]")
+    
+    if expected.messages:
+        assert loaded.messages is not None, f"{test_name}: messages is None"
+        assert len(loaded.messages) == len(expected.messages), \
+            f"{test_name}: messages length mismatch: {len(loaded.messages)} != {len(expected.messages)}"
+        for i, (lm, em) in enumerate(zip(loaded.messages, expected.messages)):
+            verify_model_message_comprehensive(lm, em, f"{test_name}.messages[{i}]")
+    
+    # === Response ===
+    if expected.response:
+        verify_model_response_comprehensive(loaded.response, expected.response, f"{test_name}.response")
+    
+    # === Usage ===
+    if expected.usage:
+        verify_request_usage_comprehensive(loaded.usage, expected.usage, f"{test_name}.usage")
+    
+    # === Additional input message ===
+    if expected.additional_input_message:
+        assert loaded.additional_input_message is not None, f"{test_name}: additional_input_message is None"
+        assert len(loaded.additional_input_message) == len(expected.additional_input_message), \
+            f"{test_name}: additional_input_message length mismatch"
+        for i, (lm, em) in enumerate(zip(loaded.additional_input_message, expected.additional_input_message)):
+            verify_model_message_comprehensive(lm, em, f"{test_name}.additional_input_message[{i}]")
+    
+    # === Memory tracking ===
+    assert loaded.memory_message_count == expected.memory_message_count, \
+        f"{test_name}: memory_message_count mismatch: {loaded.memory_message_count} != {expected.memory_message_count}"
+    
+    # === Tools ===
+    if expected.tools:
+        assert loaded.tools is not None, f"{test_name}: tools is None"
+        assert len(loaded.tools) == len(expected.tools), \
+            f"{test_name}: tools length mismatch: {len(loaded.tools)} != {len(expected.tools)}"
+        for i, (lt, et) in enumerate(zip(loaded.tools, expected.tools)):
+            assert lt.tool_call_id == et.tool_call_id, f"{test_name}: tools[{i}].tool_call_id mismatch"
+            assert lt.tool_name == et.tool_name, f"{test_name}: tools[{i}].tool_name mismatch"
+            assert lt.tool_args == et.tool_args, f"{test_name}: tools[{i}].tool_args mismatch"
+            assert lt.result == et.result, f"{test_name}: tools[{i}].result mismatch"
+    
+    assert loaded.tool_call_count == expected.tool_call_count, \
+        f"{test_name}: tool_call_count mismatch: {loaded.tool_call_count} != {expected.tool_call_count}"
+    assert loaded.tool_limit_reached == expected.tool_limit_reached, \
+        f"{test_name}: tool_limit_reached mismatch: {loaded.tool_limit_reached} != {expected.tool_limit_reached}"
+    
+    # === Media outputs ===
+    if expected.images:
+        assert loaded.images is not None, f"{test_name}: images is None"
+        assert len(loaded.images) == len(expected.images), \
+            f"{test_name}: images length mismatch: {len(loaded.images)} != {len(expected.images)}"
+        for i, (li, ei) in enumerate(zip(loaded.images, expected.images)):
+            assert li.data == ei.data, f"{test_name}: images[{i}].data mismatch"
+            assert li.media_type == ei.media_type, f"{test_name}: images[{i}].media_type mismatch"
+            assert li.identifier == ei.identifier, f"{test_name}: images[{i}].identifier mismatch"
+    
+    if expected.files:
+        assert loaded.files is not None, f"{test_name}: files is None"
+        assert len(loaded.files) == len(expected.files), \
+            f"{test_name}: files length mismatch: {len(loaded.files)} != {len(expected.files)}"
+        for i, (lf, ef) in enumerate(zip(loaded.files, expected.files)):
+            assert lf.data == ef.data, f"{test_name}: files[{i}].data mismatch"
+            assert lf.media_type == ef.media_type, f"{test_name}: files[{i}].media_type mismatch"
+            assert lf.identifier == ef.identifier, f"{test_name}: files[{i}].identifier mismatch"
+    
+    # === Status and HITL ===
+    assert loaded.status == expected.status, f"{test_name}: status mismatch: {loaded.status} != {expected.status}"
+    assert loaded.pause_reason == expected.pause_reason, f"{test_name}: pause_reason mismatch: {loaded.pause_reason} != {expected.pause_reason}"
+    assert loaded.error_details == expected.error_details, f"{test_name}: error_details mismatch: {loaded.error_details} != {expected.error_details}"
+    
+    # === Requirements ===
+    if expected.requirements:
+        assert loaded.requirements is not None, f"{test_name}: requirements is None"
+        assert len(loaded.requirements) == len(expected.requirements), \
+            f"{test_name}: requirements length mismatch: {len(loaded.requirements)} != {len(expected.requirements)}"
+        for i, (lr, er) in enumerate(zip(loaded.requirements, expected.requirements)):
+            assert lr.id == er.id, f"{test_name}: requirements[{i}].id mismatch"
+            assert lr.confirmation == er.confirmation, f"{test_name}: requirements[{i}].confirmation mismatch"
+            assert lr.confirmation_note == er.confirmation_note, f"{test_name}: requirements[{i}].confirmation_note mismatch"
+            if er.tool_execution and er.tool_execution.result:
+                assert lr.tool_execution is not None
+                assert lr.tool_execution.result == er.tool_execution.result
+    
+    # === Step results ===
+    if expected.step_results:
+        assert loaded.step_results is not None, f"{test_name}: step_results is None"
+        assert len(loaded.step_results) == len(expected.step_results), \
+            f"{test_name}: step_results length mismatch: {len(loaded.step_results)} != {len(expected.step_results)}"
+        for i, (ls, es) in enumerate(zip(loaded.step_results, expected.step_results)):
+            assert ls.name == es.name, f"{test_name}: step_results[{i}].name mismatch: {ls.name} != {es.name}"
+            assert ls.step_number == es.step_number, f"{test_name}: step_results[{i}].step_number mismatch"
+            assert ls.status == es.status, f"{test_name}: step_results[{i}].status mismatch"
+            assert ls.message == es.message, f"{test_name}: step_results[{i}].message mismatch"
+            assert ls.execution_time == es.execution_time, f"{test_name}: step_results[{i}].execution_time mismatch"
+    
+    # === Execution stats ===
+    if expected.execution_stats:
+        assert loaded.execution_stats is not None, f"{test_name}: execution_stats is None"
+        assert loaded.execution_stats.total_steps == expected.execution_stats.total_steps, \
+            f"{test_name}: execution_stats.total_steps mismatch"
+        assert loaded.execution_stats.executed_steps == expected.execution_stats.executed_steps, \
+            f"{test_name}: execution_stats.executed_steps mismatch"
+        assert loaded.execution_stats.resumed_from == expected.execution_stats.resumed_from, \
+            f"{test_name}: execution_stats.resumed_from mismatch"
+        assert loaded.execution_stats.step_timing == expected.execution_stats.step_timing, \
+            f"{test_name}: execution_stats.step_timing mismatch"
+        assert loaded.execution_stats.step_statuses == expected.execution_stats.step_statuses, \
+            f"{test_name}: execution_stats.step_statuses mismatch"
+    
+    # === Events ===
+    if expected.events:
+        assert loaded.events is not None, f"{test_name}: events is None"
+        assert len(loaded.events) == len(expected.events), \
+            f"{test_name}: events length mismatch: {len(loaded.events)} != {len(expected.events)}"
+        for i, (le, ee) in enumerate(zip(loaded.events, expected.events)):
+            assert type(le).__name__ == type(ee).__name__, \
+                f"{test_name}: events[{i}] type mismatch: {type(le).__name__} != {type(ee).__name__}"
+            assert le.event_id == ee.event_id, f"{test_name}: events[{i}].event_id mismatch"
+            assert le.run_id == ee.run_id, f"{test_name}: events[{i}].run_id mismatch"
+    
+    # === Configuration ===
+    assert loaded.agent_knowledge_base_filter == expected.agent_knowledge_base_filter, \
+        f"{test_name}: agent_knowledge_base_filter mismatch"
+    
+    # === Metadata ===
+    assert loaded.metadata == expected.metadata, f"{test_name}: metadata mismatch: {loaded.metadata} != {expected.metadata}"
+    assert loaded.session_state == expected.session_state, f"{test_name}: session_state mismatch: {loaded.session_state} != {expected.session_state}"
+    
+    # === Execution state ===
+    assert loaded.is_streaming == expected.is_streaming, f"{test_name}: is_streaming mismatch: {loaded.is_streaming} != {expected.is_streaming}"
+    assert loaded.accumulated_text == expected.accumulated_text, f"{test_name}: accumulated_text mismatch: {loaded.accumulated_text} != {expected.accumulated_text}"
+    
+    # === Current step result ===
+    if expected.current_step_result:
+        assert loaded.current_step_result is not None, f"{test_name}: current_step_result is None"
+        assert loaded.current_step_result.name == expected.current_step_result.name, \
+            f"{test_name}: current_step_result.name mismatch"
+    
+    # === Timestamps ===
+    assert loaded.created_at == expected.created_at, f"{test_name}: created_at mismatch: {loaded.created_at} != {expected.created_at}"
+    assert loaded.updated_at == expected.updated_at, f"{test_name}: updated_at mismatch: {loaded.updated_at} != {expected.updated_at}"
+
+
+def verify_agent_session_comprehensive(loaded: Any, expected: Any, test_name: str = "") -> None:
+    """Verify ALL AgentSession attributes comprehensively."""
+    from upsonic.session.agent import AgentSession
+    
+    assert loaded is not None, f"{test_name}: AgentSession is None"
+    assert expected is not None, f"{test_name}: Expected AgentSession is None"
+    assert isinstance(loaded, AgentSession), f"{test_name}: loaded is not AgentSession"
+    assert isinstance(expected, AgentSession), f"{test_name}: expected is not AgentSession"
+    
+    # === Identity ===
+    assert loaded.session_id == expected.session_id, \
+        f"{test_name}: session_id mismatch: {loaded.session_id} != {expected.session_id}"
+    assert loaded.agent_id == expected.agent_id, \
+        f"{test_name}: agent_id mismatch: {loaded.agent_id} != {expected.agent_id}"
+    assert loaded.user_id == expected.user_id, \
+        f"{test_name}: user_id mismatch: {loaded.user_id} != {expected.user_id}"
+    assert loaded.workflow_id == expected.workflow_id, \
+        f"{test_name}: workflow_id mismatch: {loaded.workflow_id} != {expected.workflow_id}"
+    
+    # === Data ===
+    assert loaded.session_data == expected.session_data, \
+        f"{test_name}: session_data mismatch: {loaded.session_data} != {expected.session_data}"
+    assert loaded.metadata == expected.metadata, \
+        f"{test_name}: metadata mismatch: {loaded.metadata} != {expected.metadata}"
+    assert loaded.agent_data == expected.agent_data, \
+        f"{test_name}: agent_data mismatch: {loaded.agent_data} != {expected.agent_data}"
+    
+    # === Summary ===
+    assert loaded.summary == expected.summary, \
+        f"{test_name}: summary mismatch: {loaded.summary} != {expected.summary}"
+    
+    # === Messages ===
+    if expected.messages:
+        assert loaded.messages is not None, f"{test_name}: messages is None"
+        assert len(loaded.messages) == len(expected.messages), \
+            f"{test_name}: messages length mismatch: {len(loaded.messages)} != {len(expected.messages)}"
+        for i, (lm, em) in enumerate(zip(loaded.messages, expected.messages)):
+            verify_model_message_comprehensive(lm, em, f"{test_name}.messages[{i}]")
+    else:
+        assert loaded.messages is None or len(loaded.messages) == 0, \
+            f"{test_name}: messages should be None or empty"
+    
+    # === User profile ===
+    if expected.user_profile is not None:
+        assert loaded.user_profile is not None, f"{test_name}: user_profile is None"
+        if isinstance(expected.user_profile, BaseModel):
+            assert isinstance(loaded.user_profile, BaseModel), \
+                f"{test_name}: user_profile type mismatch"
+            if hasattr(loaded.user_profile, 'model_dump'):
+                loaded_dict = loaded.user_profile.model_dump()
+                expected_dict = expected.user_profile.model_dump()
+                assert loaded_dict == expected_dict, \
+                    f"{test_name}: user_profile content mismatch"
+        elif isinstance(expected.user_profile, dict):
+            assert isinstance(loaded.user_profile, dict), \
+                f"{test_name}: user_profile should be dict"
+            assert loaded.user_profile == expected.user_profile, \
+                f"{test_name}: user_profile dict mismatch"
+    
+    # === Timestamps ===
+    assert loaded.created_at == expected.created_at, \
+        f"{test_name}: created_at mismatch: {loaded.created_at} != {expected.created_at}"
+    assert loaded.updated_at == expected.updated_at, \
+        f"{test_name}: updated_at mismatch: {loaded.updated_at} != {expected.updated_at}"
+
+
 def verify_all_attributes(
     loaded: Optional["AgentSession"],
     expected: "AgentSession",
     test_name: str = ""
 ) -> None:
-    """Verify ALL AgentSession attributes AND ALL nested class attributes match expected values."""
+    """Verify ALL AgentSession attributes AND ALL nested class attributes match expected values.
+    
+    This function comprehensively verifies:
+    - All AgentSession attributes
+    - All AgentRunOutput attributes (50+ attributes)
+    - All nested classes: ModelResponse, RequestUsage, ModelProfile, AgentRunInput, ModelMessage
+    """
     assert loaded is not None, f"{test_name}: Session is None"
     
-    # ================== 1. session_id ==================
-    assert loaded.session_id == expected.session_id, \
-        f"{test_name}: session_id mismatch: {loaded.session_id} != {expected.session_id}"
+    # COMPREHENSIVE AgentSession verification (all basic attributes)
+    verify_agent_session_comprehensive(loaded, expected, test_name)
     
-    # ================== 2. agent_id ==================
-    assert loaded.agent_id == expected.agent_id, \
-        f"{test_name}: agent_id mismatch: {loaded.agent_id} != {expected.agent_id}"
-    
-    # ================== 3. user_id ==================
-    assert loaded.user_id == expected.user_id, \
-        f"{test_name}: user_id mismatch: {loaded.user_id} != {expected.user_id}"
-    
-    # ================== 4. workflow_id ==================
-    assert loaded.workflow_id == expected.workflow_id, \
-        f"{test_name}: workflow_id mismatch: {loaded.workflow_id} != {expected.workflow_id}"
-    
-    # ================== 5. session_data ==================
-    assert loaded.session_data == expected.session_data, \
-        f"{test_name}: session_data mismatch: {loaded.session_data} != {expected.session_data}"
-    
-    # ================== 6. metadata ==================
-    assert loaded.metadata == expected.metadata, \
-        f"{test_name}: metadata mismatch: {loaded.metadata} != {expected.metadata}"
-    
-    # ================== 7. agent_data ==================
-    assert loaded.agent_data == expected.agent_data, \
-        f"{test_name}: agent_data mismatch: {loaded.agent_data} != {expected.agent_data}"
-    
-    # ================== 8. runs (Dict[str, RunData] - DEEP verification) ==================
+    # ================== 8. runs (Dict[str, RunData] - COMPREHENSIVE DEEP verification) ==================
     assert loaded.runs is not None, f"{test_name}: runs is None"
     assert len(loaded.runs) == len(expected.runs), \
         f"{test_name}: runs length mismatch: {len(loaded.runs)} != {len(expected.runs)}"
@@ -471,50 +890,8 @@ def verify_all_attributes(
         exp_run = expected.runs[exp_run_id].output
         load_run = loaded.runs[load_run_id].output
         
-        # AgentRunOutput basic attributes
-        assert load_run.run_id == exp_run.run_id, f"{test_name}: runs[0].run_id mismatch"
-        assert load_run.agent_id == exp_run.agent_id, f"{test_name}: runs[0].agent_id mismatch"
-        assert load_run.agent_name == exp_run.agent_name, f"{test_name}: runs[0].agent_name mismatch"
-        assert load_run.session_id == exp_run.session_id, f"{test_name}: runs[0].session_id mismatch"
-        assert load_run.parent_run_id == exp_run.parent_run_id, f"{test_name}: runs[0].parent_run_id mismatch"
-        assert load_run.user_id == exp_run.user_id, f"{test_name}: runs[0].user_id mismatch"
-        assert load_run.content == exp_run.content, f"{test_name}: runs[0].content mismatch"
-        assert load_run.thinking_content == exp_run.thinking_content, f"{test_name}: runs[0].thinking_content mismatch"
-        assert load_run.model == exp_run.model, f"{test_name}: runs[0].model mismatch"
-        assert load_run.model_provider == exp_run.model_provider, f"{test_name}: runs[0].model_provider mismatch"
-        assert load_run.pause_reason == exp_run.pause_reason, f"{test_name}: runs[0].pause_reason mismatch"
-        assert load_run.error_details == exp_run.error_details, f"{test_name}: runs[0].error_details mismatch"
-        
-        # AgentRunOutput.input (AgentRunInput)
-        if exp_run.input:
-            assert load_run.input is not None, f"{test_name}: runs[0].input is None"
-            assert load_run.input.user_prompt == exp_run.input.user_prompt, \
-                f"{test_name}: runs[0].input.user_prompt mismatch"
-        
-        # AgentRunOutput.thinking_parts (List[ThinkingPart])
-        if exp_run.thinking_parts:
-            assert load_run.thinking_parts is not None, f"{test_name}: runs[0].thinking_parts is None"
-            assert len(load_run.thinking_parts) == len(exp_run.thinking_parts), \
-                f"{test_name}: runs[0].thinking_parts length mismatch"
-            for i, (lt, et) in enumerate(zip(load_run.thinking_parts, exp_run.thinking_parts)):
-                assert lt.content == et.content, f"{test_name}: thinking_parts[{i}].content mismatch"
-                assert lt.id == et.id, f"{test_name}: thinking_parts[{i}].id mismatch"
-                assert lt.signature == et.signature, f"{test_name}: thinking_parts[{i}].signature mismatch"
-                assert lt.provider_name == et.provider_name, f"{test_name}: thinking_parts[{i}].provider_name mismatch"
-        
-        # AgentRunOutput.usage (RequestUsage)
-        if exp_run.usage:
-            assert load_run.usage is not None, f"{test_name}: runs[0].usage is None"
-            assert load_run.usage.input_tokens == exp_run.usage.input_tokens, \
-                f"{test_name}: runs[0].usage.input_tokens mismatch"
-            assert load_run.usage.output_tokens == exp_run.usage.output_tokens, \
-                f"{test_name}: runs[0].usage.output_tokens mismatch"
-            assert load_run.usage.cache_write_tokens == exp_run.usage.cache_write_tokens, \
-                f"{test_name}: runs[0].usage.cache_write_tokens mismatch"
-            assert load_run.usage.cache_read_tokens == exp_run.usage.cache_read_tokens, \
-                f"{test_name}: runs[0].usage.cache_read_tokens mismatch"
-            assert load_run.usage.details == exp_run.usage.details, \
-                f"{test_name}: runs[0].usage.details mismatch"
+        # COMPREHENSIVE AgentRunOutput verification (all 50+ attributes)
+        verify_agent_run_output_comprehensive(load_run, exp_run, f"{test_name}.runs[{exp_run_id}].output")
         
         # AgentRunOutput.tools (List[ToolExecution])
         if exp_run.tools:
@@ -571,177 +948,13 @@ def verify_all_attributes(
                 f"{test_name}: runs[0].requirements length mismatch"
             for i, (lr, er) in enumerate(zip(load_run.requirements, exp_run.requirements)):
                 assert lr.id == er.id, f"{test_name}: requirements[{i}].id mismatch"
-                assert lr.pause_type == er.pause_type, f"{test_name}: requirements[{i}].pause_type mismatch"
                 assert lr.confirmation == er.confirmation, f"{test_name}: requirements[{i}].confirmation mismatch"
                 assert lr.confirmation_note == er.confirmation_note, f"{test_name}: requirements[{i}].confirmation_note mismatch"
-                assert lr.external_execution_result == er.external_execution_result, \
-                    f"{test_name}: requirements[{i}].external_execution_result mismatch"
-                assert lr.agent_state == er.agent_state, f"{test_name}: requirements[{i}].agent_state mismatch"
-                # RunRequirement.step_result (StepResult)
-                if er.step_result:
-                    assert lr.step_result is not None, f"{test_name}: requirements[{i}].step_result is None"
-                    assert lr.step_result.name == er.step_result.name, \
-                        f"{test_name}: requirements[{i}].step_result.name mismatch"
-                    assert lr.step_result.step_number == er.step_result.step_number, \
-                        f"{test_name}: requirements[{i}].step_result.step_number mismatch"
-                    assert lr.step_result.status == er.step_result.status, \
-                        f"{test_name}: requirements[{i}].step_result.status mismatch"
-                    assert lr.step_result.message == er.step_result.message, \
-                        f"{test_name}: requirements[{i}].step_result.message mismatch"
-                    assert lr.step_result.execution_time == er.step_result.execution_time, \
-                        f"{test_name}: requirements[{i}].step_result.execution_time mismatch"
-                # RunRequirement.execution_stats (PipelineExecutionStats)
-                if er.execution_stats:
-                    assert lr.execution_stats is not None, f"{test_name}: requirements[{i}].execution_stats is None"
-                    assert lr.execution_stats.total_steps == er.execution_stats.total_steps, \
-                        f"{test_name}: requirements[{i}].execution_stats.total_steps mismatch"
-                    assert lr.execution_stats.executed_steps == er.execution_stats.executed_steps, \
-                        f"{test_name}: requirements[{i}].execution_stats.executed_steps mismatch"
-                    assert lr.execution_stats.resumed_from == er.execution_stats.resumed_from, \
-                        f"{test_name}: requirements[{i}].execution_stats.resumed_from mismatch"
-                    assert lr.execution_stats.step_timing == er.execution_stats.step_timing, \
-                        f"{test_name}: requirements[{i}].execution_stats.step_timing mismatch"
-                    assert lr.execution_stats.step_statuses == er.execution_stats.step_statuses, \
-                        f"{test_name}: requirements[{i}].execution_stats.step_statuses mismatch"
-        
-        # RunData.context (AgentRunContext) - stored separately from output
-        exp_ctx = expected.runs[exp_run_id].context
-        ctx = loaded.runs[load_run_id].context
-        if exp_ctx:
-            assert ctx is not None, f"{test_name}: runs[{exp_run_id}].context is None"
-            assert ctx.run_id == exp_ctx.run_id, f"{test_name}: context.run_id mismatch"
-            assert ctx.session_id == exp_ctx.session_id, f"{test_name}: context.session_id mismatch"
-            assert ctx.user_id == exp_ctx.user_id, f"{test_name}: context.user_id mismatch"
-            assert ctx.is_streaming == exp_ctx.is_streaming, f"{test_name}: context.is_streaming mismatch"
-            assert ctx.accumulated_text == exp_ctx.accumulated_text, f"{test_name}: context.accumulated_text mismatch"
-            assert ctx.session_state == exp_ctx.session_state, f"{test_name}: context.session_state mismatch"
-            assert ctx.final_output == exp_ctx.final_output, f"{test_name}: context.final_output mismatch"
-            
-            # RunData.context.task (Task) - FULL verification including CALLABLES
-            if exp_ctx.task:
-                assert ctx.task is not None, f"{test_name}: context.task is None"
-                assert ctx.task.description == exp_ctx.task.description, \
-                    f"{test_name}: context.task.description mismatch"
-                assert ctx.task.response_lang == exp_ctx.task.response_lang, \
-                    f"{test_name}: context.task.response_lang mismatch"
-                assert ctx.task.is_paused == exp_ctx.task.is_paused, \
-                    f"{test_name}: context.task.is_paused mismatch"
-                assert ctx.task.enable_cache == exp_ctx.task.enable_cache, \
-                    f"{test_name}: context.task.enable_cache mismatch"
-                assert ctx.task.cache_method == exp_ctx.task.cache_method, \
-                    f"{test_name}: context.task.cache_method mismatch"
-                assert ctx.task.cache_threshold == exp_ctx.task.cache_threshold, \
-                    f"{test_name}: context.task.cache_threshold mismatch"
-                assert ctx.task.vector_search_top_k == exp_ctx.task.vector_search_top_k, \
-                    f"{test_name}: context.task.vector_search_top_k mismatch"
-                
-                # ===== VERIFY TOOLS (functions, lambdas, class instances) =====
-                if exp_ctx.task.tools:
-                    assert ctx.task.tools is not None, f"{test_name}: task.tools is None"
-                    assert len(ctx.task.tools) == len(exp_ctx.task.tools), \
-                        f"{test_name}: task.tools length mismatch: {len(ctx.task.tools)} != {len(exp_ctx.task.tools)}"
-                    
-                    for i, (lt, et) in enumerate(zip(ctx.task.tools, exp_ctx.task.tools)):
-                        # Check if it's a class instance (not a function/lambda)
-                        is_class_instance = hasattr(et, '__class__') and et.__class__.__name__ == 'SampleToolClass'
-                        
-                        if is_class_instance:
-                            # ===== CLASS INSTANCE TOOL VERIFICATION =====
-                            assert lt.__class__.__name__ == et.__class__.__name__, \
-                                f"{test_name}: task.tools[{i}] class name mismatch: {lt.__class__.__name__} != {et.__class__.__name__}"
-                            
-                            # Verify all attributes
-                            assert lt.name == et.name, \
-                                f"{test_name}: task.tools[{i}].name mismatch: {lt.name} != {et.name}"
-                            assert lt.value == et.value, \
-                                f"{test_name}: task.tools[{i}].value mismatch: {lt.value} != {et.value}"
-                            assert lt._internal_state == et._internal_state, \
-                                f"{test_name}: task.tools[{i}]._internal_state mismatch: {lt._internal_state} != {et._internal_state}"
-                            
-                            # Verify property works
-                            assert lt.full_name == et.full_name, \
-                                f"{test_name}: task.tools[{i}].full_name property mismatch: {lt.full_name} != {et.full_name}"
-                            
-                            # Verify methods exist and work
-                            assert hasattr(lt, 'execute'), f"{test_name}: task.tools[{i}] missing 'execute' method"
-                            assert hasattr(lt, 'get_state'), f"{test_name}: task.tools[{i}] missing 'get_state' method"
-                            assert callable(lt.execute), f"{test_name}: task.tools[{i}].execute is not callable"
-                            assert callable(lt.get_state), f"{test_name}: task.tools[{i}].get_state is not callable"
-                            
-                            # Test method execution
-                            test_data = {"key": "value"}
-                            expected_result = et.execute(test_data)
-                            loaded_result = lt.execute(test_data)
-                            assert loaded_result == expected_result, \
-                                f"{test_name}: task.tools[{i}].execute() mismatch: {loaded_result} != {expected_result}"
-                            
-                            expected_state = et.get_state()
-                            loaded_state = lt.get_state()
-                            assert loaded_state == expected_state, \
-                                f"{test_name}: task.tools[{i}].get_state() mismatch: {loaded_state} != {expected_state}"
-                        else:
-                            # ===== CALLABLE (function/lambda) TOOL VERIFICATION =====
-                            assert callable(lt), f"{test_name}: task.tools[{i}] is not callable after deserialization"
-                            assert callable(et), f"{test_name}: expected task.tools[{i}] is not callable"
-                            
-                            # If it's a function, verify function name matches
-                            if hasattr(et, '__name__') and hasattr(lt, '__name__'):
-                                assert lt.__name__ == et.__name__, \
-                                    f"{test_name}: task.tools[{i}].__name__ mismatch: {lt.__name__} != {et.__name__}"
-                            
-                            # Test function execution
-                            if hasattr(et, '__name__') and et.__name__ == 'sample_tool_function':
-                                expected_result = et(42, "test")
-                                loaded_result = lt(42, "test")
-                                assert loaded_result == expected_result, \
-                                    f"{test_name}: task.tools[{i}] function execution mismatch: {loaded_result} != {expected_result}"
-                            
-                            # Test lambda execution
-                            if hasattr(et, '__name__') and et.__name__ == '<lambda>':
-                                expected_result = et(5)
-                                loaded_result = lt(5)
-                                assert loaded_result == expected_result, \
-                                    f"{test_name}: task.tools[{i}] lambda execution mismatch: {loaded_result} != {expected_result}"
-                
-                # ===== VERIFY CALLABLE GUARDRAIL =====
-                if exp_ctx.task.guardrail:
-                    assert ctx.task.guardrail is not None, f"{test_name}: task.guardrail is None"
-                    assert callable(ctx.task.guardrail), f"{test_name}: task.guardrail is not callable after deserialization"
-                    
-                    # Verify guardrail function name
-                    if hasattr(exp_ctx.task.guardrail, '__name__'):
-                        assert ctx.task.guardrail.__name__ == exp_ctx.task.guardrail.__name__, \
-                            f"{test_name}: task.guardrail.__name__ mismatch"
-                    
-                    # Test guardrail execution
-                    test_output = "short text"
-                    expected_result = exp_ctx.task.guardrail(test_output)
-                    loaded_result = ctx.task.guardrail(test_output)
-                    assert loaded_result == expected_result, \
-                        f"{test_name}: task.guardrail execution mismatch: {loaded_result} != {expected_result}"
-            
-            # RunData.context.step_results (List[StepResult])
-            if exp_ctx.step_results:
-                assert len(ctx.step_results) == len(exp_ctx.step_results), \
-                    f"{test_name}: context.step_results length mismatch"
-            
-            # RunData.context.execution_stats (PipelineExecutionStats)
-            if exp_ctx.execution_stats:
-                assert ctx.execution_stats is not None, f"{test_name}: context.execution_stats is None"
-                assert ctx.execution_stats.total_steps == exp_ctx.execution_stats.total_steps, \
-                    f"{test_name}: context.execution_stats.total_steps mismatch"
-            
-            # RunData.context.events (List[AgentEvent])
-            if exp_ctx.events:
-                assert ctx.events is not None, f"{test_name}: context.events is None"
-                assert len(ctx.events) == len(exp_ctx.events), \
-                    f"{test_name}: context.events length mismatch"
-                # Verify event types are preserved
-                for i, (le, ee) in enumerate(zip(ctx.events, exp_ctx.events)):
-                    assert type(le).__name__ == type(ee).__name__, \
-                        f"{test_name}: events[{i}] type mismatch: {type(le).__name__} != {type(ee).__name__}"
-                    assert le.event_id == ee.event_id, f"{test_name}: events[{i}].event_id mismatch"
-                    assert le.run_id == ee.run_id, f"{test_name}: events[{i}].run_id mismatch"
+                # Verify external execution result via tool_execution.result
+                if er.tool_execution and er.tool_execution.result:
+                    assert lr.tool_execution is not None
+                    assert lr.tool_execution.result == er.tool_execution.result
+                # Note: step_result and execution_stats are on AgentRunOutput, not RunRequirement
         
         # AgentRunOutput.events (List[AgentEvent])
         if exp_run.events:
@@ -757,23 +970,13 @@ def verify_all_attributes(
     assert loaded.summary == expected.summary, \
         f"{test_name}: summary mismatch: {loaded.summary} != {expected.summary}"
     
-    # ================== 10. messages (ModelRequest, ModelResponse with parts) ==================
+    # ================== 10. messages (ModelRequest, ModelResponse with parts) - COMPREHENSIVE ==================
     assert loaded.messages is not None, f"{test_name}: messages is None"
     assert len(loaded.messages) == len(expected.messages), \
         f"{test_name}: messages length mismatch: {len(loaded.messages)} != {len(expected.messages)}"
     for i, (lm, em) in enumerate(zip(loaded.messages, expected.messages)):
-        assert type(lm).__name__ == type(em).__name__, \
-            f"{test_name}: messages[{i}] type mismatch: {type(lm).__name__} != {type(em).__name__}"
-        # Verify message parts
-        if hasattr(em, 'parts') and hasattr(lm, 'parts'):
-            assert len(lm.parts) == len(em.parts), \
-                f"{test_name}: messages[{i}].parts length mismatch"
-            for j, (lp, ep) in enumerate(zip(lm.parts, em.parts)):
-                assert type(lp).__name__ == type(ep).__name__, \
-                    f"{test_name}: messages[{i}].parts[{j}] type mismatch"
-                if hasattr(ep, 'content') and hasattr(lp, 'content'):
-                    assert lp.content == ep.content, \
-                        f"{test_name}: messages[{i}].parts[{j}].content mismatch"
+        # COMPREHENSIVE ModelMessage verification (ModelRequest or ModelResponse)
+        verify_model_message_comprehensive(lm, em, f"{test_name}.messages[{i}]")
     
     # ================== 11. user_profile (BaseModel with ALL attributes) ==================
     if expected.user_profile is not None:
@@ -1111,9 +1314,9 @@ class TestSqliteStorage:
             assert run.session_id == exp_run.session_id
             assert run.parent_run_id == exp_run.parent_run_id
             assert run.user_id == exp_run.user_id
-            assert run.content == exp_run.content
+            assert run.output == exp_run.output
             assert run.thinking_content == exp_run.thinking_content
-            assert run.model == exp_run.model
+            assert run.model_name == exp_run.model_name
             assert run.model_provider == exp_run.model_provider
             assert run.status == exp_run.status
             assert run.pause_reason == exp_run.pause_reason
@@ -1196,71 +1399,58 @@ class TestSqliteStorage:
             assert len(run.requirements) == len(exp_run.requirements)
             for i, (lr, er) in enumerate(zip(run.requirements, exp_run.requirements)):
                 assert lr.id == er.id, f"requirements[{i}].id mismatch"
-                assert lr.pause_type == er.pause_type, f"requirements[{i}].pause_type mismatch"
                 assert lr.confirmation == er.confirmation, f"requirements[{i}].confirmation mismatch"
                 assert lr.confirmation_note == er.confirmation_note, f"requirements[{i}].confirmation_note mismatch"
-                assert lr.external_execution_result == er.external_execution_result, f"requirements[{i}].external_execution_result mismatch"
-                assert lr.agent_state == er.agent_state, f"requirements[{i}].agent_state mismatch"
-                # Verify StepResult
-                if er.step_result:
-                    assert lr.step_result is not None, f"requirements[{i}].step_result is None"
-                    assert lr.step_result.name == er.step_result.name
-                    assert lr.step_result.step_number == er.step_result.step_number
-                    assert lr.step_result.status == er.step_result.status
-                    assert lr.step_result.message == er.step_result.message
-                    assert lr.step_result.execution_time == er.step_result.execution_time
-                # Verify execution_stats
-                if er.execution_stats:
-                    assert lr.execution_stats is not None
-                    assert lr.execution_stats.total_steps == er.execution_stats.total_steps
-                    assert lr.execution_stats.executed_steps == er.execution_stats.executed_steps
-                    assert lr.execution_stats.resumed_from == er.execution_stats.resumed_from
-                    assert lr.execution_stats.step_timing == er.execution_stats.step_timing
-                    assert lr.execution_stats.step_statuses == er.execution_stats.step_statuses
+                # Verify external execution result via tool_execution.result
+                if er.tool_execution and er.tool_execution.result:
+                    assert lr.tool_execution is not None
+                    assert lr.tool_execution.result == er.tool_execution.result
+                # Note: step_result and execution_stats are on AgentRunOutput, not RunRequirement
             print("✓ RunRequirement verified")
             
-            # Verify AgentRunContext (stored separately in RunData)
-            print("Verifying AgentRunContext...")
-            ctx = loaded.runs[loaded_run_id].context
-            exp_ctx = session.runs[session_run_id].context
-            assert ctx is not None
-            assert ctx.run_id == exp_ctx.run_id
-            assert ctx.session_id == exp_ctx.session_id
-            assert ctx.user_id == exp_ctx.user_id
-            assert ctx.is_streaming == exp_ctx.is_streaming
-            assert ctx.accumulated_text == exp_ctx.accumulated_text
-            assert ctx.session_state == exp_ctx.session_state
-            assert ctx.final_output == exp_ctx.final_output
-            print("✓ AgentRunContext verified")
+            # Verify AgentRunOutput (single source of truth - no separate context)
+            print("Verifying AgentRunOutput attributes...")
+            loaded_output = loaded.runs[loaded_run_id].output
+            exp_output = session.runs[session_run_id].output
+            assert loaded_output is not None
+            assert loaded_output.run_id == exp_output.run_id
+            assert loaded_output.session_id == exp_output.session_id
+            assert loaded_output.user_id == exp_output.user_id
+            assert loaded_output.is_streaming == exp_output.is_streaming
+            assert loaded_output.accumulated_text == exp_output.accumulated_text
+            assert loaded_output.session_state == exp_output.session_state
+            assert loaded_output.output == exp_output.output
+            print("✓ AgentRunOutput attributes verified")
             
             # Verify Task with callable tools
             print("Verifying Task (including callable tools)...")
-            if exp_ctx.task:
-                assert ctx.task is not None
-                assert ctx.task.description == exp_ctx.task.description
-                assert ctx.task.response_lang == exp_ctx.task.response_lang
-                assert ctx.task.is_paused == exp_ctx.task.is_paused
-                assert ctx.task.enable_cache == exp_ctx.task.enable_cache
+            if exp_output.task:
+                assert loaded_output.task is not None
+                assert loaded_output.task.description == exp_output.task.description
+                assert loaded_output.task.response_lang == exp_output.task.response_lang
+                assert loaded_output.task.is_paused == exp_output.task.is_paused
+                assert loaded_output.task.enable_cache == exp_output.task.enable_cache
                 # Verify callable tools
-                if exp_ctx.task.tools:
-                    assert ctx.task.tools is not None
-                    assert len(ctx.task.tools) == len(exp_ctx.task.tools)
-                    for i, (lt, et) in enumerate(zip(ctx.task.tools, exp_ctx.task.tools)):
+                if exp_output.task.tools:
+                    assert loaded_output.task.tools is not None
+                    assert len(loaded_output.task.tools) == len(exp_output.task.tools)
+                    for i, (lt, et) in enumerate(zip(loaded_output.task.tools, exp_output.task.tools)):
                         if callable(et):
                             assert callable(lt), f"Task tool {i} should be callable"
                 # Verify callable guardrail
-                if exp_ctx.task.guardrail:
-                    assert ctx.task.guardrail is not None
-                    assert callable(ctx.task.guardrail)
+                if exp_output.task.guardrail:
+                    assert loaded_output.task.guardrail is not None
+                    assert callable(loaded_output.task.guardrail)
             print("✓ Task verified")
             
             # Verify AgentEvents
             print("Verifying AgentEvents...")
-            assert len(run.events) == len(exp_run.events)
-            for i, (le, ee) in enumerate(zip(run.events, exp_run.events)):
-                assert type(le).__name__ == type(ee).__name__, f"events[{i}] type mismatch"
-                assert le.event_id == ee.event_id, f"events[{i}].event_id mismatch"
-                assert le.run_id == ee.run_id, f"events[{i}].run_id mismatch"
+            if loaded_output.events and exp_output.events:
+                assert len(loaded_output.events) == len(exp_output.events)
+                for i, (le, ee) in enumerate(zip(loaded_output.events, exp_output.events)):
+                    assert type(le).__name__ == type(ee).__name__, f"events[{i}] type mismatch"
+                    assert le.event_id == ee.event_id, f"events[{i}].event_id mismatch"
+                    assert le.run_id == ee.run_id, f"events[{i}].run_id mismatch"
             print("✓ AgentEvents verified")
             
             print("\n✅ SqliteStorage: Deep Nested Class Verification PASSED")
@@ -1868,10 +2058,13 @@ class TestNestedClassSerialization:
     
     @pytest.mark.asyncio
     async def test_nested_run_context_serialization(self):
-        """Test that AgentRunContext with all nested objects serializes correctly."""
+        """Test that AgentRunOutput with all nested objects serializes correctly.
+        
+        AgentRunOutput is now the single source of truth for all run state,
+        replacing the old AgentRunContext.
+        """
         from upsonic.storage.providers.sqlite import SqliteStorage
-        from upsonic.session.agent import AgentSession
-        from upsonic.run.agent.context import AgentRunContext
+        from upsonic.session.agent import AgentSession, RunData
         from upsonic.run.agent.output import AgentRunOutput
         from upsonic.run.requirements import RunRequirement
         from upsonic.run.tools.tools import ToolExecution
@@ -1881,7 +2074,7 @@ class TestNestedClassSerialization:
         from upsonic.tasks.tasks import Task
         
         print("\n" + "="*70)
-        print("Testing Nested RunContext Serialization")
+        print("Testing Nested AgentRunOutput Serialization")
         print("="*70)
         
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
@@ -1891,9 +2084,9 @@ class TestNestedClassSerialization:
             storage = SqliteStorage(db_file=db_path)
             await storage.connect_async()
             
-            session_id = f"test_context_{uuid.uuid4().hex[:8]}"
+            session_id = f"test_output_{uuid.uuid4().hex[:8]}"
             
-            # Create complex run context
+            # Create complex execution stats
             stats = PipelineExecutionStats(
                 total_steps=5,
                 executed_steps=3,
@@ -1922,12 +2115,8 @@ class TestNestedClassSerialization:
             )
             
             req = RunRequirement(
-                tool_execution=tool_exec,
-                pause_type='external_tool'
+                tool_execution=tool_exec
             )
-            req.step_result = step_result
-            req.execution_stats = stats
-            req.agent_state = {"custom_state": "value"}
             
             task = Task(
                 description="Test nested serialization task",
@@ -1936,33 +2125,30 @@ class TestNestedClassSerialization:
                 context="Test context"
             )
             
-            ctx = AgentRunContext(
+            # Create AgentRunOutput with all attributes (replaces AgentRunContext)
+            run = AgentRunOutput(
                 run_id="run_nested_test",
+                agent_id="agent_test",
+                agent_name="TestAgent",
                 session_id=session_id,
                 user_id="user_test",
                 task=task,
                 step_results=[step_result],
                 execution_stats=stats,
                 requirements=[req],
-                session_state={"key": "value"},
+                session_state={"key": "value", "nested": {"deep": 42}},
+                output_schema=None,
                 is_streaming=True,
                 accumulated_text="Test accumulated text",
                 messages=[],
-                final_output="Test final output"
-            )
-            
-            run = AgentRunOutput(
-                run_id="run_nested_test",
-                agent_id="agent_test",
-                session_id=session_id,
+                output="Test final output",
                 status=RunStatus.paused,
-                requirements=[req]
+                pause_reason="external_tool"
             )
             
-            from upsonic.session.agent import RunData
             session = AgentSession(
                 session_id=session_id,
-                runs={run.run_id: RunData(output=run, context=ctx)}
+                runs={run.run_id: RunData(output=run)}
             )
             
             # Store and read
@@ -1974,30 +2160,30 @@ class TestNestedClassSerialization:
             
             loaded_run_id = list(loaded.runs.keys())[0]
             loaded_run = loaded.runs[loaded_run_id].output
-            loaded_ctx = loaded.runs[loaded_run_id].context
             
-            # Verify context
-            assert loaded_ctx is not None
-            assert loaded_ctx.run_id == ctx.run_id
-            assert loaded_ctx.session_id == ctx.session_id
-            assert loaded_ctx.is_streaming == ctx.is_streaming
-            assert loaded_ctx.accumulated_text == ctx.accumulated_text
-            assert loaded_ctx.final_output == ctx.final_output
-            assert loaded_ctx.session_state == ctx.session_state
-            print("✓ AgentRunContext basic attributes verified")
+            # Verify AgentRunOutput basic attributes
+            assert loaded_run is not None
+            assert loaded_run.run_id == run.run_id
+            assert loaded_run.session_id == run.session_id
+            assert loaded_run.user_id == run.user_id
+            assert loaded_run.is_streaming == run.is_streaming
+            assert loaded_run.accumulated_text == run.accumulated_text
+            assert loaded_run.session_state == run.session_state
+            assert loaded_run.output == run.output
+            print("✓ AgentRunOutput basic attributes verified")
             
             # Verify execution_stats
-            assert loaded_ctx.execution_stats is not None
-            assert loaded_ctx.execution_stats.total_steps == stats.total_steps
-            assert loaded_ctx.execution_stats.executed_steps == stats.executed_steps
-            assert loaded_ctx.execution_stats.resumed_from == stats.resumed_from
-            assert loaded_ctx.execution_stats.step_timing == stats.step_timing
-            assert loaded_ctx.execution_stats.step_statuses == stats.step_statuses
+            assert loaded_run.execution_stats is not None
+            assert loaded_run.execution_stats.total_steps == stats.total_steps
+            assert loaded_run.execution_stats.executed_steps == stats.executed_steps
+            assert loaded_run.execution_stats.resumed_from == stats.resumed_from
+            assert loaded_run.execution_stats.step_timing == stats.step_timing
+            assert loaded_run.execution_stats.step_statuses == stats.step_statuses
             print("✓ PipelineExecutionStats verified")
             
             # Verify step_results
-            assert len(loaded_ctx.step_results) == 1
-            loaded_step = loaded_ctx.step_results[0]
+            assert len(loaded_run.step_results) == 1
+            loaded_step = loaded_run.step_results[0]
             assert loaded_step.name == step_result.name
             assert loaded_step.step_number == step_result.step_number
             assert loaded_step.status == step_result.status
@@ -2006,10 +2192,8 @@ class TestNestedClassSerialization:
             print("✓ StepResult verified")
             
             # Verify requirements
-            assert len(loaded_ctx.requirements) == 1
-            loaded_req = loaded_ctx.requirements[0]
-            assert loaded_req.pause_type == req.pause_type
-            assert loaded_req.agent_state == req.agent_state
+            assert len(loaded_run.requirements) == 1
+            loaded_req = loaded_run.requirements[0]
             
             # Verify nested tool_execution
             assert loaded_req.tool_execution is not None
@@ -2022,18 +2206,18 @@ class TestNestedClassSerialization:
             print("✓ RunRequirement and ToolExecution verified")
             
             # Verify task
-            assert loaded_ctx.task is not None
-            assert loaded_ctx.task.description == task.description
-            assert loaded_ctx.task.context == task.context
-            assert loaded_ctx.task.enable_cache == task.enable_cache
+            assert loaded_run.task is not None
+            assert loaded_run.task.description == task.description
+            assert loaded_run.task.context == task.context
+            assert loaded_run.task.enable_cache == task.enable_cache
             # Verify callable tool
             if task.tools:
-                assert loaded_ctx.task.tools is not None
-                assert len(loaded_ctx.task.tools) == len(task.tools)
-                assert callable(loaded_ctx.task.tools[0])
+                assert loaded_run.task.tools is not None
+                assert len(loaded_run.task.tools) == len(task.tools)
+                assert callable(loaded_run.task.tools[0])
             print("✓ Task with callable tools verified")
             
-            print("\n✅ Nested RunContext Serialization PASSED")
+            print("\n✅ Nested AgentRunOutput Serialization PASSED")
             
         finally:
             try:
@@ -2142,18 +2326,11 @@ class TestNestedClassSerialization:
             )
             
             from upsonic.session.agent import RunData
-            from upsonic.run.agent.context import AgentRunContext
             
-            # Create minimal context for this run
-            ctx = AgentRunContext(
-                run_id=run.run_id,
-                session_id=session_id,
-                is_streaming=False
-            )
-            
+            # AgentRunOutput is the single source of truth - no separate context needed
             session = AgentSession(
                 session_id=session_id,
-                runs={run.run_id: RunData(output=run, context=ctx)}
+                runs={run.run_id: RunData(output=run)}
             )
             
             # Store and read

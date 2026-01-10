@@ -27,21 +27,20 @@ def get_message_build_step_index() -> int:
     """
     Get the standard index of MessageBuildStep in the pipeline.
     
-    MessageBuildStep is always at index 8 in the standard agent pipeline:
+    MessageBuildStep is always at index 7 in the standard agent pipeline:
     0: InitializationStep
     1: StorageConnectionStep
     2: CacheCheckStep
     3: UserPolicyStep
     4: LLMManagerStep
     5: ModelSelectionStep
-    6: ValidationStep
-    7: ToolSetupStep
-    8: MessageBuildStep
-    9: ModelExecutionStep  <-- External tool resumption point
+    6: ToolSetupStep
+    7: MessageBuildStep
+    8: ModelExecutionStep  <-- External tool resumption point
     ...
     
     Returns:
-        The index of MessageBuildStep (8)
+        The index of MessageBuildStep (7)
     """
     return 8
 
@@ -50,12 +49,12 @@ def get_model_execution_step_index() -> int:
     """
     Get the standard index of ModelExecutionStep in the pipeline.
     
-    ModelExecutionStep is always at index 9 in the standard agent pipeline.
+    ModelExecutionStep is always at index 8 in the standard agent pipeline.
     This is the correct resumption point for external tool continuation since
     messages are already injected by _inject_external_tool_results.
     
     Returns:
-        The index of ModelExecutionStep (9)
+        The index of ModelExecutionStep (8)
     """
     return 9
 

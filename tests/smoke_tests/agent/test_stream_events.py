@@ -172,7 +172,7 @@ async def test_basic_text_streaming():
     assert pipeline_start.is_streaming is True
     
     pipeline_end = by_type["PipelineEndEvent"][0]
-    assert pipeline_end.status == "success"  # This is pipeline status, not StepStatus
+    assert pipeline_end.status == "COMPLETED"  # This is pipeline status from StepStatus.COMPLETED.value
     assert pipeline_end.total_duration > 0
     
     print(f"\n✅ Test passed! Collected {len(collected_events)} events")
@@ -547,7 +547,7 @@ async def test_event_attributes():
 
 @pytest.mark.asyncio
 async def test_stream_result_methods():
-    """Test AgentRunOutput and AgentRunContext attributes and methods."""
+    """Test AgentRunOutput attributes and methods."""
     print("\n" + "=" * 60)
     print("TEST: Stream Result Methods")
     print("=" * 60)
@@ -576,9 +576,8 @@ async def test_stream_result_methods():
     
     print("\n")
     
-    # Get run output and context
+    # Get run output (single source of truth)
     run_output = agent.get_run_output()
-    run_context = agent._agent_run_context if hasattr(agent, '_agent_run_context') else None
     
     print(f"  All events: {len(all_events)} events")
     print(f"  Text events: {len(text_events)} events")
@@ -586,20 +585,20 @@ async def test_stream_result_methods():
     print(f"  Step events: {len(step_events)} events")
     print(f"  Pipeline events: {len(pipeline_events)} events")
     
-    # Get stats from context
+    # Get stats from output
     total_duration = 0
-    if run_context and run_context.execution_stats:
-        if hasattr(run_context.execution_stats, 'total_duration'):
-            total_duration = run_context.execution_stats.total_duration
-        elif hasattr(run_context.execution_stats, 'get_total_duration'):
-            total_duration = run_context.execution_stats.get_total_duration()
+    if run_output and run_output.execution_stats:
+        if hasattr(run_output.execution_stats, 'total_duration'):
+            total_duration = run_output.execution_stats.total_duration
+        elif hasattr(run_output.execution_stats, 'get_total_duration'):
+            total_duration = run_output.execution_stats.get_total_duration()
     
     print(f"  Total duration: {total_duration:.3f}s")
     
-    accumulated = run_output._accumulated_text if run_output else ""
-    print(f"  Accumulated text: {len(accumulated)} chars")
+    accumulated = run_output.accumulated_text if run_output else ""
+    print(f"  Accumulated text: {len(accumulated) if accumulated else 0} chars")
     
-    final = run_output.content or run_output._accumulated_text if run_output else None
+    final = run_output.output or run_output.accumulated_text if run_output else None
     print(f"  Final output: {str(final)[:50] if final else 'None'}...")
     
     # Assertions
@@ -615,10 +614,11 @@ async def test_stream_result_methods():
     assert total_duration >= 0, "Total duration should be non-negative"
     # Accumulated text may be empty if content is in final output instead
     # Check that we have either accumulated text or final output
-    assert len(accumulated) > 0 or (final is not None and len(str(final)) > 0), "Should have accumulated text or final output"
+    accumulated_len = len(accumulated) if accumulated else 0
+    assert accumulated_len > 0 or (final is not None and len(str(final)) > 0), "Should have accumulated text or final output"
     assert final is not None, "Final output should not be None"
     
-    print(f"\n✅ Test passed! All AgentRunOutput/AgentRunContext methods work correctly")
+    print(f"\n✅ Test passed! All AgentRunOutput methods work correctly")
 
 
 # =============================================================================

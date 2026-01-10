@@ -6,7 +6,6 @@ from typing import Any, Dict, List, Mapping, Optional, Union, TYPE_CHECKING
 from pydantic import BaseModel
 
 from upsonic.messages.messages import ModelMessage
-from upsonic.run.agent.context import AgentRunContext
 from upsonic.run.agent.output import AgentRunOutput
 from upsonic.run.base import RunStatus
 from upsonic.utils.logging_config import get_logger
@@ -28,22 +27,23 @@ def log_warning(msg: str):
 
 @dataclass
 class RunData:
-    """Container for run output and context - stored together in AgentSession."""
+    """Container for run output - stored in AgentSession.
+    
+    AgentRunOutput is now the single source of truth for all run state,
+    including execution context needed for HITL resumption.
+    """
     output: AgentRunOutput
-    context: AgentRunContext
     
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary."""
         return {
             "output": self.output.to_dict() if self.output else None,
-            "context": self.context.to_dict() if self.context else None,
         }
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "RunData":
         """Reconstruct from dictionary."""
         output = None
-        context = None
         
         output_data = data.get("output")
         if output_data:
@@ -52,14 +52,7 @@ class RunData:
             else:
                 output = output_data
         
-        context_data = data.get("context")
-        if context_data:
-            if isinstance(context_data, dict):
-                context = AgentRunContext.from_dict(context_data)
-            else:
-                context = context_data
-        
-        return cls(output=output, context=context)
+        return cls(output=output)
     
     def serialize(self) -> bytes:
         """Serialize to bytes for storage."""
@@ -96,7 +89,7 @@ class AgentSession:
     created_at: Optional[int] = None
     updated_at: Optional[int] = None
     
-    def flatten_messages_from_runs(self) -> List[ModelMessage]:
+    def flatten_messages_from_runs_all(self) -> List[ModelMessage]:
         all_msgs = []
         if self.runs:
             for run_data in self.runs.values():
@@ -166,16 +159,15 @@ class AgentSession:
         )
 
     
-    def upsert_run(self, output: AgentRunOutput, context: Optional[AgentRunContext] = None) -> None:
+    def upsert_run(self, output: AgentRunOutput) -> None:
         """
         Upsert a run into the session.
         
-        1. Adds/updates run in self.runs dict
-        2. Auto-flattens messages from completed runs → self.messages
+        Adds or updates a run in self.runs dict. Messages are set separately
+        via populate_from_run_output() which uses output.chat_history.
         
         Args:
-            output: AgentRunOutput to store
-            context: AgentRunContext to store (required for HITL resumption)
+            output: AgentRunOutput to store (single source of truth for all run state)
         """
         if output is None:
             return
@@ -191,22 +183,15 @@ class AgentSession:
         
         # Create or update RunData
         if run_id in self.runs:
-            # Update existing - preserve context if not provided
-            existing_context = self.runs[run_id].context
-            self.runs[run_id] = RunData(
-                output=output,
-                context=context if context is not None else existing_context
-            )
+            # Update existing
+            self.runs[run_id] = RunData(output=output)
             log_debug(f"Updated run: {run_id}")
         else:
-            self.runs[run_id] = RunData(output=output, context=context)
+            self.runs[run_id] = RunData(output=output)
             log_debug(f"Added run (total: {len(self.runs)})")
-        
-        # Flatten messages for memory
-        self._flatten_messages()
     
-    def _flatten_messages(self) -> None:
-        """Flatten messages from completed runs into self.messages."""
+    def flatten_messages_from_completed_runs(self) -> None:
+        """Flatten messages from completed runs."""
         if not self.runs:
             self.messages = []
             return
@@ -217,10 +202,7 @@ class AgentSession:
             if run_data.output and getattr(run_data.output, 'status', None) == RunStatus.completed:
                 if run_data.output.messages:
                     all_messages.extend(run_data.output.messages)
-        
-        self.messages = all_messages
-        log_debug(f"Flattened {len(all_messages)} messages from {len(self.runs)} runs")
-    
+        return all_messages
 
     def get_run(self, run_id: str) -> Optional[AgentRunOutput]:
         """Get run output by run_id."""
@@ -229,16 +211,10 @@ class AgentSession:
         return self.runs[run_id].output
     
     def get_run_data(self, run_id: str) -> Optional[RunData]:
-        """Get full RunData (output + context) by run_id."""
+        """Get full RunData by run_id."""
         if not self.runs or run_id not in self.runs:
             return None
         return self.runs[run_id]
-    
-    def get_run_context(self, run_id: str) -> Optional[AgentRunContext]:
-        """Get run context by run_id."""
-        if not self.runs or run_id not in self.runs:
-            return None
-        return self.runs[run_id].context
     
     def get_last_run(self) -> Optional[AgentRunOutput]:
         """Get the most recently added run output."""
@@ -807,11 +783,12 @@ class AgentSession:
     
     def populate_from_run_output(self, run_output: "AgentRunOutput") -> None:
         """
-        Populate session_data and agent_data from an AgentRunOutput.
+        Populate session data from an AgentRunOutput.
         
-        Extracts:
+        Extracts and sets:
         - agent_data: agent_name, model_name
         - session_data: user_prompt, image_identifiers, document_identifiers
+        - messages: Full conversation history from chat_history
         
         Args:
             run_output: The AgentRunOutput containing input and agent info
@@ -821,6 +798,10 @@ class AgentSession:
         
         self._populate_agent_data_from_output(run_output)
         self._populate_session_data_from_output(run_output)
+        
+        # Set session messages from output's chat_history (contains all history from all runs)
+        if run_output.chat_history:
+            self.messages = list(run_output.chat_history)
     
     def _populate_agent_data_from_output(self, run_output: "AgentRunOutput") -> None:
         """

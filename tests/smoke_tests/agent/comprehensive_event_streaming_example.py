@@ -15,6 +15,7 @@ from typing import Dict, List, Set
 from upsonic import Agent, Task
 from upsonic.tools import tool
 from upsonic.storage.providers.in_memory import InMemoryStorage
+from upsonic.storage.memory.memory import Memory
 
 # Import ALL event classes
 from upsonic.run.events.events import (
@@ -43,7 +44,6 @@ from upsonic.run.events.events import (
     # Model events
     LLMPreparedEvent,
     ModelSelectedEvent,
-    ValidationEvent,
     ToolsConfiguredEvent,
     MessagesBuiltEvent,
     ModelRequestStartEvent,
@@ -239,7 +239,7 @@ async def test_cache_events():
     agent = Agent("openai/gpt-4o-mini")
     
     # First run - should be cache miss
-    task1 = Task("What is 2+2?")
+    task1 = Task("What is 2+2?", enable_cache=True)
     print("\nFirst run (cache miss expected):")
     async for event in agent.astream(task1, events=True):
         tracker.track(event)
@@ -255,7 +255,7 @@ async def test_cache_events():
             print(event.content, end="", flush=True)
     
     print("\n\nSecond run (cache hit expected):")
-    task2 = Task("What is 2+2?")  # Same task
+    task2 = Task("What is 2+2?", enable_cache=True)  # Same task
     async for event in agent.astream(task2, events=True):
         tracker.track(event)
         if isinstance(event, CacheCheckEvent):
@@ -286,10 +286,10 @@ async def test_memory_events():
     
     tracker = EventTracker()
     storage = InMemoryStorage()
+    memory = Memory(storage=storage, session_id="test_session_memory")
     agent = Agent(
         "openai/gpt-4o-mini",
-        memory=storage,
-        session_id="test_session_memory"
+        memory=memory
     )
     
     task = Task("My name is Alice. Remember this.")
@@ -348,34 +348,6 @@ async def test_reflection_events():
 
 
 @pytest.mark.asyncio
-async def test_validation_events():
-    """Test validation events."""
-    print("\n" + "=" * 80)
-    print("TEST 6: Validation Events")
-    print("=" * 80)
-    
-    tracker = EventTracker()
-    agent = Agent("openai/gpt-4o-mini")
-    task = Task("Hello, world!")
-    
-    async for event in agent.astream(task, events=True):
-        tracker.track(event)
-        
-        if isinstance(event, ValidationEvent):
-            print(f"✓ ValidationEvent: validated={event.attachments_validated}, passed={event.validation_passed}")
-        elif isinstance(event, TextDeltaEvent):
-            print(event.content, end="", flush=True)
-    
-    tracker.print_summary()
-    
-    # ValidationEvent might not always fire
-    if tracker.has_seen(ValidationEvent):
-        print("  → ValidationEvent was captured")
-    
-    print("\n✅ Test 6 PASSED: Validation events checked")
-
-
-@pytest.mark.asyncio
 async def test_execution_complete_event():
     """Test execution complete event."""
     print("\n" + "=" * 80)
@@ -415,11 +387,11 @@ async def test_all_event_types_comprehensive():
     
     # Create agent with tools and memory to maximize events
     storage = InMemoryStorage()
+    memory = Memory(storage=storage, session_id="comprehensive_test_session")
     agent = Agent(
         "openai/gpt-4o-mini",
         tools=[calculate, get_weather, search_web],
-        memory=storage,
-        session_id="comprehensive_test_session"
+        memory=memory
     )
     
     # Task that will trigger multiple tool calls
@@ -485,7 +457,6 @@ async def test_all_event_types_comprehensive():
         ToolResultEvent,
         MemoryUpdateEvent,
         StorageConnectionEvent,
-        ValidationEvent,
         ReflectionEvent,
         CultureUpdateEvent,
         ReliabilityEvent,
@@ -524,7 +495,6 @@ async def main():
         await test_cache_events()
         await test_memory_events()
         await test_reflection_events()
-        await test_validation_events()
         await test_execution_complete_event()
         await test_all_event_types_comprehensive()
         

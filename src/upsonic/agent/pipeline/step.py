@@ -2,33 +2,30 @@
 Base Step class for pipeline execution.
 
 Steps are the building blocks of the agent execution pipeline.
-Each step performs a specific operation and can modify the context.
-PipelineManager passes task, agent, model to each step.
+Each step performs a specific operation and can modify the output context.
+PipelineManager passes task, agent, model, and step_number to each step.
 
 Architecture:
-- execute() returns StepResult directly (for non-streaming steps)
-- execute_stream() yields AsyncIterator of AgentEvent (for streaming steps)
-- run() wraps execute() with timing and step tracking, returns StepResult
-- run_stream() wraps execute_stream() with timing and step tracking, yields events
+- execute() is the core logic with full step lifecycle (try-except-finally)
+- execute_stream() is for streaming steps, yields AgentEvent objects
+- run() is a minimal wrapper that just calls execute() and returns result
+- run_stream() wraps execute_stream() for streaming execution
 """
 
-import time
 from abc import ABC, abstractmethod
 from typing import Optional, Any, AsyncIterator, Dict, TYPE_CHECKING
 from enum import Enum
 from pydantic import BaseModel, Field, ConfigDict
 
-from upsonic.run.cancel import raise_if_cancelled
-
 if TYPE_CHECKING:
-    from upsonic.run.agent.context import AgentRunContext
+    from upsonic.run.agent.output import AgentRunOutput
     from upsonic.tasks.tasks import Task
     from upsonic.models import Model
     from upsonic.agent.agent import Agent
     from upsonic.run.base import RunStatus
     from upsonic.run.events.events import AgentEvent
 else:
-    AgentRunContext = "AgentRunContext"
+    AgentRunOutput = "AgentRunOutput"
     Task = "Task"
     Model = "Model"
     Agent = "Agent"
@@ -104,13 +101,12 @@ class StepStatus(str, Enum):
 
 
 class StepResult(BaseModel):
-    """Result of a step execution."""
-    name: str = Field(default="", description="Step name (set by Step.run())")
-    step_number: int = Field(default=0, description="Step index in pipeline (set by Step.run())")
+    """Result of a step execution. All attributes are set in steps.py execute() method."""
+    name: str = Field(default="", description="Step name")
+    step_number: int = Field(default=0, description="Step index in pipeline (0-based)")
     status: StepStatus = Field(description="Step execution status")
-    message: Optional[str] = Field(default=None, description="Optional message")
-    execution_time: float = Field(default=0.0, description="Execution time in seconds (set by Step.run())")
-    extra_data: Optional[Dict[str, Any]] = Field(default=None, description="Additional data for continuation")
+    message: Optional[str] = Field(default=None, description="Step message")
+    execution_time: float = Field(default=0.0, description="Execution time in seconds")
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
     
@@ -122,7 +118,6 @@ class StepResult(BaseModel):
             "status": self.status.value,
             "message": self.message,
             "execution_time": self.execution_time,
-            "extra_data": self.extra_data,
         }
     
     @classmethod
@@ -134,7 +129,6 @@ class StepResult(BaseModel):
             status=StepStatus(data["status"]),
             message=data.get("message"),
             execution_time=data.get("execution_time", 0.0),
-            extra_data=data.get("extra_data"),
         )
 
 
@@ -171,37 +165,71 @@ class Step(ABC):
         """Whether this step supports streaming via execute_stream()."""
         return False
     
+    def _finalize_step_result(
+        self,
+        step_result: Optional[StepResult],
+        context: "AgentRunOutput",
+    ) -> None:
+        """
+        Finalize step result by updating context.
+        
+        This method handles the common step lifecycle finalization:
+        - Appends step_result to context.step_results
+        - Updates context.execution_stats
+        
+        Args:
+            step_result: The step result to finalize, or None if no result
+            context: The agent run output (single source of truth)
+        """
+        if step_result:
+            context.step_results.append(step_result)
+            if context.execution_stats:
+                context.execution_stats.executed_steps += 1
+                context.execution_stats.step_timing[self.name] = step_result.execution_time
+                context.execution_stats.step_statuses[self.name] = step_result.status.value
+    
     @abstractmethod
     async def execute(
         self, 
-        context: "AgentRunContext", 
+        context: "AgentRunOutput", 
         task: "Task", 
         agent: "Agent", 
-        model: "Model"
+        model: "Model",
+        step_number: int,
+        pipeline_manager: Optional[Any] = None
     ) -> StepResult:
         """
-        Execute the step's main logic.
+        Execute the step's main logic with full lifecycle management.
         
-        This is the core method that subclasses must implement.
-        It should return a StepResult indicating the outcome.
+        This is the core method that subclasses must implement. Each step
+        should use try-except-finally pattern to:
+        1. Check for cancellation via raise_if_cancelled
+        2. Check for injected errors via check_and_raise_injected_error
+        3. Execute business logic
+        4. Create and return StepResult with all attributes set
+        5. In finally: append result to context.step_results, update stats
         
         Args:
-            context: The agent run context
+            context: The agent run output (single source of truth)
             task: The task being executed
             agent: The agent instance
             model: The model being used
+            step_number: Index of this step in the pipeline (0-based)
+            pipeline_manager: Optional PipelineManager instance for accessing manager registry
             
         Returns:
-            StepResult: The result of the step execution
+            StepResult: The result of the step execution with all attributes set
         """
         pass
     
     async def execute_stream(
         self, 
-        context: "AgentRunContext", 
+        context: "AgentRunOutput", 
         task: "Task", 
         agent: "Agent", 
-        model: "Model"
+        model: "Model",
+        step_number: int,
+        pipeline_manager: Optional[Any] = None
     ) -> AsyncIterator["AgentEvent"]:
         """
         Execute the step with streaming event emission.
@@ -214,10 +242,12 @@ class Step(ABC):
         appended to context.events during execution.
         
         Args:
-            context: The agent run context
+            context: The agent run output (single source of truth)
             task: The task being executed
             agent: The agent instance
             model: The model being used
+            step_number: Index of this step in the pipeline (0-based)
+            pipeline_manager: Optional PipelineManager instance for accessing manager registry
             
         Yields:
             AgentEvent: Events generated during execution
@@ -226,7 +256,7 @@ class Step(ABC):
         events_before = len(context.events) if context.events else 0
         
         # Execute the step
-        result = await self.execute(context, task, agent, model)
+        result = await self.execute(context, task, agent, model, step_number, pipeline_manager=pipeline_manager)
         context.current_step_result = result
         
         # Yield any events that were appended during execution
@@ -236,78 +266,53 @@ class Step(ABC):
     
     async def run(
         self, 
-        context: "AgentRunContext", 
+        context: "AgentRunOutput", 
         task: "Task", 
         agent: "Agent", 
         model: "Model",
-        step_number: int
+        step_number: int,
+        pipeline_manager: Optional[Any] = None
     ) -> StepResult:
         """
-        Run the step with time tracking, returning the result.
+        Wrapper that calls execute() and handles common step lifecycle management.
         
-        This method:
-        1. Checks for cancellation
-        2. Executes the step via execute()
-        3. Sets metadata (name, step_number, execution_time)
-        4. Tracks result in context
-        5. Returns the result
+        This method handles the common finally block logic:
+        - Appends step_result to context.step_results
+        - Updates context.execution_stats
         
         Args:
-            context: The agent run context
+            context: The agent run output (single source of truth)
             task: The task being executed
             agent: The agent instance
             model: The model being used
             step_number: Index of this step in the pipeline (0-based)
+            pipeline_manager: Optional PipelineManager instance for accessing manager registry
             
         Returns:
             StepResult: The result of the execution
         """
-        start_time = time.time()
-        
-        # Check for cancellation before executing
-        if agent and hasattr(agent, 'run_id') and agent.run_id:
-            raise_if_cancelled(agent.run_id)
-        
-        # Check for injected errors (for testing durable execution)
-        check_and_raise_injected_error(self.name)
-        
-        # Execute the step
-        result = await self.execute(context, task, agent, model)
-        
-        execution_time = time.time() - start_time
-        
-        # Set metadata
-        result.name = self.name
-        result.step_number = step_number
-        result.execution_time = execution_time
-        
-        # Track in context
-        context.step_results.append(result)
-        
-        return result
+
+        step_result = await self.execute(context, task, agent, model, step_number, pipeline_manager=pipeline_manager)
+        return step_result
+
     
     async def run_stream(
         self, 
-        context: "AgentRunContext", 
+        context: "AgentRunOutput", 
         task: "Task", 
         agent: "Agent", 
         model: "Model",
-        step_number: int
+        step_number: int,
+        pipeline_manager: Optional[Any] = None
     ) -> AsyncIterator["AgentEvent"]:
         """
-        Run the step with streaming, yielding events and storing result in context.
+        Minimal wrapper for streaming execution.
         
-        This method:
-        1. Yields step start event
-        2. Consumes execute_stream() generator, yielding all events
-        3. Reads result from context.current_step_result
-        4. Sets metadata and tracks in context
-        5. Yields step end event
-        
-        The final StepResult is stored in context.step_results[-1] after iteration.
+        Yields step start/end events and calls execute_stream().
+        All step lifecycle management is handled in execute_stream() in steps.py.
         
         Args:
-            context: The agent run context
+            context: The agent run output (single source of truth)
             task: The task being executed
             agent: The agent instance
             model: The model being used
@@ -318,17 +323,8 @@ class Step(ABC):
         """
         from upsonic.run.events.events import StepStartEvent, StepEndEvent
         
-        start_time = time.time()
-        
-        # Check for cancellation before executing
-        if agent and hasattr(agent, 'run_id') and agent.run_id:
-            raise_if_cancelled(agent.run_id)
-        
-        # Check for injected errors (for testing durable execution)
-        check_and_raise_injected_error(self.name)
-        
         run_id = agent.run_id if agent and hasattr(agent, 'run_id') else ""
-        total_steps = len(context.step_results) + 1 if context else 1
+        total_steps = context.execution_stats.total_steps if context.execution_stats else 1
         
         # Yield step start event
         yield StepStartEvent(
@@ -343,36 +339,19 @@ class Step(ABC):
         context.current_step_result = None
         
         # Execute step - consume generator and yield all events
-        async for event in self.execute_stream(context, task, agent, model):
+        async for event in self.execute_stream(context, task, agent, model, step_number, pipeline_manager=pipeline_manager):
             yield event
-        
-        execution_time = time.time() - start_time
         
         # Get result from context (set by execute_stream())
         result = context.current_step_result
-        if result is None:
-            result = StepResult(
-                status=StepStatus.COMPLETED,
-                message=f"{self.name} completed"
-            )
-        
-        # Set metadata
-        result.name = self.name
-        result.step_number = step_number
-        result.execution_time = execution_time
-        
-        # Track in context
-        context.step_results.append(result)
         
         # Yield step end event
-        yield StepEndEvent(
-            run_id=run_id,
-            step_name=self.name,
-            step_index=step_number,
-            status=result.status.value,
-            execution_time=result.execution_time,
-            message=result.message or ""
-        )
-        
-        # Store final result for caller to retrieve
-        context.current_step_result = result
+        if result:
+            yield StepEndEvent(
+                run_id=run_id,
+                step_name=self.name,
+                step_index=step_number,
+                status=result.status.value,
+                execution_time=result.execution_time,
+                message=result.message or ""
+            )

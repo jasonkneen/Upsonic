@@ -10,13 +10,13 @@ from typing import (
     Optional,
     Type,
     Union,
+    Literal
 )
 
 from upsonic.run.base import RunStatus
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
-    from upsonic.run.agent.context import AgentRunContext
     from upsonic.messages.messages import (
         BinaryContent,
         ModelMessage,
@@ -32,22 +32,50 @@ if TYPE_CHECKING:
     from upsonic.profiles import ModelProfile
     from upsonic.agent.pipeline.step import StepResult
     from upsonic.run.pipeline.stats import PipelineExecutionStats
+    from upsonic.tasks.tasks import Task
+    from upsonic.schemas.kb_filter import KBFilterExpr
 
 
 @dataclass
 class AgentRunOutput:
-    """Complete output from an agent run.
+    """Complete output and runtime context for an agent run.
     
-    Replaces RunResult and StreamRunResult with a unified class that handles:
+    This is the SINGLE SOURCE OF TRUTH for agent run state. It combines:
+    - Runtime execution context
+    - User-facing output and results
+    
+    Handles:
     - Message tracking with run boundaries
-    - Tool execution results
-    - HITL requirements
+    - Chat history for LLM execution
+    - Tool execution results and tracking
+    - HITL requirements (external tool calls only)
     - Streaming state with async context manager
     - Event streaming
     - Text output streaming
+    - Step execution tracking
     - Comprehensive serialization
+    
+    Attributes:
+        run_id: Unique identifier for this run
+        session_id: Session identifier
+        user_id: User identifier
+        task: Embedded task (single source of truth for HITL)
+        step_results: List of StepResult tracking each step's execution
+        execution_stats: Pipeline execution statistics
+        requirements: HITL requirements for external tool calls
+        agent_knowledge_base_filter: Vector search filters
+        session_state: Session state persisted across runs
+        output_schema: Output schema constraint
+        is_streaming: Whether this is streaming execution
+        accumulated_text: Text accumulated during streaming
+        chat_history: Full conversation history (historical + current run messages) for LLM
+        messages: Only NEW messages from THIS run
+        response: Current ModelResponse (single, not list)
+        output: Final processed output (str or bytes)
+        events: All events emitted during execution
     """
     
+    # --- Identity ---
     run_id: Optional[str] = None
     agent_id: Optional[str] = None
     agent_name: Optional[str] = None
@@ -55,69 +83,90 @@ class AgentRunOutput:
     parent_run_id: Optional[str] = None
     user_id: Optional[str] = None
     
+    # --- Task (embedded for single source of truth) ---
+    task: Optional["Task"] = None
+    
     # Input reference
     input: Optional["AgentRunInput"] = None
     
-    # Output content
-    content: Optional[Any] = None
+    # --- Output ---
+    output: Optional[Union[str, bytes]] = None  # Final agent output
     output_schema: Optional[Union[str, Type["BaseModel"]]] = None
     
     # Thinking/reasoning
     thinking_content: Optional[str] = None
     thinking_parts: Optional[List["ThinkingPart"]] = None
     
-    # Model info
-    model: Optional[Union[str, Any]] = None # Model name
+    # --- Model info ---
+    model_name: Optional[str] = None
     model_provider: Optional[str] = None
     model_provider_profile: Optional["ModelProfile"] = None
     
-    # Messages and usage
-    messages: Optional[List["ModelMessage"]] = None # Must be same with the agent_run_context.messages. Messages for that run
+    # --- Messages ---
+    # chat_history: Full conversation history (historical + current) for LLM execution FOR THE SESSION, ALL RUNS
+    chat_history: List["ModelMessage"] = field(default_factory=list)
+    # messages: Only NEW messages from THIS run
+    messages: Optional[List["ModelMessage"]] = None
+    # response: Current ModelResponse
+    response: Optional["ModelResponse"] = None
     usage: Optional["RequestUsage"] = None
     additional_input_message: Optional[List["ModelRequest"]] = None
     
-    # Tool executions
+    # Memory tracking
+    memory_message_count: int = 0
+    
+    # --- Tool executions ---
     tools: Optional[List["ToolExecution"]] = None
+    tool_call_count: int = 0
+    tool_limit_reached: bool = False
     
-    # Media outputs
-    images: Optional[List["BinaryContent"]] = None # Output image
-    files: Optional[List["BinaryContent"]] = None # Output file
+    # --- Media outputs ---
+    images: Optional[List["BinaryContent"]] = None
+    files: Optional[List["BinaryContent"]] = None
     
-    # Status and HITL
+    # --- Status and HITL ---
     status: RunStatus = field(default_factory=lambda: RunStatus.running)
-    requirements: Optional[List["RunRequirement"]] = None # Must be same with the agent_run_context.requirements
-    step_results: List["StepResult"] = field(default_factory=list) # Step results for that run
+    requirements: Optional[List["RunRequirement"]] = None  # External tool requirements only
+    step_results: List["StepResult"] = field(default_factory=list)
 
     # Pipeline execution statistics
     execution_stats: Optional["PipelineExecutionStats"] = None
     
-    # Events (for streaming)
-    events: Optional[List["AgentEvent"]] = None # Must be same with the agent_run_context.events
+    # --- Events (for streaming) ---
+    events: Optional[List["AgentEvent"]] = None
     
-    # Metadata
+    # --- Configuration ---
+    agent_knowledge_base_filter: Optional["KBFilterExpr"] = None
+    
+    # --- Metadata ---
     metadata: Optional[Dict[str, Any]] = None
-    session_state: Optional[Dict[str, Any]] = None # Must be same with the agent_run_context.session_state
+    session_state: Optional[Dict[str, Any]] = None
     
-    # User-facing pause information
-    pause_reason: Optional[str] = None  # "durable_execution", "external_tool", "cancel". Must be same with the latest requirement.pause_type
+    # --- Execution state ---
+    is_streaming: bool = False
+    accumulated_text: str = ""
+    
+    # Current step result (set by Step.execute, read by Step.run)
+    current_step_result: Optional["StepResult"] = None
+    
+    # --- User-facing pause information ---
+    pause_reason: Optional[Literal["external_tool"]] = None  # "external_tool" only now
     error_details: Optional[str] = None
     
-    # Message tracking
+    # --- Message tracking (internal) ---
     _run_boundaries: List[int] = field(default_factory=list)
     
-    # Output tracking
-    _accumulated_text: str = "" # Text accumulated during streaming
-    
-    
-    # Timestamps
+    # --- Timestamps ---
     created_at: int = field(default_factory=lambda: int(current_time()))
     updated_at: Optional[int] = None
     
-    # --- Properties ---
+    # ========================================================================
+    # Properties
+    # ========================================================================
     
     @property
     def is_paused(self) -> bool:
-        """Check if the run is paused."""
+        """Check if the run is paused (external tool execution)."""
         return self.status == RunStatus.paused
     
     @property
@@ -136,16 +185,16 @@ class AgentRunOutput:
         return self.status == RunStatus.error
     
     @property
-    def output(self) -> Optional[Any]:
-        """Get the output content."""
-        return self.content
+    def is_problematic(self) -> bool:
+        """Check if the run is problematic (paused, cancelled, or error) and needs continue_run_async."""
+        return self.status in (RunStatus.paused, RunStatus.cancelled, RunStatus.error)
     
     @property
     def active_requirements(self) -> List["RunRequirement"]:
-        """Get unresolved HITL requirements."""
+        """Get unresolved external tool requirements."""
         if not self.requirements:
             return []
-        return [req for req in self.requirements if not req.is_resolved()]
+        return [req for req in self.requirements if req.needs_external_execution]
     
     @property
     def tools_requiring_confirmation(self) -> List["ToolExecution"]:
@@ -168,21 +217,88 @@ class AgentRunOutput:
             return []
         return [t for t in self.tools if t.external_execution_required and t.result is None]
     
-    # --- HITL Context Methods ---
+    # ========================================================================
+    # Requirement Methods (External Tool Only)
+    # ========================================================================
+    
+    def add_requirement(self, requirement: "RunRequirement") -> None:
+        """Add an external tool requirement."""
+        if self.requirements is None:
+            self.requirements = []
+        self.requirements.append(requirement)
+    
+    def get_external_tool_requirements(self) -> List["RunRequirement"]:
+        """Get all external tool requirements."""
+        if not self.requirements:
+            return []
+        return list(self.requirements)
+    
+    def get_external_tool_requirements_with_results(self) -> List["RunRequirement"]:
+        """Get external tool requirements that have results."""
+        if not self.requirements:
+            return []
+        return [
+            r for r in self.requirements 
+            if r.tool_execution and r.tool_execution.result is not None
+        ]
+    
+    def has_pending_external_tools(self) -> bool:
+        """Check if there are any external tools awaiting execution."""
+        return len(self.active_requirements) > 0
+    
+    # ========================================================================
+    # Step Result Methods
+    # ========================================================================
     
     def get_step_results(self) -> List["StepResult"]:
-        """Get step results from execution context."""
+        """Get step results from execution."""
         if self.step_results:
             return self.step_results
         return []
     
     def get_execution_stats(self) -> Optional["PipelineExecutionStats"]:
-        """Get execution statistics from context."""
-        if self.execution_stats:
-            return self.execution_stats
+        """Get execution statistics."""
+        return self.execution_stats
+    
+    def get_last_successful_step(self) -> Optional["StepResult"]:
+        """Get the last successfully completed step."""
+        from upsonic.agent.pipeline.step import StepStatus
+        for result in reversed(self.step_results):
+            if result.status == StepStatus.COMPLETED:
+                return result
         return None
     
-    # --- Message Tracking Methods ---
+    def get_error_step(self) -> Optional["StepResult"]:
+        """Get the step that failed with ERROR status (for durable execution)."""
+        from upsonic.agent.pipeline.step import StepStatus
+        for result in self.step_results:
+            if result.status == StepStatus.ERROR:
+                return result
+        return None
+    
+    def get_cancelled_step(self) -> Optional["StepResult"]:
+        """Get the step that was CANCELLED (for cancel run resumption)."""
+        from upsonic.agent.pipeline.step import StepStatus
+        for result in self.step_results:
+            if result.status == StepStatus.CANCELLED:
+                return result
+        return None
+    
+    def get_paused_step(self) -> Optional["StepResult"]:
+        """Get the step that is PAUSED (for external tool execution)."""
+        from upsonic.agent.pipeline.step import StepStatus
+        for result in self.step_results:
+            if result.status == StepStatus.PAUSED:
+                return result
+        return None
+    
+    def get_problematic_step(self) -> Optional["StepResult"]:
+        """Get the step that caused the run to be problematic (error, cancelled, or paused)."""
+        return self.get_error_step() or self.get_cancelled_step() or self.get_paused_step()
+    
+    # ========================================================================
+    # Message Tracking Methods
+    # ========================================================================
     
     def all_messages(self) -> List["ModelMessage"]:
         """Get all messages from the run."""
@@ -228,96 +344,59 @@ class AgentRunOutput:
                 return msg
         return None
     
+    # ========================================================================
+    # Status Methods
+    # ========================================================================
     
+    def _sync_status_to_task(self) -> None:
+        """Sync the current status to the embedded task."""
+        if self.task is not None:
+            self.task.status = self.status
     
-    # --- Status Methods ---
-    
-    def mark_paused(self) -> None:
-        """Mark the run as paused."""
+    def mark_paused(self, reason: Literal["external_tool"] = "external_tool") -> None:
+        """Mark the run as paused for external tool execution."""
         self.status = RunStatus.paused
+        self.pause_reason = reason
         self.updated_at = int(current_time())
+        self._sync_status_to_task()
     
     def mark_cancelled(self) -> None:
         """Mark the run as cancelled."""
         self.status = RunStatus.cancelled
         self.updated_at = int(current_time())
+        self._sync_status_to_task()
     
     def mark_completed(self) -> None:
-        """Mark the run as completed."""
+        """Mark the run as completed and finalize output."""
         self.status = RunStatus.completed
         self.updated_at = int(current_time())
-        if self.content is None and self._accumulated_text:
-            self.content = self._accumulated_text
+        # Set output from accumulated_text if streaming
+        if self.output is None and self.accumulated_text and self.is_streaming:
+            self.output = self.accumulated_text
+        self._sync_status_to_task()
     
     def mark_error(self, error: Optional[str] = None) -> None:
         """Mark the run as having an error."""
         self.status = RunStatus.error
         if error:
+            self.error_details = error
             if self.metadata is None:
                 self.metadata = {}
             self.metadata["error"] = error
         self.updated_at = int(current_time())
+        self._sync_status_to_task()
     
-    # --- Context Sync Methods ---
+    # ========================================================================
+    # Serialization
+    # ========================================================================
     
-    def sync_from_context(self, agent_run_context: "AgentRunContext") -> None:
-        """Sync output attributes from the agent_run_context.
-        
-        This ensures that AgentRunOutput reflects the current state of
-        AgentRunContext. Should be called after context updates.
-        
-        NOTE: context.messages now contains only THIS run's messages (same semantics
-        as AgentRunOutput.messages), while context.chat_history contains the full
-        conversation history for LLM execution.
-        """
-        
-        # Sync messages - both now have the same semantics (only this run's messages)
-        self.messages = agent_run_context.messages
-        
-        # Sync requirements
-        self.requirements = agent_run_context.requirements
-        
-        # Sync events
-        self.events = agent_run_context.events
-        
-        # Sync session_state
-        self.session_state = agent_run_context.session_state
-        
-        # Sync accumulated text
-        self._accumulated_text = agent_run_context.accumulated_text
-        
-        # Sync step_results
-        self.step_results = agent_run_context.step_results
-        
-        # Sync execution_stats
-        self.execution_stats = agent_run_context.execution_stats
-        
-        # Sync final output
-        if agent_run_context.final_output is not None:
-            self.content = agent_run_context.final_output
-        
-        # Derive status from step results
-        self.status = self._derive_status_from_context(agent_run_context)
-        
-        # Derive pause reason from requirements
-        if agent_run_context.requirements:
-            active_reqs = agent_run_context.get_active_requirements()
-            if active_reqs:
-                self.pause_reason = active_reqs[-1].pause_type
-        
-        self.updated_at = int(current_time())
-    
-    def _derive_status_from_context(self, agent_run_context: "AgentRunContext") -> RunStatus:
-        """Derive RunStatus from step results in context."""
-        if not agent_run_context or not agent_run_context.step_results:
-            return self.status  # Keep current status
-        
-        from upsonic.agent.pipeline.step import StepStatus
-        
-        last_step = agent_run_context.step_results[-1]
-        return StepStatus.to_run_status(last_step.status)
-    
-    # --- Serialization ---
+    def _serialize_message(self, msg: Any) -> Any:
+        """Serialize a message to dict if it has to_dict method."""
+        if msg is None:
+            return None
+        if hasattr(msg, 'to_dict'):
+            return msg.to_dict()
+        return msg
     
     def _serialize_item(self, item: Any) -> Any:
         """Serialize an item to dict if it has to_dict method."""
@@ -342,29 +421,38 @@ class AgentRunOutput:
             "session_id": self.session_id,
             "parent_run_id": self.parent_run_id,
             "user_id": self.user_id,
+            "task": self.task.to_dict() if self.task and hasattr(self.task, 'to_dict') else None,
             "status": self.status.value if hasattr(self.status, 'value') else self.status,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "input": self.input.to_dict() if self.input else None,
-            "content": self.content,
+            "output": self.output,
             "output_schema": str(self.output_schema) if self.output_schema else None,
             "thinking_content": self.thinking_content,
             "thinking_parts": self._serialize_list(self.thinking_parts),
-            "model": self.model,
+            "model_name": self.model_name,
             "model_provider": self.model_provider,
             "model_provider_profile": self._serialize_item(self.model_provider_profile),
+            "chat_history": [self._serialize_message(m) for m in self.chat_history] if self.chat_history else [],
             "messages": self._serialize_list(self.messages),
+            "response": self._serialize_message(self.response),
             "usage": self._serialize_item(self.usage),
             "additional_input_message": self._serialize_list(self.additional_input_message),
+            "memory_message_count": self.memory_message_count,
             "tools": [t.to_dict() for t in self.tools] if self.tools else None,
+            "tool_call_count": self.tool_call_count,
+            "tool_limit_reached": self.tool_limit_reached,
             "images": self._serialize_list(self.images),
             "files": self._serialize_list(self.files),
             "requirements": [r.to_dict() for r in self.requirements] if self.requirements else None,
             "step_results": [sr.to_dict() for sr in self.step_results] if self.step_results else [],
             "execution_stats": self.execution_stats.to_dict() if self.execution_stats else None,
             "events": self._serialize_list(self.events),
+            "agent_knowledge_base_filter": self.agent_knowledge_base_filter,
             "metadata": self.metadata,
             "session_state": self.session_state,
+            "is_streaming": self.is_streaming,
+            "accumulated_text": self.accumulated_text,
             "_run_boundaries": self._run_boundaries,
             "pause_reason": self.pause_reason,
             "error_details": self.error_details,
@@ -376,6 +464,18 @@ class AgentRunOutput:
         return json.dumps(self.to_dict(), indent=indent)
     
     @classmethod
+    def _deserialize_messages(cls, messages_data: List[Any]) -> List[Any]:
+        """Helper to deserialize a list of messages."""
+        messages = []
+        for m in messages_data:
+            if isinstance(m, dict) and 'parts' in m:
+                # It's a serialized ModelRequest/ModelResponse - keep as-is for cloudpickle
+                messages.append(m)
+            else:
+                messages.append(m)
+        return messages
+    
+    @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "AgentRunOutput":
         """Reconstruct from dictionary (pure transformation, nested objects reconstructed)."""
         from upsonic.run.agent.input import AgentRunInput
@@ -384,6 +484,8 @@ class AgentRunOutput:
         from upsonic.run.events.events import AgentEvent
         from upsonic.run.pipeline.stats import PipelineExecutionStats
         from upsonic.agent.pipeline.step import StepResult
+        from upsonic.tasks.tasks import Task
+        from upsonic.profiles import ModelProfile
 
         # Handle step_results (list of dicts)
         step_results: List[Any] = []
@@ -409,6 +511,25 @@ class AgentRunOutput:
             input_obj = AgentRunInput.from_dict(input_data)
         else:
             input_obj = input_data
+        
+        # Handle task (dict or Task object)
+        task = None
+        task_data = data.get("task")
+        if isinstance(task_data, dict):
+            if hasattr(Task, 'from_dict'):
+                task = Task.from_dict(task_data)
+            else:
+                task = Task.model_validate(task_data)
+        else:
+            task = task_data
+        
+        # Handle model_provider_profile (dict or ModelProfile)
+        model_provider_profile = None
+        model_provider_profile_data = data.get("model_provider_profile")
+        if isinstance(model_provider_profile_data, dict):
+            model_provider_profile = ModelProfile.from_dict(model_provider_profile_data)
+        else:
+            model_provider_profile = model_provider_profile_data
         
         # Handle tools (list of dicts or objects)
         tools = None
@@ -448,6 +569,9 @@ class AgentRunOutput:
                 else:
                     events.append(e)
         
+        # Handle chat_history (list of dicts or objects)
+        chat_history = cls._deserialize_messages(data.get("chat_history", []))
+        
         return cls(
             run_id=data.get("run_id"),
             agent_id=data.get("agent_id"),
@@ -455,39 +579,48 @@ class AgentRunOutput:
             session_id=data.get("session_id"),
             parent_run_id=data.get("parent_run_id"),
             user_id=data.get("user_id"),
+            task=task,
             status=status,
             created_at=data.get("created_at", int(current_time())),
             updated_at=data.get("updated_at"),
             input=input_obj,
-            content=data.get("content"),
+            output=data.get("output"),
             output_schema=data.get("output_schema"),
             thinking_content=data.get("thinking_content"),
             thinking_parts=data.get("thinking_parts"),
-            model=data.get("model"),
+            model_name=data.get("model_name"),
             model_provider=data.get("model_provider"),
-            model_provider_profile=data.get("model_provider_profile"),
-            messages=data.get("messages"),  # Raw objects (cloudpickle handles)
+            model_provider_profile=model_provider_profile,
+            chat_history=chat_history,
+            messages=data.get("messages"),
+            response=data.get("response"),
             usage=data.get("usage"),
             additional_input_message=data.get("additional_input_message"),
+            memory_message_count=data.get("memory_message_count", 0),
             tools=tools,
+            tool_call_count=data.get("tool_call_count", 0),
+            tool_limit_reached=data.get("tool_limit_reached", False),
             images=data.get("images"),
             files=data.get("files"),
             requirements=requirements,
             step_results=step_results,
             execution_stats=execution_stats,
             events=events,
+            agent_knowledge_base_filter=data.get("agent_knowledge_base_filter"),
             metadata=data.get("metadata"),
             session_state=data.get("session_state"),
+            is_streaming=data.get("is_streaming", False),
+            accumulated_text=data.get("accumulated_text", ""),
             _run_boundaries=data.get("_run_boundaries", []),
             pause_reason=data.get("pause_reason"),
             error_details=data.get("error_details"),
         )
     
     def __str__(self) -> str:
-        return str(self.content if self.content is not None else "")
+        return str(self.output if self.output is not None else "")
     
     def __repr__(self) -> str:
-        return f"AgentRunOutput(run_id={self.run_id!r}, status={self.status.value}, content_length={len(str(self.content or ''))})"
+        return f"AgentRunOutput(run_id={self.run_id!r}, status={self.status.value}, output_length={len(str(self.output or ''))})"
     
     def serialize(self) -> bytes:
         """Serialize to bytes for storage."""

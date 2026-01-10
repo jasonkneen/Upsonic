@@ -1,15 +1,15 @@
-from typing import Dict, Any
+from typing import Dict
 
 
 def llm_usage(model_response, cumulative: bool = False) -> Dict[str, int]:
     """
     Extract usage information from a model response.
     
-    This function extracts token usage information from ModelResponse objects,
+    This function extracts token usage information from AgentRunOutput objects,
     supporting both current and deprecated field names for backward compatibility.
     
     Args:
-        model_response: A RunResult or StreamRunResult object containing messages.
+        model_response: An AgentRunOutput object containing messages.
         cumulative: If False (default), only count tokens from the last run (task-specific).
                    If True, count tokens from all runs (agent-cumulative).
     

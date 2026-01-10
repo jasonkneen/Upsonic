@@ -41,7 +41,6 @@ from upsonic.run.events.events import (
     ToolCallEvent,
     ToolResultEvent,
     ToolsConfiguredEvent,
-    ValidationEvent,
 )
 
 
@@ -834,42 +833,6 @@ def yield_llm_prepared_event(
     )
 
 
-# Validation Events
-
-async def ayield_validation_event(
-    run_id: str,
-    attachments_validated: bool = False,
-    attachment_count: int = 0,
-    validation_passed: bool = True,
-    warnings: Optional[List[str]] = None,
-) -> AsyncIterator[ValidationEvent]:
-    """Yield a ValidationEvent."""
-    yield ValidationEvent(
-        run_id=run_id,
-        attachments_validated=attachments_validated,
-        attachment_count=attachment_count,
-        validation_passed=validation_passed,
-        warnings=warnings,
-    )
-
-
-def yield_validation_event(
-    run_id: str,
-    attachments_validated: bool = False,
-    attachment_count: int = 0,
-    validation_passed: bool = True,
-    warnings: Optional[List[str]] = None,
-) -> Iterator[ValidationEvent]:
-    """Yield a ValidationEvent (sync)."""
-    yield ValidationEvent(
-        run_id=run_id,
-        attachments_validated=attachments_validated,
-        attachment_count=attachment_count,
-        validation_passed=validation_passed,
-        warnings=warnings,
-    )
-
-
 # Policy Events
 
 async def ayield_policy_check_event(
@@ -1139,9 +1102,6 @@ __all__ = [
     # LLM Prepared events
     "ayield_llm_prepared_event",
     "yield_llm_prepared_event",
-    # Validation events
-    "ayield_validation_event",
-    "yield_validation_event",
     # Policy events
     "ayield_policy_check_event",
     "yield_policy_check_event",

@@ -495,7 +495,7 @@ class Chat:
             # Execute agent with retry logic
             result = await self.agent.do_async(task, debug=self.debug, **kwargs)
             
-            # Extract response - result is the actual output, not a RunResult
+            # Extract response - result is the actual output, not a AgentRunOutput
             response_text = str(result)
             
             # Get the AgentRunOutput from the agent to access messages

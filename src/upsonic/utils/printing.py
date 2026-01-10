@@ -1264,7 +1264,16 @@ def call_end(result: Any, model: Any, response_format: str, start_time: float, e
                 pass  # Error calculating cost
     
     # Display LLM result in magnificent table
-    execution_time = end_time - start_time
+    # Calculate execution time, ensuring both timestamps are valid
+    if start_time is not None and end_time is not None and end_time >= start_time:
+        execution_time = end_time - start_time
+    elif start_time is not None and end_time is not None:
+        # If end_time < start_time, something is wrong - use 0.0
+        execution_time = 0.0
+    else:
+        # Fallback: if timestamps are invalid, use 0.0
+        execution_time = 0.0
+    
     model_name = _get_model_name(model)
     
     # Check if response_format is a Pydantic model

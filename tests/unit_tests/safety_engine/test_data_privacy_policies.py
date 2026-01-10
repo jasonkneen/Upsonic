@@ -56,6 +56,8 @@ async def test_data_privacy_block_gdpr_violation(mock_infer_model):
         def __init__(self):
             self.settings = {}
             self.model_name = "test-model"
+            self.system = None
+            self.profile = None
         
         async def request(self, *args, **kwargs):
             return mock_response
@@ -110,6 +112,8 @@ async def test_data_privacy_block_data_breach(mock_infer_model):
         def __init__(self):
             self.settings = {}
             self.model_name = "test-model"
+            self.system = None
+            self.profile = None
         
         async def request(self, *args, **kwargs):
             return mock_response
@@ -166,6 +170,8 @@ async def test_data_privacy_anonymize_consent_violation(mock_infer_model):
         def __init__(self):
             self.settings = {}
             self.model_name = "test-model"
+            self.system = None
+            self.profile = None
         
         async def request(self, *args, **kwargs):
             return mock_response
@@ -220,6 +226,8 @@ async def test_data_privacy_replace_children_data(mock_infer_model):
         def __init__(self):
             self.settings = {}
             self.model_name = "test-model"
+            self.system = None
+            self.profile = None
         
         async def request(self, *args, **kwargs):
             return mock_response
@@ -275,6 +283,8 @@ async def test_data_privacy_agent_policy_exception(mock_infer_model):
         def __init__(self):
             self.settings = {}
             self.model_name = "test-model"
+            self.system = None
+            self.profile = None
         
         async def request(self, *args, **kwargs):
             return mock_response
@@ -331,6 +341,8 @@ async def test_data_privacy_llm_policy(mock_infer_model):
         def __init__(self):
             self.settings = {}
             self.model_name = "test-model"
+            self.system = None
+            self.profile = None
         
         async def request(self, *args, **kwargs):
             return mock_response
@@ -385,6 +397,8 @@ async def test_data_privacy_all_clear(mock_infer_model):
         def __init__(self):
             self.settings = {}
             self.model_name = "test-model"
+            self.system = None
+            self.profile = None
         
         async def request(self, *args, **kwargs):
             return mock_response

@@ -38,7 +38,7 @@ async def test_agent_stream_async():
         # Verify final output
         run_output = agent.get_run_output()
         assert run_output is not None, "Run output should not be None"
-        final_output = run_output.content or run_output._accumulated_text
+        final_output = run_output.output or run_output.accumulated_text
         assert final_output is not None, "Final output should not be None"
         assert isinstance(final_output, str), "Final output should be a string"
         assert len(final_output) > 0, "Final output should not be empty"
@@ -75,7 +75,7 @@ async def test_agent_stream_sync():
         # Verify final output
         run_output = agent.get_run_output()
         assert run_output is not None, "Run output should not be None"
-        final_output = run_output.content or run_output._accumulated_text
+        final_output = run_output.output or run_output.accumulated_text
         assert final_output is not None, "Final output should not be None"
         assert isinstance(final_output, str), "Final output should be a string"
         
@@ -105,7 +105,7 @@ async def test_agent_stream_events():
         # Verify final output still works
         run_output = agent.get_run_output()
         assert run_output is not None, "Run output should not be None"
-        final_output = run_output.content or run_output._accumulated_text
+        final_output = run_output.output or run_output.accumulated_text
         assert final_output is not None, "Final output should not be None"
         
     finally:
@@ -155,7 +155,7 @@ async def test_agent_stream_with_tools():
             "Tool should have been called or result mentioned"
         
         # Verify final output
-        final_output = run_output.content or run_output._accumulated_text if run_output else None
+        final_output = run_output.output or run_output.accumulated_text if run_output else None
         assert final_output is not None, "Final output should not be None"
         
     finally:

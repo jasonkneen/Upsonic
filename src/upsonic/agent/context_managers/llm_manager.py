@@ -1,13 +1,18 @@
 import os
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+if TYPE_CHECKING:
+    from upsonic.agent.agent import Agent
+else:
+    Agent = "Agent"
 
 load_dotenv()
 
 
 class LLMManager:
-    def __init__(self, default_model, requested_model: Optional[str] = None):
+    def __init__(self, default_model, agent: "Agent", requested_model: Optional[str] = None):
+        self.agent = agent
         self.default_model = default_model
         self.requested_model = requested_model
         self.selected_model = None
@@ -15,7 +20,7 @@ class LLMManager:
     def _model_set(self, model):
         if model is None:
             model = os.getenv("LLM_MODEL_KEY").split(":")[0] if os.getenv("LLM_MODEL_KEY", None) else "openai/gpt-4o"
-            
+            from upsonic.models import infer_model
             try:
                 from celery import current_task
 
@@ -27,10 +32,13 @@ class LLMManager:
                 if task_kwargs.get("bypass_llm_model", None) is not None:
                     model = task_kwargs.get("bypass_llm_model")
 
-            except Exception as e:
-                pass
+                model = infer_model(model)
+                return model
 
-        return model
+            except Exception as e:
+                raise e
+
+        return None
         
     def get_model(self):
         return self.selected_model
@@ -44,8 +52,12 @@ class LLMManager:
     
     async def afinalize(self) -> None:
         """Finalize LLM resources after the task execution."""
-        # Any cleanup logic for LLM resources can go here
-        pass
+        if self.selected_model is None:
+            return
+        self.agent.model = self.selected_model
+        self.agent._agent_run_output.model_name = self.selected_model.model_name if self.selected_model else None
+        self.agent._agent_run_output.model_provider = self.selected_model.system if self.selected_model else None
+        self.agent._agent_run_output.model_provider_profile = self.selected_model.profile if self.selected_model else None
     
     def prepare(self) -> None:
         """Synchronous version of aprepare."""

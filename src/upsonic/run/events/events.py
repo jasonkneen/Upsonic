@@ -843,34 +843,6 @@ class LLMPreparedEvent(AgentEvent):
 
 
 @dataclass(repr=False, kw_only=True)
-class ValidationEvent(AgentEvent):
-    """
-    Event emitted when task validation occurs.
-    
-    Attributes:
-        attachments_validated: Whether attachments were validated
-        attachment_count: Number of attachments processed
-        validation_passed: Whether validation passed
-        warnings: Any validation warnings
-    """
-    
-    attachments_validated: bool = False
-    """Whether attachments were validated."""
-    
-    attachment_count: int = 0
-    """Number of attachments processed."""
-    
-    validation_passed: bool = True
-    """Whether validation passed."""
-    
-    warnings: Optional[List[str]] = None
-    """Any validation warnings."""
-    
-    event_kind: Literal['validation'] = 'validation'
-    """Event type identifier."""
-
-
-@dataclass(repr=False, kw_only=True)
 class CultureUpdateEvent(AgentEvent):
     """
     Event emitted when cultural knowledge is updated.
@@ -1232,9 +1204,6 @@ class AgentRunEvent(str, Enum):
     TOOL_CALL_DELTA = "tool_call_delta"
     FINAL_OUTPUT = "final_output"
 
-
-# Alias for user-friendly access
-RunEvent = AgentRunEvent
 
 
 # Pipeline events

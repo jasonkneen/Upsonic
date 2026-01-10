@@ -319,6 +319,7 @@ class SystemPromptManager:
             )
         
         # If first message doesn't have system prompt, we should add it
+        # TODO: WE SHOULD  CREATE ONE!
         if not has_system_prompt_in_history:
             return True
         

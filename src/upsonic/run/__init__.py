@@ -3,7 +3,7 @@ Run Module
 
 This module provides run management capabilities for Upsonic agents,
 including run cancellation, status tracking, and the new run architecture
-with AgentRunInput, AgentRunContext, and AgentRunOutput.
+with AgentRunInput and AgentRunOutput.
 """
 
 import importlib
@@ -60,14 +60,6 @@ def _get_AgentRunInput():
     return _lazy_import("upsonic.run.agent.input", "AgentRunInput")()
 
 
-def _get_AgentRunContext():
-    return _lazy_import("upsonic.run.agent.context", "AgentRunContext")()
-
-
-def _get_DurableCheckpoint():
-    return _lazy_import("upsonic.run.agent.context", "DurableCheckpoint")()
-
-
 def _get_AgentRunOutput():
     return _lazy_import("upsonic.run.agent.output", "AgentRunOutput")()
 
@@ -111,10 +103,6 @@ def __getattr__(name: str) -> Any:
     # Agent module
     elif name == "AgentRunInput":
         return _get_AgentRunInput()
-    elif name == "AgentRunContext":
-        return _get_AgentRunContext()
-    elif name == "DurableCheckpoint":
-        return _get_DurableCheckpoint()
     elif name == "AgentRunOutput":
         return _get_AgentRunOutput()
     
@@ -147,8 +135,6 @@ __all__ = [
     "RunStatus",
     # Agent module
     "AgentRunInput",
-    "AgentRunContext",
-    "DurableCheckpoint",
     "AgentRunOutput",
     # Requirements module
     "RunRequirement",

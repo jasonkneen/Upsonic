@@ -12,10 +12,11 @@ Environment Variables:
     UPSONIC_DISABLE_LOGGING: Tüm logging'i kapat (true/false)
     UPSONIC_DISABLE_CONSOLE_LOGGING: Console logging'i kapat (user-facing apps için)
 
-    # Sentry Telemetry Configuration:
+    # Sentry Telemetry Configuration (ERROR-ONLY by default for performance):
     UPSONIC_TELEMETRY: Sentry DSN (ya da "false" to disable)
     UPSONIC_ENVIRONMENT: Environment name (production, development, staging)
-    UPSONIC_SENTRY_SAMPLE_RATE: Traces sample rate (0.0 - 1.0, default: 1.0)
+    UPSONIC_SENTRY_SAMPLE_RATE: Traces sample rate (0.0 - 1.0, default: 0.0 for performance)
+    UPSONIC_SENTRY_PROFILE_SESSION_SAMPLE_RATE: Profile sample rate (0.0 - 1.0, default: 0.0)
 
     # Modül bazlı seviye kontrolü:
     UPSONIC_LOG_LEVEL_LOADERS: Sadece loaders için log seviyesi
@@ -113,18 +114,24 @@ def get_env_bool(key: str, default: bool = False) -> bool:
 
 def setup_sentry() -> None:
     """
-    Sentry telemetry sistemini yapılandır.
+    Sentry telemetry sistemini yapılandır (ERROR-ONLY mode by default).
+
+    PERFORMANCE NOTE:
+        By default, Sentry only captures errors (exceptions and ERROR+ logs).
+        Tracing/profiling is disabled (sample_rate=0.0) to avoid runtime overhead.
+        To enable tracing, set UPSONIC_SENTRY_SAMPLE_RATE to a value > 0.
 
     Environment Variables:
         UPSONIC_TELEMETRY: Sentry DSN URL'i veya "false" to disable
         UPSONIC_ENVIRONMENT: Environment adı (production, development, staging)
-        UPSONIC_SENTRY_SAMPLE_RATE: Traces sample rate (0.0 - 1.0)
+        UPSONIC_SENTRY_SAMPLE_RATE: Traces sample rate (0.0 - 1.0, default: 0.0)
+        UPSONIC_SENTRY_PROFILE_SESSION_SAMPLE_RATE: Profile sample rate (default: 0.0)
 
     Bu fonksiyon:
-    1. Sentry SDK'yı initialize eder
+    1. Sentry SDK'yı initialize eder (error-only mode)
     2. User ID tracking ayarlar
     3. Release bilgisi ekler
-    4. Logging integration'ı aktif eder (WARNING+ loglar Sentry'e gider)
+    4. Logging integration'ı aktif eder (ERROR+ loglar Sentry event olarak gider)
     """
     global _SENTRY_CONFIGURED  # noqa: PLW0603
 
@@ -144,8 +151,12 @@ def setup_sentry() -> None:
         "https://f9b529d9b67a30fae4d5b6462256ee9e@o4508336623583232.ingest.us.sentry.io/4510211809542144"
     )
     the_environment = os.getenv("UPSONIC_ENVIRONMENT", "production")
-    the_sample_rate = float(os.getenv("UPSONIC_SENTRY_SAMPLE_RATE", "1.0"))
-    the_profile_session_sample_rate = float(os.getenv("UPSONIC_SENTRY_PROFILE_SESSION_SAMPLE_RATE", "1.0"))
+    
+    # PERFORMANCE OPTIMIZATION: Default to 0.0 to disable tracing overhead
+    # Tracing (start_transaction/start_span) adds significant runtime overhead
+    # Set to higher values only if you need performance monitoring
+    the_sample_rate = float(os.getenv("UPSONIC_SENTRY_SAMPLE_RATE", "0.0"))
+    the_profile_session_sample_rate = float(os.getenv("UPSONIC_SENTRY_PROFILE_SESSION_SAMPLE_RATE", "0.0"))
 
     # "false" değeri varsa Sentry'yi devre dışı bırak
     if the_dsn.lower() == "false":
@@ -158,19 +169,19 @@ def setup_sentry() -> None:
     except (ImportError, AttributeError, ValueError):
         the_release = "upsonic@unknown"
 
-    # Initialize Sentry SDK
+    # Initialize Sentry SDK - ERROR ONLY MODE
+    # Only capture actual exceptions and ERROR+ level logs
+    # Tracing is disabled by default for performance
     sentry_sdk.init(
         dsn=the_dsn,
         traces_sample_rate=the_sample_rate,
         release=the_release,
         server_name="upsonic_client",
         environment=the_environment,
-        # Logging integration - INFO+ logları Sentry event olarak gönder
-        # Breadcrumb için tüm level'ları yakala, event için INFO+
         integrations=[
             LoggingIntegration(
-                level=logging.INFO,  # INFO+ logları Sentry'e gönder
-                event_level=logging.INFO,  # INFO ve üzeri Sentry event olarak gönder
+                level=logging.WARNING,  # Breadcrumbs for WARNING+ (context for errors)
+                event_level=logging.ERROR,  # Only ERROR+ logs become Sentry events
             ),
         ],
         profile_session_sample_rate=the_profile_session_sample_rate,

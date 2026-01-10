@@ -68,7 +68,7 @@ class CostTracker:
         )
     
     def add_run_result(self, run_result: "AgentRunOutput", model: Optional["Model"] = None) -> None:
-        """Add cost information from a RunResult object."""
+        """Add cost information from a AgentRunOutput object."""
         if not run_result:
             return
         

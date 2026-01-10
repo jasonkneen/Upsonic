@@ -68,25 +68,6 @@ def _get_Chat():
 def _get_Direct():
     return _lazy_import("upsonic.direct", "Direct")()
 
-def _get_cancel_run():
-    return _lazy_import("upsonic.run.cancel", "cancel_run")()
-
-# New run architecture
-def _get_RunStatus():
-    return _lazy_import("upsonic.run.base", "RunStatus")()
-
-def _get_AgentRunInput():
-    return _lazy_import("upsonic.run.agent.input", "AgentRunInput")()
-
-def _get_AgentRunContext():
-    return _lazy_import("upsonic.run.agent.context", "AgentRunContext")()
-
-def _get_AgentRunOutput():
-    return _lazy_import("upsonic.run.agent.output", "AgentRunOutput")()
-
-def _get_EventEmitter():
-    return _lazy_import("upsonic.run.events.emitter", "EventEmitter")()
-
 def hello() -> str:
     return "Hello from upsonic!"
 
@@ -112,25 +93,12 @@ def __getattr__(name: str) -> Any:
         return _get_Chat()
     elif name == "Direct":
         return _get_Direct()
-    elif name == "cancel_run":
-        return _get_cancel_run()
-    # New run architecture
-    elif name == "RunStatus":
-        return _get_RunStatus()
-    elif name == "AgentRunInput":
-        return _get_AgentRunInput()
-    elif name == "AgentRunContext":
-        return _get_AgentRunContext()
-    elif name == "AgentRunOutput":
-        return _get_AgentRunOutput()
-    elif name == "EventEmitter":
-        return _get_EventEmitter()
     
     # All other imports must come from sub-modules
     raise AttributeError(
         f"module '{__name__}' has no attribute '{name}'. "
         f"Please import from the appropriate sub-module. "
-        f"For example: from upsonic.run.agent.output import AgentRunOutput"
+        f"For example: from upsonic.agent.agent import Agent"
     )
 
 __all__ = [
@@ -142,11 +110,4 @@ __all__ = [
     "Team",
     "Chat",
     "Direct",
-    "cancel_run",
-    # New run architecture
-    "RunStatus",
-    "AgentRunInput",
-    "AgentRunContext",
-    "AgentRunOutput",
-    "EventEmitter",
 ]

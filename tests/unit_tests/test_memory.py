@@ -93,11 +93,17 @@ class MockRunResult:
     """Mock run result for testing."""
     
     def __init__(self, messages: List[Any] = None, run_id: str = "test-run", agent_id: str = None):
+        from upsonic.run.base import RunStatus
+        
         self._messages = messages or []
         self.run_id = run_id
         self.agent_id = agent_id
         self.session_id = "test-session"
         self.user_id = "test-user"
+        self.status = RunStatus.completed
+        self.messages = messages or []
+        self.output = None
+        self.response = None
     
     def new_messages(self) -> List[Any]:
         return self._messages
@@ -476,16 +482,29 @@ class TestMemoryUpdateMemories:
     @pytest.fixture
     def mock_run_result(self):
         """Create mock run result."""
-        return MockRunResult([
-            ModelRequest(parts=[UserPromptPart(content="Test message")]),
-            ModelResponse(parts=[TextPart(content="Test response")])
-        ])
+        from upsonic.run.agent.output import AgentRunOutput
+        from upsonic.run.base import RunStatus
+        
+        return AgentRunOutput(
+            run_id="test-run",
+            session_id="test-session",
+            agent_id="test-agent",
+            messages=[
+                ModelRequest(parts=[UserPromptPart(content="Test message")]),
+                ModelResponse(parts=[TextPart(content="Test response")])
+            ],
+            chat_history=[
+                ModelRequest(parts=[UserPromptPart(content="Test message")]),
+                ModelResponse(parts=[TextPart(content="Test response")])
+            ],
+            status=RunStatus.completed
+        )
     
     @pytest.mark.asyncio
     async def test_update_memories_basic(self, memory, mock_run_result):
         """Test basic update_memories_after_task."""
         # Should not raise any errors
-        await memory.update_memories_after_task(mock_run_result)
+        await memory.save_session_async(output=mock_run_result)
     
     @pytest.mark.asyncio
     async def test_update_memories_with_session(self, storage, mock_run_result):
@@ -496,7 +515,7 @@ class TestMemoryUpdateMemories:
             full_session_memory=True
         )
         
-        await memory.update_memories_after_task(mock_run_result)
+        await memory.save_session_async(output=mock_run_result)
         
         # Check that session was created/updated
         session = await storage.read_async("test-session", AgentSession)
@@ -518,7 +537,7 @@ class TestMemoryUpdateMemories:
             mock_agent.do_async.return_value = Mock(output="Generated summary")
             mock_agent_class.return_value = mock_agent
             
-            await memory.update_memories_after_task(mock_run_result)
+            await memory.save_session_async(output=mock_run_result)
         
         # Check that session was created/updated with summary
         session = await storage.read_async("test-session", AgentSession)
@@ -538,9 +557,17 @@ class TestMemoryUpdateMemories:
         
         # Create a mock result with user prompts
         from upsonic.messages import UserPromptPart
-        mock_run_result_with_prompts = MockRunResult([
-            ModelRequest(parts=[UserPromptPart(content="I'm John, 30 years old")])
-        ])
+        from upsonic.run.agent.output import AgentRunOutput
+        from upsonic.run.base import RunStatus
+        
+        mock_run_result_with_prompts = AgentRunOutput(
+            run_id="test-run",
+            session_id="test-session",
+            agent_id="test-agent",
+            messages=[ModelRequest(parts=[UserPromptPart(content="I'm John, 30 years old")])],
+            chat_history=[ModelRequest(parts=[UserPromptPart(content="I'm John, 30 years old")])],
+            status=RunStatus.completed
+        )
         
         with patch('upsonic.agent.agent.Agent') as mock_agent_class:
             mock_agent = AsyncMock()
@@ -550,7 +577,7 @@ class TestMemoryUpdateMemories:
             mock_agent.do_async.return_value = mock_output
             mock_agent_class.return_value = mock_agent
 
-            await memory.update_memories_after_task(mock_run_result_with_prompts, agent_run_output=mock_run_result_with_prompts)
+            await memory.save_session_async(output=mock_run_result_with_prompts)
 
         # Check that user profile was created/updated in session
         session = await storage.read_async("test-session", AgentSession)
@@ -582,9 +609,17 @@ class TestMemoryUpdateMemories:
         
         # Create a mock result with user prompts
         from upsonic.messages import UserPromptPart
-        mock_run_result_with_prompts = MockRunResult([
-            ModelRequest(parts=[UserPromptPart(content="I'm John")])
-        ])
+        from upsonic.run.agent.output import AgentRunOutput
+        from upsonic.run.base import RunStatus
+        
+        mock_run_result_with_prompts = AgentRunOutput(
+            run_id="test-run",
+            session_id="test-session",
+            agent_id="test-agent",
+            messages=[ModelRequest(parts=[UserPromptPart(content="I'm John")])],
+            chat_history=[ModelRequest(parts=[UserPromptPart(content="I'm John")])],
+            status=RunStatus.completed
+        )
         
         with patch('upsonic.agent.agent.Agent') as mock_agent_class:
             mock_agent = AsyncMock()
@@ -594,7 +629,7 @@ class TestMemoryUpdateMemories:
             mock_agent.do_async.return_value = mock_output
             mock_agent_class.return_value = mock_agent
 
-            await memory.update_memories_after_task(mock_run_result_with_prompts, agent_run_output=mock_run_result_with_prompts)
+            await memory.save_session_async(output=mock_run_result_with_prompts)
 
         # Check that profile was replaced
         session = await storage.read_async("test-session", AgentSession)
@@ -627,9 +662,17 @@ class TestMemoryUpdateMemories:
         
         # Create a mock result with user prompts
         from upsonic.messages import UserPromptPart
-        mock_run_result_with_prompts = MockRunResult([
-            ModelRequest(parts=[UserPromptPart(content="I'm John")])
-        ])
+        from upsonic.run.agent.output import AgentRunOutput
+        from upsonic.run.base import RunStatus
+        
+        mock_run_result_with_prompts = AgentRunOutput(
+            run_id="test-run",
+            session_id="test-session",
+            agent_id="test-agent",
+            messages=[ModelRequest(parts=[UserPromptPart(content="I'm John")])],
+            chat_history=[ModelRequest(parts=[UserPromptPart(content="I'm John")])],
+            status=RunStatus.completed
+        )
         
         with patch('upsonic.agent.agent.Agent') as mock_agent_class:
             mock_agent = AsyncMock()
@@ -639,7 +682,7 @@ class TestMemoryUpdateMemories:
             mock_agent.do_async.return_value = mock_output
             mock_agent_class.return_value = mock_agent
 
-            await memory.update_memories_after_task(mock_run_result_with_prompts, agent_run_output=mock_run_result_with_prompts)
+            await memory.save_session_async(output=mock_run_result_with_prompts)
 
         # Check that profile was updated (merged)
         session = await storage.read_async("test-session", AgentSession)
@@ -800,7 +843,15 @@ class TestMemoryUserProfileAnalysis:
             user_analysis_memory=True
         )
         
-        mock_result = MockRunResult()
+        from upsonic.run.agent.output import AgentRunOutput
+        from upsonic.run.base import RunStatus
+        
+        mock_result = AgentRunOutput(
+            run_id="test-run",
+            session_id="test-session",
+            agent_id="test-agent",
+            status=RunStatus.completed
+        )
         
         with pytest.raises(ValueError, match="model must be configured"):
             await memory._analyze_interaction_for_traits({}, mock_result)
@@ -808,7 +859,15 @@ class TestMemoryUserProfileAnalysis:
     @pytest.mark.asyncio
     async def test_analyze_interaction_for_traits_no_prompts(self, memory):
         """Test user trait analysis with no user prompts."""
-        mock_result = MockRunResult()
+        from upsonic.run.agent.output import AgentRunOutput
+        from upsonic.run.base import RunStatus
+        
+        mock_result = AgentRunOutput(
+            run_id="test-run",
+            session_id="test-session",
+            agent_id="test-agent",
+            status=RunStatus.completed
+        )
         
         traits = await memory._analyze_interaction_for_traits({}, mock_result)
         
@@ -968,7 +1027,15 @@ class TestMemoryErrorHandling:
             model=MockModel()
         )
         
-        mock_result = MockRunResult()
+        from upsonic.run.agent.output import AgentRunOutput
+        from upsonic.run.base import RunStatus
+        
+        mock_result = AgentRunOutput(
+            run_id="test-run",
+            session_id="test-session",
+            agent_id="test-agent",
+            status=RunStatus.completed
+        )
         
         with patch('upsonic.agent.agent.Agent') as mock_agent_class:
             mock_agent = AsyncMock()
@@ -976,7 +1043,7 @@ class TestMemoryErrorHandling:
             mock_agent_class.return_value = mock_agent
             
             # Should handle summary error gracefully
-            await memory.update_memories_after_task(mock_result)
+            await memory.save_session_async(output=mock_result)
     
     @pytest.mark.asyncio
     async def test_update_memories_profile_error(self, storage):
@@ -988,7 +1055,15 @@ class TestMemoryErrorHandling:
             model=MockModel()
         )
         
-        mock_result = MockRunResult()
+        from upsonic.run.agent.output import AgentRunOutput
+        from upsonic.run.base import RunStatus
+        
+        mock_result = AgentRunOutput(
+            run_id="test-run",
+            session_id="test-session",
+            agent_id="test-agent",
+            status=RunStatus.completed
+        )
         
         with patch('upsonic.agent.agent.Agent') as mock_agent_class:
             mock_agent = AsyncMock()
@@ -996,7 +1071,7 @@ class TestMemoryErrorHandling:
             mock_agent_class.return_value = mock_agent
             
             # Should handle profile error gracefully
-            await memory.update_memories_after_task(mock_result)
+            await memory.save_session_async(output=mock_result)
 
 
 class TestMemoryIntegration:
@@ -1034,10 +1109,23 @@ class TestMemoryIntegration:
         assert "system_prompt_injection" in inputs
         
         # Create mock run result
-        mock_result = MockRunResult([
-            ModelRequest(parts=[UserPromptPart(content="Hello, I'm John")]),
-            ModelResponse(parts=[TextPart(content="Nice to meet you, John!")])
-        ])
+        from upsonic.run.agent.output import AgentRunOutput
+        from upsonic.run.base import RunStatus
+        
+        mock_result = AgentRunOutput(
+            run_id="test-run",
+            session_id="integration-session",
+            agent_id="test-agent",
+            messages=[
+                ModelRequest(parts=[UserPromptPart(content="Hello, I'm John")]),
+                ModelResponse(parts=[TextPart(content="Nice to meet you, John!")])
+            ],
+            chat_history=[
+                ModelRequest(parts=[UserPromptPart(content="Hello, I'm John")]),
+                ModelResponse(parts=[TextPart(content="Nice to meet you, John!")])
+            ],
+            status=RunStatus.completed
+        )
         
         # Update memories
         with patch('upsonic.agent.agent.Agent') as mock_agent_class:
@@ -1045,7 +1133,7 @@ class TestMemoryIntegration:
             mock_agent.do_async.return_value = Mock(output="Updated summary")
             mock_agent_class.return_value = mock_agent
             
-            await full_memory.update_memories_after_task(mock_result)
+            await full_memory.save_session_async(output=mock_result)
         
         # Verify session was created
         session = await full_memory.storage.read_async(
@@ -1074,16 +1162,29 @@ class TestMemoryIntegration:
         )
         
         # Update memory1
-        result1 = MockRunResult([
-            ModelRequest(parts=[UserPromptPart(content="Session 1 message")])
-        ])
-        await memory1.update_memories_after_task(result1)
+        from upsonic.run.agent.output import AgentRunOutput
+        from upsonic.run.base import RunStatus
+        
+        result1 = AgentRunOutput(
+            run_id="test-run-1",
+            session_id="session-1",
+            agent_id="test-agent",
+            messages=[ModelRequest(parts=[UserPromptPart(content="Session 1 message")])],
+            chat_history=[ModelRequest(parts=[UserPromptPart(content="Session 1 message")])],
+            status=RunStatus.completed
+        )
+        await memory1.save_session_async(output=result1)
         
         # Update memory2
-        result2 = MockRunResult([
-            ModelRequest(parts=[UserPromptPart(content="Session 2 message")])
-        ])
-        await memory2.update_memories_after_task(result2)
+        result2 = AgentRunOutput(
+            run_id="test-run-2",
+            session_id="session-2",
+            agent_id="test-agent",
+            messages=[ModelRequest(parts=[UserPromptPart(content="Session 2 message")])],
+            chat_history=[ModelRequest(parts=[UserPromptPart(content="Session 2 message")])],
+            status=RunStatus.completed
+        )
+        await memory2.save_session_async(output=result2)
         
         # Verify both sessions exist
         session1 = await storage.read_async("session-1", AgentSession)

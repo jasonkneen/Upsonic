@@ -94,7 +94,7 @@ async def basic_streaming_example():
     # Access final output
     run_output = agent.get_run_output()
     if run_output:
-        final_output = run_output.content or run_output._accumulated_text
+        final_output = run_output.output or run_output.accumulated_text
         print(f"\nFinal output: {final_output}")
 
 
@@ -179,17 +179,16 @@ async def performance_monitoring_example():
     
     print("\n")
     
-    # Get performance metrics from context
+    # Get performance metrics from output
     run_output = agent.get_run_output()
-    run_context = agent._agent_run_context if hasattr(agent, '_agent_run_context') else None
     
     total_duration = 0
     if pipeline_start_time and pipeline_end_time:
         total_duration = pipeline_end_time - pipeline_start_time
-    elif run_context and run_context.execution_stats:
-        total_duration = run_context.execution_stats.total_duration if hasattr(run_context.execution_stats, 'total_duration') else 0
+    elif run_output and run_output.execution_stats:
+        total_duration = run_output.execution_stats.total_duration if hasattr(run_output.execution_stats, 'total_duration') else 0
     
-    accumulated_text = run_output._accumulated_text if run_output else ""
+    accumulated_text = run_output.accumulated_text if run_output else ""
     chars_per_second = len(accumulated_text) / total_duration if total_duration > 0 else 0
     
     print("\n📊 Performance Metrics:")

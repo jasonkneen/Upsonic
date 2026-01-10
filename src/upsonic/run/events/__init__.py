@@ -49,7 +49,6 @@ _EVENT_CLASSES = [
     "PolicyFeedbackEvent",
     "LLMPreparedEvent",
     "ModelSelectedEvent",
-    "ValidationEvent",
     "ToolsConfiguredEvent",
     "MessagesBuiltEvent",
     "ModelRequestStartEvent",

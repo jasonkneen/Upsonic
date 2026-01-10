@@ -16,7 +16,6 @@ from upsonic.tools import tool
 from upsonic.db.database import SqliteDatabase
 from upsonic.run.base import RunStatus
 from upsonic.run.cancel import cancel_run
-from upsonic.session.agent import AgentSession
 
 
 def cleanup_db():
@@ -137,6 +136,47 @@ async def cancel_direct_call_with_run_id_new_agent():
         new_db = SqliteDatabase(db_file="cancel.db", session_id="session_1", user_id="user_1")
         new_agent = Agent("openai/gpt-4o-mini", db=new_db)
         result = await new_agent.continue_run_async(run_id=run_id, return_output=True)
+        return result
+    
+    return output
+
+
+# ============================================================================
+# VARIANT 2A: Direct Call with task - New Agent (Cross-process resumption)
+# ============================================================================
+
+async def cancel_direct_call_with_task_new_agent():
+    """
+    Direct call mode with cancel and continue_run_async using task and new agent.
+    
+    Simulates cross-process resumption where a new agent instance uses
+    the task object for continuation.
+    """
+    cleanup_db()
+    db = SqliteDatabase(db_file="cancel.db", session_id="session_1", user_id="user_1")
+    agent = Agent("openai/gpt-4o-mini", db=db)
+    task = Task(
+        description="Call long_running_task with 10 seconds.",
+        tools=[long_running_task]
+    )
+    
+    async def cancel_after_delay():
+        await asyncio.sleep(2)
+        if agent.run_id:
+            cancel_run(agent.run_id)
+            print(f"  Cancelled run: {agent.run_id}")
+    
+    asyncio.create_task(cancel_after_delay())
+    
+    output = await agent.do_async(task, return_output=True)
+    
+    if output.status == RunStatus.cancelled:
+        print(f"  Run was cancelled, creating new agent to resume with task...")
+        
+        # New agent uses task for continuation
+        new_db = SqliteDatabase(db_file="cancel.db", session_id="session_1", user_id="user_1")
+        new_agent = Agent("openai/gpt-4o-mini", db=new_db)
+        result = await new_agent.continue_run_async(task=task, return_output=True)
         return result
     
     return output
@@ -278,7 +318,7 @@ async def cancel_verify_resume_from_cutoff():
     Verify that when we resume a cancelled run, we continue from where
     we left off, NOT from the beginning.
     
-    Uses debug=True and checks step_results in both AgentRunOutput and AgentRunContext.
+    Uses debug=True and checks step_results in AgentRunOutput.
     """
     cleanup_db()
     db = SqliteDatabase(db_file="cancel.db", session_id="session_1", user_id="user_1")
@@ -304,14 +344,14 @@ async def cancel_verify_resume_from_cutoff():
     print(f"  Output status: {output.status}")
     print(f"  Output step_results count: {len(output.step_results)}")
     
-    # Get context from agent
-    context = agent._agent_run_context
-    print(f"  Context step_results count: {len(context.step_results)}")
+    # Get agent's run output (single source of truth)
+    agent_output = agent._agent_run_output
+    print(f"  Agent output step_results count: {len(agent_output.step_results)}")
     
     # Check if they are the same
     print(f"\n  === STEP_RESULTS COMPARISON ===")
-    print(f"  Output step_results is Context step_results: {output.step_results is context.step_results}")
-    print(f"  Output step_results == Context step_results: {len(output.step_results) == len(context.step_results)}")
+    print(f"  Output step_results is Agent output step_results: {output.step_results is agent_output.step_results}")
+    print(f"  Output step_results == Agent output step_results: {len(output.step_results) == len(agent_output.step_results)}")
     
     # List step results at cancel
     print(f"\n  === STEP RESULTS AT CANCEL ===")
@@ -334,13 +374,13 @@ async def cancel_verify_resume_from_cutoff():
         print(f"  Result status: {result.status}")
         print(f"  Result step_results count: {len(result.step_results)}")
         
-        # Get updated context
-        context_after = agent._agent_run_context
-        print(f"  Context step_results count: {len(context_after.step_results)}")
+        # Get updated agent output (single source of truth)
+        agent_output_after = agent._agent_run_output
+        print(f"  Agent output step_results count: {len(agent_output_after.step_results)}")
         
         # Check if they are the same
         print(f"\n  === STEP_RESULTS COMPARISON AFTER RESUME ===")
-        print(f"  Result step_results is Context step_results: {result.step_results is context_after.step_results}")
+        print(f"  Result step_results is Agent output step_results: {result.step_results is agent_output_after.step_results}")
         
         # List all step results after resume
         print(f"\n  === ALL STEP RESULTS AFTER RESUME ===")
@@ -397,6 +437,13 @@ async def run_all_tests():
     result = await cancel_direct_call_with_run_id_new_agent()
     assert result.is_complete, f"TEST 3 FAILED: Expected complete, got {result.status}"
     print("TEST 3 PASSED")
+    
+    print("\n" + "="*80)
+    print("TEST 3A: Direct Call with task - New Agent (Cross-process)")
+    print("="*80)
+    result = await cancel_direct_call_with_task_new_agent()
+    assert result.is_complete, f"TEST 3A FAILED: Expected complete, got {result.status}"
+    print("TEST 3A PASSED")
     
     print("\n" + "="*80)
     print("TEST 4: Using cancel_run function directly")

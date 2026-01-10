@@ -5,11 +5,10 @@ import time
 from pydantic import BaseModel
 from typing import Any, List, Dict, Optional, Type, Union, Callable, Literal, TYPE_CHECKING
 from upsonic.exceptions import FileNotFoundError
+from upsonic.run.base import RunStatus
 
 if TYPE_CHECKING:
     from upsonic.tools import ExternalToolCall
-    from upsonic.run.agent.output import AgentRunOutput
-    from upsonic.run.tools.tools import ToolExecution
     from upsonic.agent.deepagent.tools.planning_toolkit import TodoList
 
 
@@ -42,7 +41,7 @@ class Task(BaseModel):
     guardrail_retries: Optional[int] = None
     is_paused: bool = False
     _tools_awaiting_external_execution: List[Any] = []
-    
+    status: Optional[RunStatus] = None
     enable_cache: bool = False
     cache_method: Literal["vector_search", "llm_call"] = "vector_search"
     cache_threshold: float = 0.7
@@ -53,7 +52,7 @@ class Task(BaseModel):
     _original_input: Optional[str] = None
     _last_cache_entry: Optional[Dict[str, Any]] = None
     
-    _run_output: Optional["AgentRunOutput"] = None
+    _run_id: Optional[str] = None
 
     _task_todos: Optional[Any] = None
     
@@ -389,6 +388,29 @@ class Task(BaseModel):
         """Get the task ID. Auto-generates one if not set."""
         return self.task_id
 
+    
+    @property
+    def is_problematic(self) -> bool:
+        """
+        Check if the task's run is problematic (paused, cancelled, or error).
+        
+        A problematic run requires continue_run_async() to be called instead of do_async().
+        """
+        if self.status is None:
+            return False
+        return self.status in (RunStatus.paused, RunStatus.cancelled, RunStatus.error)
+    
+    @property
+    def is_completed(self) -> bool:
+        """
+        Check if the task's run is already completed.
+        
+        A completed task cannot be re-run or continued.
+        """
+        if self.status is None:
+            return False
+        return self.status == RunStatus.completed
+
     def validate_tools(self):
         """
         Validates each tool in the tools list.
@@ -519,44 +541,22 @@ class Task(BaseModel):
     
     
     @property
-    def run_output(self) -> Optional["AgentRunOutput"]:
+    def run_id(self) -> Optional[str]:
         """
-        Get the AgentRunOutput for this task if available.
+        Get the run ID associated with this task.
+        
+        This is set when the task is executed and allows the task to be
+        used for continuation even with a new agent instance.
         
         Returns:
-            The AgentRunOutput if set, None otherwise
+            The run_id if set, None otherwise
         """
-        return self._run_output
+        return self._run_id
     
-    def set_run_output(self, run_output: "AgentRunOutput") -> None:
-        """
-        Set the run output for this task.
-        
-        Args:
-            run_output: The AgentRunOutput to associate with this task
-        """
-        self._run_output = run_output
-    
-    @property
-    def run_output_tools_requiring_confirmation(self) -> List["ToolExecution"]:
-        """Get tools requiring confirmation from run output."""
-        if self._run_output:
-            return self._run_output.tools_requiring_confirmation
-        return []
-    
-    @property
-    def run_output_tools_requiring_user_input(self) -> List["ToolExecution"]:
-        """Get tools requiring user input from run output."""
-        if self._run_output:
-            return self._run_output.tools_requiring_user_input
-        return []
-    
-    @property
-    def run_output_tools_awaiting_external_execution(self) -> List["ToolExecution"]:
-        """Get tools awaiting external execution from run output."""
-        if self._run_output:
-            return self._run_output.tools_awaiting_external_execution
-        return []
+    @run_id.setter
+    def run_id(self, value: Optional[str]) -> None:
+        """Set the run ID for this task."""
+        self._run_id = value
     
     @context_formatted.setter
     def context_formatted(self, value: Optional[str]):
@@ -802,42 +802,6 @@ class Task(BaseModel):
 
 
 
-    def build_agent_input(self):
-        """
-        Builds the input for the agent, using and then clearing the formatted context.
-        """
-        # Lazy import for heavy modules
-        from upsonic.messages.messages import BinaryContent
-        
-        final_description = self.description
-        if self.context_formatted and isinstance(self.context_formatted, str):
-            final_description += "\n" + self.context_formatted
-
-        self.context_formatted = None
-
-        if not self.attachments:
-            return final_description
-
-        input_list = [final_description]
-        
-        for attachment_path in self.attachments:
-            try:
-                with open(attachment_path, "rb") as attachment_file:
-                    attachment_data  = attachment_file.read()
-                
-                # Using mimetypes is more robust than just checking extensions
-                import mimetypes
-                media_type, _ = mimetypes.guess_type(attachment_path)
-                if media_type is None:
-                    media_type = "application/octet-stream" # Fallback
-                    
-                input_list.append(BinaryContent(data=attachment_data, media_type=media_type))
-                
-            except Exception as e:
-                from upsonic.utils.printing import warning_log
-                warning_log(f"Could not load attachment {attachment_path}: {e}", "TaskProcessor")
-
-        return input_list
 
     
     def set_cache_manager(self, cache_manager: Any):
@@ -976,6 +940,7 @@ class Task(BaseModel):
             "_tools_awaiting_external_execution": self._tools_awaiting_external_execution,
             "_cache_hit": self._cache_hit,
             "_original_input": self._original_input,
+            "_run_id": self._run_id,
             "registered_task_tools": {k: self._serialize_callable(v) for k, v in self.registered_task_tools.items()} if self.registered_task_tools else {},
             "task_builtin_tools": self._serialize_tools(self.task_builtin_tools),
         }
@@ -1073,6 +1038,8 @@ class Task(BaseModel):
             task._cache_hit = data["_cache_hit"]
         if data.get("_original_input") is not None:
             task._original_input = data["_original_input"]
+        if data.get("_run_id") is not None:
+            task._run_id = data["_run_id"]
         
         return task
     

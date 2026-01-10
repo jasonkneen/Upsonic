@@ -38,7 +38,6 @@ if TYPE_CHECKING:
     from upsonic.db.database import DatabaseBase
     from upsonic.models.model_selector import ModelRecommendation
     from upsonic.culture.manager import CultureManager
-    from upsonic.run.agent.context import AgentRunContext
     from upsonic.run.requirements import RunRequirement
     from upsonic.session.agent import RunData
 else:
@@ -61,7 +60,6 @@ else:
     State = "State"
     ModelRecommendation = "ModelRecommendation"
     DatabaseBase = "DatabaseBase"
-    AgentRunContext = "AgentRunContext"
     RunData = "RunData"
 
 # Constants for structured output
@@ -238,6 +236,7 @@ class Agent(BaseAgent):
         """
         from upsonic.models import infer_model
         self.model = infer_model(model)
+        self.model_name=model
         self.name = name
         self.agent_id_ = agent_id_
         
@@ -268,14 +267,15 @@ class Agent(BaseAgent):
         self.debug = debug
         self.debug_level = debug_level if debug else 1
         self.reflection = reflection
+
+        # Set db attribute
+        self.db = db
         
-        # Helper method to check if debug should be enabled for a given level
-        def _should_debug(self, min_level: int = 1) -> bool:
-            """Check if debug should be enabled for the given minimum level."""
-            if not self.debug:
-                return False
-            return self.debug_level >= min_level
-        self._should_debug = _should_debug.__get__(self, type(self))
+        # Set memory attribute - override with db.memory if db is provided
+        if db is not None:
+            self.memory = db.memory
+        else:
+            self.memory = memory
         
         # Model selection attributes
         self.model_selection_criteria = model_selection_criteria
@@ -319,23 +319,12 @@ class Agent(BaseAgent):
         
         # Initialize agent-level tools
         self.tools = tools if tools is not None else []
-        
-        # Set db attribute
-        self.db = db
-        
-        # Set memory attribute - override with db.memory if db is provided
-        if db is not None:
-            self.memory = db.memory
-        else:
-            self.memory = memory
             
         if self.memory:
             self.memory.feed_tool_call_results = feed_tool_call_results
         
         self.canvas = canvas
         
-        # Cultural Knowledge (experimental)
-        # Notice: Culture is an experimental feature and is subject to change.
         self.add_culture_to_context = add_culture_to_context
         self.update_cultural_knowledge = update_cultural_knowledge
         self.enable_agentic_culture = enable_agentic_culture
@@ -442,15 +431,10 @@ class Agent(BaseAgent):
         # Register agent-level tools immediately
         self._register_agent_tools()
         
-        # Tool tracking (deprecated - now tracked in AgentRunContext)
-        # Kept for backwards compatibility, synced from context during execution
+        # Tool tracking (deprecated - now tracked in AgentRunOutput)
+        # Kept for backwards compatibility
         self._tool_call_count = 0
         self._tool_limit_reached = False
-        
-        # Run output architecture
-        self._agent_run_output: Optional[AgentRunOutput] = None
-        # Context tracked separately (not inside output) - used for HITL resumption
-        self._agent_run_context: Optional["AgentRunContext"] = None
         
         # Run cancellation tracking
         self.run_id: Optional[str] = None
@@ -586,13 +570,13 @@ class Agent(BaseAgent):
         Returns:
             AgentRunOutput: The complete run output, or None if no run has been executed
         """
-        return self._agent_run_output
+        return getattr(self, '_agent_run_output', None)
     
     def _create_agent_run_input(self, task: "Task") -> AgentRunInput:
         """
         Create AgentRunInput from Task, separating images and documents.
         
-        Extracts file attachments and categorizes them by mime type:
+        Categorizes file attachments by mime type without processing:
         - Images: jpg, png, gif, webp, etc.
         - Documents: pdf, docx, txt, etc.
         
@@ -600,39 +584,23 @@ class Agent(BaseAgent):
             task: The task with attachments
             
         Returns:
-            AgentRunInput with user_prompt, images, and documents
+            AgentRunInput with user_prompt, images (file paths), and documents (file paths)
         """
         import mimetypes
-        from upsonic.messages import BinaryContent
         
-        images = []
-        documents = []
+        images: List[str] = []
+        documents: List[str] = []
         
         if task.attachments:
             for file_path in task.attachments:
-                try:
-                    with open(file_path, 'rb') as f:
-                        data = f.read()
-                    
-                    mime_type, _ = mimetypes.guess_type(file_path)
-                    if mime_type is None:
-                        mime_type = "application/octet-stream"
-                    
-                    binary_content = BinaryContent(
-                        data=data,
-                        media_type=mime_type,
-                        identifier=file_path
-                    )
-                    
-                    # Categorize by mime type
-                    if mime_type.startswith('image/'):
-                        images.append(binary_content)
-                    else:
-                        documents.append(binary_content)
-                except Exception as e:
-                    if self.debug:
-                        from upsonic.utils.printing import warning_log
-                        warning_log(f"Failed to load attachment {file_path}: {e}", "Agent")
+                mime_type, _ = mimetypes.guess_type(file_path)
+                if mime_type is None:
+                    mime_type = "application/octet-stream"
+                
+                if mime_type.startswith('image/'):
+                    images.append(file_path)
+                else:
+                    documents.append(file_path)
         
         return AgentRunInput(
             user_prompt=task.description,
@@ -640,46 +608,159 @@ class Agent(BaseAgent):
             documents=documents if documents else None
         )
     
-    def _create_run_output(
-        self,
-        task: "Task",
-        run_id: str,
-        status: RunStatus = RunStatus.running,
-    ) -> AgentRunOutput:
+    def _convert_to_task(self, task: Union[str, "Task"]) -> "Task":
         """
-        Create an AgentRunOutput from the current state.
+        Convert a string to a Task object if needed.
         
         Args:
-            task: The task that was executed
-            run_id: The run identifier
-            status: The run status
+            task: Task object or string description
             
         Returns:
-            AgentRunOutput: The complete run output
+            Task: Task object (converted if string was provided)
         """
-        run_input = AgentRunInput(
-            user_prompt=task.description,
-            images=None,
-            documents=None,
-        )
+        from upsonic.tasks.tasks import Task as TaskClass
         
-        output = AgentRunOutput(
+        if isinstance(task, str):
+            return TaskClass(description=task)
+        return task
+    
+    def _validate_task_for_new_run(
+        self, 
+        task: "Task", 
+        is_resuming: bool = False
+    ) -> Optional[AgentRunOutput]:
+        """
+        Validate task state before starting a new run.
+        
+        Checks if task is already completed or has problematic status.
+        
+        Args:
+            task: Task to validate
+            is_resuming: Whether this is a resume operation (skips problematic check)
+            
+        Returns:
+            AgentRunOutput if task cannot be run (error/warning case), None if OK to proceed
+        """
+        from upsonic.utils.printing import warning_log
+        
+        # Check if task is already completed
+        if task.is_completed:
+            run_id = task.run_id or "unknown"
+            warning_log(
+                f"Task is already completed (run_id={run_id}). Cannot re-run a completed task.",
+                "Agent"
+            )
+            return AgentRunOutput(
+                run_id=run_id,
+                agent_id=self.agent_id,
+                agent_name=self.name,
+                session_id=self.session_id,
+                user_id=self.user_id,
+                status=RunStatus.completed,
+                output=f"Task is already completed (run_id={run_id}). Cannot re-run a completed task.",
+            )
+        
+        # Check if task has a problematic status (only for non-resuming calls)
+        if not is_resuming and task.is_problematic:
+            status_str = task.status.value
+            run_id = task.run_id
+            warning_log(
+                f"Task has a problematic run (run_id={run_id}, status={status_str}). "
+                f"Use continue_run_async() to continue this run.",
+                "Agent"
+            )
+            return AgentRunOutput(
+                run_id=run_id,
+                agent_id=self.agent_id,
+                agent_name=self.name,
+                session_id=self.session_id,
+                user_id=self.user_id,
+                status=task.status,
+                output=f"Cannot start new run: Task has a {status_str} run (run_id={run_id}). "
+                       f"Call continue_run_async() to continue this run.",
+            )
+        
+        return None  # OK to proceed
+    
+    def _create_agent_run_output(
+        self,
+        run_id: str,
+        task: "Task",
+        run_input: AgentRunInput,
+        is_streaming: bool = False
+    ) -> AgentRunOutput:
+        """
+        Create AgentRunOutput with all required fields.
+        
+        This is a centralized factory method for creating AgentRunOutput instances,
+        ensuring consistency across do_async and astream methods.
+        
+        Args:
+            run_id: Unique run identifier
+            task: Task being executed
+            run_input: Agent run input data
+            is_streaming: Whether this is a streaming execution
+            
+        Returns:
+            AgentRunOutput: Initialized output context
+        """
+        from upsonic.schemas.kb_filter import KBFilterExpr
+        
+        kb_filter = KBFilterExpr.from_task(task) if hasattr(KBFilterExpr, 'from_task') else None
+        
+        return AgentRunOutput(
             run_id=run_id,
             agent_id=self.agent_id,
             agent_name=self.name,
             session_id=self.session_id,
             user_id=self.user_id,
+            task=task,
             input=run_input,
-            content=None,
-            model=str(self.model) if self.model else None,
+            output=None,
+            output_schema=task.response_format if hasattr(task, 'response_format') else None,
+            thinking_content=None,
+            thinking_parts=None,
+            model_name=self.model.model_name if self.model else None,
+            model_provider=self.model.system if self.model else None,
+            model_provider_profile=self.model.profile if self.model else None,
+            chat_history=[],
             messages=[],
-            status=status,
+            response=None,
+            usage=None,
+            additional_input_message=None,
+            memory_message_count=0,
             tools=[],
+            tool_call_count=0,
+            tool_limit_reached=False,
+            images=None,
+            files=None,
+            status=RunStatus.running,
+            requirements=[],
+            step_results=[],
+            execution_stats=None,
+            events=[],
+            agent_knowledge_base_filter=kb_filter,
+            metadata=None,
             session_state=None,
+            is_streaming=is_streaming,
+            accumulated_text="",
+            pause_reason=None,
+            error_details=None,
+            created_at=int(now_utc().timestamp()),
+            updated_at=None
         )
+    
+    def _apply_model_override(self, model: Optional[Union[str, "Model"]]) -> None:
+        """
+        Apply model override if provided.
         
-        self._agent_run_output = output
-        return output
+        Args:
+            model: Optional model override (string or Model instance)
+        """
+        if model:
+            from upsonic.models import infer_model
+            self.model = infer_model(model)
+    
     
     def get_run_id(self) -> Optional[str]:
         """
@@ -1100,7 +1181,22 @@ class Agent(BaseAgent):
         async with system_prompt_manager.manage_system_prompt(memory_handler, culture_handler) as sp_handler, \
                    context_manager.manage_context(memory_handler) as ctx_handler:
             
-            task_input = task.build_agent_input()
+            if self.compression_strategy != "none" and ctx_handler:
+                context_prompt = ctx_handler.get_context_prompt()
+                if context_prompt:
+                    compressed_context = self._compress_context(context_prompt)
+                    task.context_formatted = compressed_context
+            
+            if hasattr(self, '_agent_run_output') and self._agent_run_output and self._agent_run_output.input:
+                run_input = self._agent_run_output.input
+                if run_input.input is None:
+                    run_input.build_input(context_formatted=task.context_formatted)
+                task_input = run_input.input
+                if task.context_formatted:
+                    task.context_formatted = None
+            else:
+                raise RuntimeError("AgentRunInput not available. This should not happen.")
+            
             user_part = UserPromptPart(content=task_input)
             
             parts = []
@@ -1116,12 +1212,6 @@ class Agent(BaseAgent):
             
             current_request = ModelRequest(parts=parts)
             messages.append(current_request)
-            
-            if self.compression_strategy != "none" and ctx_handler:
-                context_prompt = ctx_handler.get_context_prompt()
-                if context_prompt:
-                    compressed_context = self._compress_context(context_prompt)
-                    task.context_formatted = compressed_context
         return messages
     
     async def _build_model_request_with_input(
@@ -1628,7 +1718,7 @@ class Agent(BaseAgent):
             from upsonic.utils.printing import cache_configuration, debug_log_level2
             embedding_provider_name = None
             if task.cache_embedding_provider:
-                embedding_provider_name = getattr(task.cache_embedding_provider, 'model_name', 'Unknown')
+                embedding_provider_name = task.cache_embedding_provider.model_name
             
             cache_configuration(
                 enable_cache=task.enable_cache,
@@ -1651,7 +1741,7 @@ class Agent(BaseAgent):
                     cache_threshold=task.cache_threshold,
                     cache_duration_minutes=task.cache_duration_minutes,
                     embedding_provider=embedding_provider_name,
-                    model_name=getattr(self.model, 'model_name', 'Unknown')
+                    model_name=self.model.model_name
                 )
         
         input_text = task._original_input or task.description
@@ -1681,7 +1771,7 @@ class Agent(BaseAgent):
     async def _apply_user_policy(
         self, 
         task: "Task", 
-        context: Optional["AgentRunContext"] = None
+        context: Optional[AgentRunOutput] = None
     ) -> tuple[Optional["Task"], bool]:
         """
         Apply user policy to task input.
@@ -1692,7 +1782,7 @@ class Agent(BaseAgent):
         
         Args:
             task: The task to apply policy to
-            context: Optional AgentRunContext for event emission
+            context: Optional AgentRunOutput for event emission
         
         Returns:
             tuple: (task, should_continue)
@@ -1722,7 +1812,6 @@ class Agent(BaseAgent):
         
         # Get policies checked count
         policies_checked = len(self.user_policy_manager.policies)
-        original_content = task.description
         
         # Map action_taken to event action
         action_mapping = {
@@ -1813,7 +1902,16 @@ class Agent(BaseAgent):
         last_error_message = ""
         
         temporary_message_history = copy.deepcopy(memory_handler.get_message_history())
-        current_input = task.build_agent_input()
+        
+        if hasattr(self, '_agent_run_output') and self._agent_run_output and self._agent_run_output.input:
+            run_input = self._agent_run_output.input
+            if run_input.input is None:
+                run_input.build_input(context_formatted=task.context_formatted)
+            current_input = run_input.input
+            if task.context_formatted:
+                task.context_formatted = None
+        else:
+            raise RuntimeError("AgentRunInput not available. This should not happen.")
 
         if task.guardrail_retries is not None and task.guardrail_retries > 0:
             max_retries = task.guardrail_retries + 1
@@ -1956,7 +2054,6 @@ class Agent(BaseAgent):
             part_size = max_length // 2 - 20
             compressed = compressed[:part_size] + " ... [COMPRESSED] ... " + compressed[-part_size:]
         
-        # Level 2: Compression details
         if self.debug and self.debug_level >= 2:
             from upsonic.utils.printing import debug_log_level2
             compression_ratio = len(compressed) / original_length if original_length > 0 else 1.0
@@ -1993,7 +2090,6 @@ class Agent(BaseAgent):
             )
             compressed = result['compressed_prompt']
             
-            # Level 2: LLMLingua compression details
             if self.debug and self.debug_level >= 2:
                 from upsonic.utils.printing import debug_log_level2
                 compression_ratio = len(compressed) / original_length if original_length > 0 else 1.0
@@ -2164,7 +2260,7 @@ class Agent(BaseAgent):
     async def _apply_agent_policy(
         self, 
         task: "Task", 
-        context: Optional["AgentRunContext"] = None
+        context: Optional[AgentRunOutput] = None
     ) -> tuple["Task", Optional[str]]:
         """
         Apply agent policy to task output.
@@ -2175,7 +2271,7 @@ class Agent(BaseAgent):
         
         Args:
             task: The task to apply policy to
-            context: Optional AgentRunContext for event emission
+            context: Optional AgentRunOutput for event emission
         
         Returns:
             tuple: (task, feedback_message_or_none)
@@ -2307,14 +2403,14 @@ class Agent(BaseAgent):
         state: Optional["State"] = None,
         *,
         graph_execution_id: Optional[str] = None,
-        _resume_context: Optional["AgentRunContext"] = None,
+        _resume_output: Optional[AgentRunOutput] = None,
         _resume_step_index: Optional[int] = None,
     ) -> Any:
         """
         Execute a task asynchronously using the pipeline architecture.
         
         The execution is handled entirely by the pipeline - this method just
-        creates the pipeline, creates the context, executes, and returns the output.
+        creates the pipeline, creates the output context, executes, and returns the output.
         All logic is in the pipeline steps.
         
         Args:
@@ -2325,7 +2421,7 @@ class Agent(BaseAgent):
             return_output: If True, return full AgentRunOutput. If False (default), return content only.
             state: Graph execution state
             graph_execution_id: Graph execution identifier
-            _resume_context: Internal - context for HITL resumption
+            _resume_output: Internal - output for HITL resumption
             _resume_step_index: Internal - step index to resume from
             
         Returns:
@@ -2344,27 +2440,34 @@ class Agent(BaseAgent):
             print(output.messages)  # Access messages
             ```
         """
-        from upsonic.tasks.tasks import Task as TaskClass
-        if isinstance(task, str):
-            task = TaskClass(description=task)
-        
         from upsonic.agent.pipeline import PipelineManager
+        
+        # Convert string to Task if needed
+        task = self._convert_to_task(task)
         
         # Determine start step index (0 for new runs, specified index for resumption)
         start_step_index = _resume_step_index if _resume_step_index is not None else 0
-        is_resuming = _resume_context is not None
+        is_resuming = _resume_output is not None
+        
+        # Validate task state (completed/problematic checks)
+        validation_error = self._validate_task_for_new_run(task, is_resuming)
+        if validation_error is not None:
+            if return_output:
+                return validation_error
+            return validation_error.output
         
         # Update policy managers debug flag if debug is enabled
         if debug:
             self.user_policy_manager.debug = True
             self.agent_policy_manager.debug = True
         
-        async with self._managed_storage_connection():            # For resumption, use existing run_id and context
+        async with self._managed_storage_connection():
+            # For resumption, use existing run_id and output
             if is_resuming:
-                run_id = _resume_context.run_id
+                run_id = _resume_output.run_id
                 self.run_id = run_id
-                agent_run_context = _resume_context
-                agent_run_context.is_streaming = False
+                self._agent_run_output = _resume_output
+                self._agent_run_output.is_streaming = False
             else:
                 run_id = str(uuid.uuid4())
                 self.run_id = run_id
@@ -2375,122 +2478,47 @@ class Agent(BaseAgent):
                     # 1. Create AgentRunInput
                     run_input = self._create_agent_run_input(task)
 
-                    # 2. Create AgentRunContext
-                    from upsonic.run.agent.context import AgentRunContext
-                    from upsonic.schemas.kb_filter import KBFilterExpr
-                    
-                    kb_filter = KBFilterExpr.from_task(task) if hasattr(KBFilterExpr, 'from_task') else None
-                    
-                    agent_run_context = AgentRunContext(
+                    # 2. Create AgentRunOutput using centralized factory method
+                    self._agent_run_output = self._create_agent_run_output(
                         run_id=run_id,
-                        session_id=self.session_id or "",
-                        user_id=self.user_id,
                         task=task,
-                        step_results=[],
-                        execution_stats=None,
-                        requirements=[],
-                        agent_knowledge_base_filter=kb_filter,
-                        session_state=None,
-                        output_schema=task.response_format if hasattr(task, 'response_format') else None,
-                        is_streaming=False,
-                        accumulated_text="",
-                        tool_call_count=0,
-                        tool_limit_reached=False,
-                        messages=[],
-                        response=None,
-                        final_output=None,
-                        events=[],
+                        run_input=run_input,
+                        is_streaming=False
                     )
                     
-                    # 3. Create AgentRunOutput
-                    self._agent_run_output = AgentRunOutput(
-                        run_id=run_id,
-                        agent_id=self.agent_id,
-                        agent_name=self.name,
-                        session_id=self.session_id,
-                        user_id=self.user_id,
-                        input=run_input,
-                        content=None,
-                        output_schema=task.response_format if hasattr(task, 'response_format') else None,
-                        thinking_content=None,
-                        thinking_parts=None,
-                        model=str(model) if model else str(self.model),
-                        model_provider=getattr(self.model, 'provider_name', getattr(self.model, 'system', None)),
-                        model_provider_profile=getattr(self.model, 'provider_profile', None),
-                        messages=[],
-                        usage=None,
-                        additional_input_message=None,
-                        tools=[],
-                        images=None,
-                        files=None,
-                        status=RunStatus.running,
-                        requirements=[],
-                        step_results=[],
-                        execution_stats=None,
-                        events=[],
-                        metadata=None,
-                        session_state=None,
-                        pause_reason=None,
-                        error_details=None,
-                        created_at=int(now_utc().timestamp()),
-                        updated_at=None
-                    )
+                    # Set run_id on task for cross-process continuation support
+                    if task is not None:
+                        task.run_id = run_id
                 
-                # Store context in instance variable for HITL access
-                self._agent_run_context = agent_run_context
                 
-                # Determine model (for both new and resumed runs)
-                execution_model = model
-                if model:
-                    from upsonic.models import infer_model
-                    execution_model = infer_model(model)
-                else:
-                    execution_model = self.model
+                # Apply model override if provided
+                self._apply_model_override(model)
                 
-                # 4. Create pipeline with direct (non-streaming) steps
+                # 3. Create pipeline with direct (non-streaming) steps
                 pipeline = PipelineManager(
                     steps=self._create_direct_pipeline_steps(),
-                    task=task,
+                    task=self._agent_run_output.task,
                     agent=self,
-                    model=execution_model,
+                    model=self.model,
                     debug=debug or self.debug
                 )
                 
-                # 5. Execute pipeline (with optional start_step_index for resumption)
+                # 4. Execute pipeline (with optional start_step_index for resumption)
                 try:
-                    await pipeline.execute(agent_run_context, start_step_index=start_step_index)
+                    await pipeline.execute(self._agent_run_output, start_step_index=start_step_index)
+                    cleanup_run(run_id)
                 except Exception as pipeline_error:
-                    # CRITICAL: Sync context to output on error for HITL access
-                    # This ensures users can access checkpoint state after errors
-                    agent_run_context.tool_call_count = self._tool_call_count
-                    agent_run_context.tool_limit_reached = self._tool_limit_reached
-                    self._agent_run_context = agent_run_context
-                    self._agent_run_output.sync_from_context(self._agent_run_context)
+ 
                     sentry_sdk.flush()
                     raise pipeline_error
                 
                 sentry_sdk.flush()
                 
-                # 6. Sync tool state from agent to context (agent is source of truth during execution)
-                agent_run_context.tool_call_count = self._tool_call_count
-                agent_run_context.tool_limit_reached = self._tool_limit_reached
-                
-                # 7. Update output from context
-                self._agent_run_context = agent_run_context
-                self._agent_run_output.sync_from_context(self._agent_run_context)
-                
-                # 8. Save checkpoint if paused (HITL)
-                if task.is_paused or agent_run_context.has_pending_requirements():
-                    await self._save_checkpoint_to_storage(agent_run_context)
-                
                 # Return based on return_output parameter
                 if return_output:
                     return self._agent_run_output
-                return self._agent_run_output.content
+                return self._agent_run_output.output
             finally:
-                # Cleanup run tracking (only for new runs, not resumptions)
-                if not is_resuming:
-                    cleanup_run(run_id)
                 self.run_id = None
     
     def _extract_output(self, task: "Task", response: "ModelResponse") -> Any:
@@ -2592,7 +2620,7 @@ class Agent(BaseAgent):
         Execute a task synchronously and print the result.
         
         Returns:
-            RunResult: The result object (with output printed to console)
+            AgentRunOutput: The result object (with output printed to console)
         """
         result = self.do(task, model, debug, retry)
         from upsonic.utils.printing import success_log
@@ -2610,7 +2638,7 @@ class Agent(BaseAgent):
         Execute a task asynchronously and print the result.
         
         Returns:
-            RunResult: The result object (with output printed to console)
+            AgentRunOutput: The result object (with output printed to console)
         """
         result = await self.do_async(task, model, debug, retry)
         from upsonic.utils.printing import success_log
@@ -2739,11 +2767,24 @@ class Agent(BaseAgent):
         """
         if event is not None:
             events = event
-        from upsonic.tasks.tasks import Task as TaskClass
-        if isinstance(task, str):
-            task = TaskClass(description=task)
         
         from upsonic.agent.pipeline import PipelineManager
+        from upsonic.utils.printing import warning_log
+        
+        # Convert string to Task if needed
+        task = self._convert_to_task(task)
+        
+        # Validate task state (completed/problematic checks)
+        # For streaming, we just return early instead of yielding error output
+        validation_error = self._validate_task_for_new_run(task, is_resuming=False)
+        if validation_error is not None:
+            # For streaming with problematic status, add specific warning
+            if task.is_problematic:
+                warning_log(
+                    "Streaming does not support HITL continuation. Use continue_run_async() instead.",
+                    "Agent"
+                )
+            return
         
         async with self._managed_storage_connection():
             run_id = str(uuid.uuid4())
@@ -2754,111 +2795,43 @@ class Agent(BaseAgent):
                 # 1. Create AgentRunInput
                 run_input = self._create_agent_run_input(task)
                 
-                # 2. Create AgentRunContext
-                from upsonic.run.agent.context import AgentRunContext
-                from upsonic.schemas.kb_filter import KBFilterExpr
-                
-                kb_filter = KBFilterExpr.from_task(task) if hasattr(KBFilterExpr, 'from_task') else None
-                
-                agent_run_context = AgentRunContext(
+                # 2. Create AgentRunOutput using centralized factory method
+                self._agent_run_output = self._create_agent_run_output(
                     run_id=run_id,
-                    session_id=self.session_id or "",
-                    user_id=self.user_id,
                     task=task,
-                    step_results=[],
-                    execution_stats=None,
-                    requirements=[],
-                    agent_knowledge_base_filter=kb_filter,
-                    session_state=None,
-                    output_schema=task.response_format if hasattr(task, 'response_format') else None,
-                    is_streaming=True,
-                    accumulated_text="",
-                    tool_call_count=0,
-                    tool_limit_reached=False,
-                    messages=[],
-                    response=None,
-                    final_output=None,
-                    events=[],
+                    run_input=run_input,
+                    is_streaming=True
                 )
                 
-                # 3. Create AgentRunOutput
-                self._agent_run_output = AgentRunOutput(
-                    run_id=run_id,
-                    agent_id=self.agent_id,
-                    agent_name=self.name,
-                    session_id=self.session_id,
-                    user_id=self.user_id,
-                    input=run_input,
-                    content=None,
-                    output_schema=task.response_format if hasattr(task, 'response_format') else None,
-                    thinking_content=None,
-                    thinking_parts=None,
-                    model=str(model) if model else str(self.model),
-                    model_provider=getattr(self.model, 'provider_name', getattr(self.model, 'system', None)),
-                    model_provider_profile=getattr(self.model, 'provider_profile', None),
-                    messages=[],
-                    usage=None,
-                    additional_input_message=None,
-                    tools=[],
-                    images=None,
-                    files=None,
-                    status=RunStatus.running,
-                    requirements=[],
-                    step_results=[],
-                    execution_stats=None,
-                    events=[],
-                    metadata=None,
-                    session_state=None,
-                    pause_reason=None,
-                    error_details=None,
-                    created_at=int(now_utc().timestamp()),
-                    updated_at=None
-                )
+                # Set run_id on task for cross-process continuation support
+                if task is not None:
+                    task.run_id = run_id
                 
-                # Store context in instance variable
-                self._agent_run_context = agent_run_context
+                # Apply model override if provided
+                self._apply_model_override(model)
                 
-                # Determine model
-                execution_model = model
-                if model:
-                    from upsonic.models import infer_model
-                    execution_model = infer_model(model)
-                else:
-                    execution_model = self.model
-                
-                # 4. Create pipeline with streaming steps
+                # 3. Create pipeline with streaming steps
                 pipeline = PipelineManager(
                     steps=self._create_streaming_pipeline_steps(),
-                    task=task,
+                    task=self._agent_run_output.task,
                     agent=self,
-                    model=execution_model,
+                    model=self.model,
                     debug=debug or self.debug
                 )
                 
-                # 5. Stream events from pipeline and filter based on events parameter
+                # 4. Stream events from pipeline and filter based on events parameter
                 try:
-                    async for pipeline_event in pipeline.execute_stream(context=self._agent_run_context, start_step_index=0):
+                    async for pipeline_event in pipeline.execute_stream(context=self._agent_run_output, start_step_index=0):
                         if events:
                             yield pipeline_event
                         else:
                             text_content = self._extract_text_from_stream_event(pipeline_event)
                             if text_content:
-                                self._agent_run_output._accumulated_text += text_content
-                                self._agent_run_context.accumulated_text += text_content
+                                self._agent_run_output.accumulated_text += text_content
                                 yield text_content
                 except Exception as stream_error:
-                    self._agent_run_context.tool_call_count = self._tool_call_count
-                    self._agent_run_context.tool_limit_reached = self._tool_limit_reached
-                    self._agent_run_output.sync_from_context(self._agent_run_context)
                     raise stream_error
                 
-                # 6. Sync tool state from agent to context
-                self._agent_run_context.tool_call_count = self._tool_call_count
-                self._agent_run_context.tool_limit_reached = self._tool_limit_reached
-                
-                # 7. Update output from context and mark complete
-                self._agent_run_output.sync_from_context(self._agent_run_context)
-                self._agent_run_output.mark_completed()
                 
             finally:
                 cleanup_run(run_id)
@@ -2890,169 +2863,89 @@ class Agent(BaseAgent):
         return None
     
     
-    # Checkpoint and continuation support
+    # HITL checkpoint loading - delegates to Memory class
     
-    async def _save_checkpoint_to_storage(self, context: "AgentRunContext") -> None:
+    async def _load_incomplete_run_data_from_storage(self, run_id: str) -> Optional["RunData"]:
         """
-        Save checkpoint to storage via AgentSession.
+        Load a resumable RunData from storage. Delegates to Memory class.
+        """
+        if not self.memory:
+            raise ValueError("No memory configured. Agent must have memory configured to load paused runs.")
         
-        This method is called when the agent pauses for HITL (external tool, error, cancel).
-        It saves the full AgentRunContext to storage for later resumption.
+        return await self.memory.load_resumable_run_async(run_id, self.agent_id)
+    
+    async def _check_if_run_is_problematic(
+        self,
+        task: Optional["Task"],
+        run_id: Optional[str]
+    ) -> tuple[bool, Optional[RunStatus]]:
+        """
+        Check if a run is problematic (paused, cancelled, or error).
+        
+        Uses task.is_problematic if task provided, otherwise checks in-memory output,
+        and only loads from storage if run_id is provided and no matching in-memory output.
         
         Args:
-            context: The agent run context to save
-        """
-        if not self.db or not hasattr(self.db, 'storage') or not self.db.storage:
-            return
-        
-        try:
-            from upsonic.session.agent import AgentSession
-            
-            # Only update status if not already completed - completed runs should stay completed
-            from upsonic.run.base import RunStatus
-            if self._agent_run_output.status != RunStatus.completed:
-                # Set pause_reason on AgentRunOutput from latest unresolved requirement
-                unresolved_reqs = [r for r in context.requirements if not r.is_resolved()]
-                if unresolved_reqs:
-                    req = unresolved_reqs[-1]
-                    self._agent_run_output.pause_reason = req.pause_type
-                    # Set error_details for durable_execution (error recovery) scenarios
-                    if req.pause_type == 'durable_execution' and req.step_result:
-                        self._agent_run_output.error_details = req.step_result.message
-                
-                # Mark with appropriate status based on pause_type of last unresolved requirement
-                pause_type = unresolved_reqs[-1].pause_type if unresolved_reqs else None
-                if pause_type == 'durable_execution':
-                    # Durable execution = error recovery, mark as error
-                    self._agent_run_output.mark_error()
-                elif pause_type == 'cancel':
-                    self._agent_run_output.mark_cancelled()
-                elif pause_type == 'external_tool':
-                    self._agent_run_output.mark_paused()
-                # If no unresolved requirements and not completed, keep current status
-            
-            # Save full context
-            self._agent_run_context = context
-            
-            # Sync output from context before saving
-            self._agent_run_output.sync_from_context(context)
-            
-            # Load or create session
-            session = await self.db.storage.read_async(self.session_id, AgentSession)
-            if not session:
-                session = AgentSession(
-                    session_id=self.session_id,
-                    agent_id=self.agent_id,
-                    user_id=self.user_id
-                )
-            
-            # Populate session_data and agent_data from run output
-            session.populate_from_run_output(self._agent_run_output)
-            
-            # Upsert run with both output and context
-            session.upsert_run(self._agent_run_output, context)
-            
-            # Save session
-            await self.db.storage.upsert_async(session)
-            
-            if self.debug:
-                from upsonic.utils.printing import info_log
-                step_info = ""
-                unresolved = [r for r in context.requirements if not r.is_resolved()]
-                if unresolved and unresolved[-1].step_result:
-                    sr = unresolved[-1].step_result
-                    step_info = f" at step {sr.step_number} ({sr.name})"
-                info_log(f"Checkpoint saved for run {self._agent_run_output.run_id}{step_info}", "Agent")
-        except Exception as checkpoint_error:
-            if self.debug:
-                from upsonic.utils.printing import warning_log
-                import traceback
-                error_trace = ''.join(traceback.format_exception(type(checkpoint_error), checkpoint_error, checkpoint_error.__traceback__))
-                warning_log(f"Failed to save checkpoint: {checkpoint_error}\n{error_trace[-500:]}", "Agent")
-    
-    async def _load_paused_run_from_storage(self, run_id: str) -> Optional["AgentRunOutput"]:
-        """
-        Load a resumable run output from storage by run_id.
-        
-        Resumable runs include:
-        - paused: External tool execution pause
-        - error: Durable execution (error recovery)
-        - cancelled: Cancel run resumption
-        
-        Args:
-            run_id: The run ID to search for
+            task: Task instance (if provided, uses task.status directly - fast path)
+            run_id: Run ID to check (if provided without task, may load from storage)
             
         Returns:
-            AgentRunOutput if found and resumable, None otherwise
+            Tuple of (is_problematic, run_status)
         """
-        run_data = await self._load_paused_run_data_from_storage(run_id)
-        if run_data:
-            return run_data.output
-        return None
-    
-    async def _load_paused_run_data_from_storage(self, run_id: str) -> Optional["RunData"]:
-        """
-        Load a resumable RunData (output + context) from storage by run_id.
+        if task is not None:
+            # Task provided - use task.status directly (fast path, no storage call)
+            return task.is_problematic, task.status
         
-        Resumable runs include:
-        - paused: External tool execution pause
-        - error: Durable execution (error recovery)
-        - cancelled: Cancel run resumption
+        if run_id is not None:
+            # Only run_id provided - check in-memory output first, then storage if needed
+            _output = getattr(self, '_agent_run_output', None)
+            if _output and _output.run_id == run_id:
+                # In-memory output matches - use it
+                return _output.is_problematic, _output.status
+            else:
+                # No matching in-memory output - must load from storage
+                run_data = await self._load_incomplete_run_data_from_storage(run_id)
+                if run_data and run_data.output:
+                    return run_data.output.is_problematic, run_data.output.status
+        
+        return False, None
+    
+    async def _check_if_run_is_completed(
+        self,
+        task: Optional["Task"],
+        run_id: Optional[str]
+    ) -> tuple[bool, Optional[RunStatus]]:
+        """
+        Check if a run is already completed.
+        
+        Uses task.is_completed if task provided, otherwise checks in-memory output,
+        and only loads from storage if run_id is provided and no matching in-memory output.
         
         Args:
-            run_id: The run ID to search for
+            task: Task instance (if provided, uses task.status directly - fast path)
+            run_id: Run ID to check (if provided without task, may load from storage)
             
         Returns:
-            RunData if found and resumable, None otherwise
+            Tuple of (is_completed, run_status)
         """
-        if not self.db or not hasattr(self.db, 'storage') or not self.db.storage:
-            raise ValueError("No storage configured. Agent must have a database (db) configured to load paused runs.")
+        if task is not None:
+            # Task provided - use task.is_completed directly (fast path, no storage call)
+            return task.is_completed, task.status
         
-        from upsonic.session.agent import AgentSession, RunData
+        if run_id is not None:
+            # Only run_id provided - check in-memory output first, then storage if needed
+            _output = getattr(self, '_agent_run_output', None)
+            if _output and _output.run_id == run_id:
+                # In-memory output matches - use it
+                return _output.is_complete, _output.status
+            else:
+                # No matching in-memory output - load ANY run from storage (not just resumable)
+                if self.memory:
+                    run_data = await self.memory.load_run_async(run_id, self.agent_id)
+                    if run_data and run_data.output:
+                        return run_data.output.is_complete, run_data.output.status
         
-        # Resumable statuses: paused (external tool), error (durable), cancelled
-        resumable_statuses = {RunStatus.paused, RunStatus.error, RunStatus.cancelled}
-        
-        # Try to find in current session
-        session_id = self.session_id or (self.memory.session_id if self.memory else None)
-        
-        if self.debug:
-            from upsonic.utils.printing import debug_log_level2
-            debug_log_level2(
-                f"Searching for run_id {run_id}",
-                "Agent._load_paused_run_data_from_storage",
-                debug=self.debug,
-                debug_level=self.debug_level,
-                session_id=session_id,
-                agent_id=self.agent_id
-            )
-        
-        if session_id:
-            session = await self.db.storage.read_async(session_id, AgentSession)
-            if session and session.runs:
-                if self.debug:
-                    debug_log_level2(
-                        f"Found session with {len(session.runs)} runs",
-                        "Agent._load_paused_run_data_from_storage",
-                        debug=self.debug,
-                        debug_level=self.debug_level,
-                        run_ids=list(session.runs.keys())
-                    )
-                if run_id in session.runs:
-                    run_data = session.runs[run_id]
-                    if run_data.output and run_data.output.status in resumable_statuses:
-                        return run_data
-        
-        # Search all sessions for this agent
-        if hasattr(self.db.storage, 'list_agent_sessions_async'):
-            sessions = await self.db.storage.list_agent_sessions_async(agent_id=self.agent_id)
-            for session in sessions:
-                if session.runs and run_id in session.runs:
-                    run_data = session.runs[run_id]
-                    if run_data.output and run_data.output.status in resumable_statuses:
-                        return run_data
-        
-        return None
+        return False, None
     
     def _create_direct_pipeline_steps(self) -> List[Any]:
         """
@@ -3064,10 +2957,10 @@ class Agent(BaseAgent):
         from upsonic.agent.pipeline import (
             InitializationStep, CacheCheckStep, UserPolicyStep,
             StorageConnectionStep, LLMManagerStep, ModelSelectionStep,
-            ValidationStep, ToolSetupStep, MessageBuildStep,
+            ToolSetupStep, MessageBuildStep,
             ModelExecutionStep, ResponseProcessingStep,
             ReflectionStep, CallManagementStep, TaskManagementStep,
-            MemoryMessageTrackingStep, CultureUpdateStep,
+            MemorySaveStep, CultureUpdateStep,
             ReliabilityStep, AgentPolicyStep,
             CacheStorageStep, FinalizationStep
         )
@@ -3079,20 +2972,19 @@ class Agent(BaseAgent):
             UserPolicyStep(),              # 3
             LLMManagerStep(),              # 4
             ModelSelectionStep(),          # 5
-            ValidationStep(),              # 6
-            ToolSetupStep(),               # 7
-            MessageBuildStep(),            # 8
-            ModelExecutionStep(),          # 9 <-- External tool resumes here
-            ResponseProcessingStep(),      # 10
-            ReflectionStep(),              # 11
-            MemoryMessageTrackingStep(),   # 12
-            CallManagementStep(),          # 13
-            TaskManagementStep(),          # 14
-            CultureUpdateStep(),           # 15
-            ReliabilityStep(),             # 16
-            AgentPolicyStep(),             # 17
-            CacheStorageStep(),            # 18
-            FinalizationStep(),            # 19
+            ToolSetupStep(),               # 6
+            MessageBuildStep(),            # 7
+            ModelExecutionStep(),          # 8 <-- External tool resumes here
+            ResponseProcessingStep(),      # 9 <-- Tracks messages to AgentRunOutput
+            ReflectionStep(),              # 10
+            CallManagementStep(),          # 11 <-- Displays tool calls & usage
+            TaskManagementStep(),          # 12
+            CultureUpdateStep(),           # 13
+            ReliabilityStep(),             # 14
+            AgentPolicyStep(),             # 15
+            CacheStorageStep(),            # 16
+            FinalizationStep(),            # 17
+            MemorySaveStep(),              # 18 <-- LAST: Saves AgentSession to storage
         ]
     
     def _create_streaming_pipeline_steps(self) -> List[Any]:
@@ -3105,7 +2997,7 @@ class Agent(BaseAgent):
         from upsonic.agent.pipeline import (
             InitializationStep, CacheCheckStep, UserPolicyStep,
             StorageConnectionStep, LLMManagerStep, ModelSelectionStep,
-            ValidationStep, ToolSetupStep, MessageBuildStep,
+            ToolSetupStep, MessageBuildStep,
             StreamModelExecutionStep, CultureUpdateStep,
             AgentPolicyStep, CacheStorageStep,
             StreamMemoryMessageTrackingStep, StreamFinalizationStep
@@ -3118,15 +3010,14 @@ class Agent(BaseAgent):
             UserPolicyStep(),                  # 3
             LLMManagerStep(),                  # 4
             ModelSelectionStep(),              # 5
-            ValidationStep(),                  # 6
-            ToolSetupStep(),                   # 7
-            MessageBuildStep(),                # 8
-            StreamModelExecutionStep(),        # 9 <-- External tool resumes here
-            StreamMemoryMessageTrackingStep(), # 10
-            CultureUpdateStep(),               # 11
-            AgentPolicyStep(),                 # 12
-            CacheStorageStep(),                # 13
-            StreamFinalizationStep(),          # 14
+            ToolSetupStep(),                   # 6
+            MessageBuildStep(),                # 7
+            StreamModelExecutionStep(),        # 8 <-- External tool resumes here (tracks messages internally)
+            CultureUpdateStep(),               # 9
+            AgentPolicyStep(),                 # 10
+            CacheStorageStep(),                # 11
+            StreamFinalizationStep(),          # 12
+            StreamMemoryMessageTrackingStep(), # 13 <-- LAST: Saves AgentSession to storage
         ]
     
     def _create_full_pipeline_steps(self, is_streaming: bool = False) -> List[Any]:
@@ -3146,32 +3037,30 @@ class Agent(BaseAgent):
     
     async def _inject_external_tool_results(
         self, 
-        context: "AgentRunContext", 
+        output: AgentRunOutput, 
         requirements: list
     ) -> None:
         """
-        Inject external tool results from ALL ToolExecutions into context messages.
+        Inject external tool results from ALL ToolExecutions into output chat_history.
+        
+        The chat_history is already preserved in output. We just need to add the 
+        response with tool calls (if there) and then the tool return parts.
         
         Args:
-            context: The agent run context
+            output: The agent run output (single source of truth)
             requirements: List of RunRequirements with ToolExecution containing results
         """
-        from upsonic.messages import ModelRequest, ModelResponse, ToolReturnPart, ToolCallPart
+        from upsonic.messages import ModelRequest, ToolReturnPart
         from upsonic._utils import now_utc
         
         if not requirements:
             return
         
-        # Get continuation data from first requirement (all share the same messages/response)
-        first_req = requirements[0]
-        messages, response_with_tool_calls, _ = first_req.get_continuation_data()
-        
-        # Restore chat_history (full conversation history for LLM)
-        context.chat_history = messages
-        
-        # Add response with tool calls (neither streaming nor non-streaming adds it before checkpoint)
-        if response_with_tool_calls:
-            context.chat_history.append(response_with_tool_calls)
+        # Add response with tool calls if present and not already in chat_history
+        if output.response:
+            # Check if response is already the last message
+            if not output.chat_history or output.chat_history[-1] != output.response:
+                output.chat_history.append(output.response)
         
         # Inject tool results for ALL requirements
         tool_return_parts = []
@@ -3183,12 +3072,10 @@ class Agent(BaseAgent):
                     tool_call_id=requirement.tool_execution.tool_call_id,
                     timestamp=now_utc()
                 ))
-                # Mark requirement as resolved (handled by framework, not user)
-                requirement.mark_resolved()
         
         # Add all tool returns in a single ModelRequest
         if tool_return_parts:
-            context.chat_history.append(ModelRequest(parts=tool_return_parts))
+            output.chat_history.append(ModelRequest(parts=tool_return_parts))
     
     # External execution support
     
@@ -3196,6 +3083,7 @@ class Agent(BaseAgent):
         self,
         task: Optional["Task"] = None,
         run_id: Optional[str] = None,
+        requirements: Optional[List["RunRequirement"]] = None,
         model: Optional[Union[str, "Model"]] = None,
         debug: bool = False,
         retry: int = 1,
@@ -3253,9 +3141,10 @@ class Agent(BaseAgent):
         # Check if we need to auto-detect streaming mode
         use_streaming = streaming
         if use_streaming is None:
-            # Auto-detect from in-memory context
-            if self._agent_run_output and self._agent_run_context:
-                use_streaming = self._agent_run_context.is_streaming
+            # Auto-detect from in-memory output
+            _output = getattr(self, '_agent_run_output', None)
+            if _output:
+                use_streaming = _output.is_streaming
             else:
                 use_streaming = False  # Default to direct mode
         
@@ -3264,7 +3153,7 @@ class Agent(BaseAgent):
             async def collect_stream():
                 results = []
                 async_gen = await self.continue_run_async(
-                    task, run_id, model, debug, retry, return_output,
+                    task, run_id, requirements, model, debug, retry, return_output,
                     streaming=True,
                     event=event,
                     external_tool_executor=external_tool_executor
@@ -3291,7 +3180,7 @@ class Agent(BaseAgent):
                         future = executor.submit(
                             asyncio.run, 
                             self.continue_run_async(
-                                task, run_id, model, debug, retry, return_output,
+                                task, run_id, requirements, model, debug, retry, return_output,
                                 streaming=False,
                                 event=event,
                                 external_tool_executor=external_tool_executor
@@ -3301,7 +3190,7 @@ class Agent(BaseAgent):
                 else:
                     return loop.run_until_complete(
                         self.continue_run_async(
-                            task, run_id, model, debug, retry, return_output,
+                            task, run_id, requirements, model, debug, retry, return_output,
                             streaming=False,
                             event=event,
                             external_tool_executor=external_tool_executor
@@ -3310,7 +3199,7 @@ class Agent(BaseAgent):
             except RuntimeError:
                 return asyncio.run(
                     self.continue_run_async(
-                        task, run_id, model, debug, retry, return_output,
+                        task, run_id, requirements, model, debug, retry, return_output,
                         streaming=False,
                         event=event,
                         external_tool_executor=external_tool_executor
@@ -3323,118 +3212,136 @@ class Agent(BaseAgent):
         run_id: Optional[str],
         model: Optional[Union[str, "Model"]],
         debug: bool,
+        requirements: Optional[List["RunRequirement"]] = None,
     ) -> tuple:
         """
-        Prepare context and determine resume point for continue_run_async.
+        Prepare output context and determine resume point for continue_run_async.
         
         Status-based processing:
-        - PAUSED status: External tool execution
-        - ERROR status: Durable execution (error recovery)
-        - CANCELLED status: Cancel run resumption
+        - PAUSED status: External tool execution - inject tool results
+        - ERROR/CANCELLED status: Resume from the problematic step
         
-        Loading from storage:
-        - If run_id is provided: Always load from storage
-        - If agent_id differs (fresh agent instance): Must use run_id to load from storage
-        - Otherwise: Use in-memory context if available
+        All state needed for resumption is in AgentRunOutput (chat_history, step_results, etc.)
+        
+        Args:
+            requirements: Optional list of RunRequirement with tool results set.
+                         For new agents, pass the requirements from original output
+                         (with results set) to copy results to the loaded state.
             
         Returns:
-            Tuple of (context, task, resume_step_index)
+            Tuple of (output, task, resume_step_index)
         """
         if not task and not run_id:
             raise ValueError("Either 'task' or 'run_id' must be provided")
         
-        context = None
-        agent_run_output = None
+        output: Optional[AgentRunOutput] = None
         
         # Step 1: Determine if we should load from storage
-        # Load from storage if:
-        # - run_id is explicitly provided with no matching in-memory context
-        # - agent_id differs (fresh agent instance)
-        # - No in-memory context exists
         need_storage_load = False
         
+        # Get in-memory output (may not exist for new agents)
+        _in_memory_output = getattr(self, '_agent_run_output', None)
+        
         if run_id:
-            # run_id provided - check if we already have matching in-memory context
-            if self._agent_run_output and self._agent_run_context:
-                in_memory_run_id = self._agent_run_output.run_id
-                in_memory_agent_id = self._agent_run_output.agent_id
+            # run_id provided - check if we already have matching in-memory output
+            if _in_memory_output:
+                in_memory_run_id = _in_memory_output.run_id
+                in_memory_agent_id = _in_memory_output.agent_id
                 
                 if in_memory_run_id != run_id:
-                    # Different run_id - must load from storage
                     need_storage_load = True
                 elif in_memory_agent_id != self.agent_id:
-                    # Different agent_id - fresh agent instance, must load from storage
                     need_storage_load = True
                 else:
-                    # Same run_id and agent_id - use in-memory
-                    context = self._agent_run_context
-                    agent_run_output = self._agent_run_output
+                    output = _in_memory_output
             else:
-                # No in-memory context - must load from storage
                 need_storage_load = True
         else:
-            # No run_id provided - use in-memory context if available
-            if self._agent_run_output and self._agent_run_context:
-                # Check agent_id matches
-                in_memory_agent_id = self._agent_run_output.agent_id
+            # No run_id provided - use in-memory output if available
+            if _in_memory_output:
+                in_memory_agent_id = _in_memory_output.agent_id
                 if in_memory_agent_id != self.agent_id:
-                    raise ValueError(
-                        "In-memory context belongs to different agent. "
-                        "Provide run_id to load from storage."
-                    )
-                context = self._agent_run_context
-                agent_run_output = self._agent_run_output
+                    # Different agent - try to load from storage using task.run_id
+                    if task and hasattr(task, 'run_id') and task.run_id:
+                        need_storage_load = True
+                        run_id = task.run_id
+                    else:
+                        raise ValueError(
+                            "In-memory output belongs to different agent. "
+                            "Provide run_id to load from storage."
+                        )
+                else:
+                    output = _in_memory_output
             else:
-                raise ValueError(
-                    "No in-memory checkpoint found. Provide run_id to load from storage."
-                )
+                # No in-memory checkpoint - try to load from storage using task.run_id
+                if task and hasattr(task, 'run_id') and task.run_id:
+                    need_storage_load = True
+                    run_id = task.run_id
+                else:
+                    raise ValueError(
+                        "No in-memory checkpoint found. Provide run_id to load from storage."
+                    )
         
         # Step 2: Load from storage if needed
         if need_storage_load:
-            run_data = await self._load_paused_run_data_from_storage(run_id)
+            run_data = await self._load_incomplete_run_data_from_storage(run_id)
             if not run_data:
                 raise ValueError(f"No resumable run found with run_id: {run_id}")
             
-            if not run_data.context:
-                raise ValueError("Run has no context (checkpoint not found)")
+            if not run_data.output:
+                raise ValueError("Run has no output (checkpoint not found)")
             
-            context = run_data.context
-            agent_run_output = run_data.output
-            self._agent_run_output = agent_run_output
-            self._agent_run_context = context
-        
+            self._agent_run_output = run_data.output
+            output = self._agent_run_output
+            
+            # Step 2b: Copy tool results from passed requirements to loaded output
+            # This is needed for new agents - they load state from storage (without results)
+            # and the user passes requirements (with results) to inject
+            if requirements:
+                # Build a map of tool_call_id -> result from passed requirements
+                results_map = {}
+                for req in requirements:
+                    if req.tool_execution and req.tool_execution.result:
+                        results_map[req.tool_execution.tool_call_id] = req.tool_execution.result
+                
+                # Copy results to loaded output's requirements using set_external_execution_result
+                for req in output.requirements or []:
+                    if req.tool_execution and req.tool_execution.tool_call_id in results_map:
+                        req.set_external_execution_result(results_map[req.tool_execution.tool_call_id])
+            
         # Step 3: Validate we have what we need
-        if context is None:
+        if output is None:
             raise ValueError(
                 "No checkpoint found. Either provide run_id to load from storage, "
-                "or call continue_run_async while agent still has in-memory context."
+                "or call continue_run_async while agent still has in-memory output."
             )
         
-        # Get task from context if not provided
+        # Get task from output if not provided
         if task is None:
-            task = context.task
-        
+            task = output.task
+        self.current_task = task
         if task is None:
             raise ValueError("Cannot extract task from checkpoint")
         
-        # Step 4: Determine resume action based on RUN STATUS (not requirement pause_type)
-        # This is the key status-based processing:
-        # - RunStatus.paused -> External tool execution
-        # - RunStatus.error -> Durable execution
-        # - RunStatus.cancelled -> Cancel run resumption
-        from upsonic.utils.pipeline import get_model_execution_step_index
+        run_status = output.status
         
-        run_status = agent_run_output.status if agent_run_output else None
+        # Centralized: All problematic runs use get_problematic_step() to find resume point
+        if run_status not in (RunStatus.paused, RunStatus.error, RunStatus.cancelled):
+            raise ValueError(
+                f"Cannot continue run with status '{run_status}'. "
+                "Only paused, error, or cancelled runs can be continued."
+            )
         
+        # Get the problematic step for resume point (works for paused, error, cancelled)
+        problematic_step = output.get_problematic_step()
+        if not problematic_step:
+            raise ValueError(f"Run has {run_status.value} status but no problematic step found in output")
+        
+        resume_step_index = problematic_step.step_number
+        
+        # For paused runs (external tool execution), inject tool results
         if run_status == RunStatus.paused:
-            # PAUSED: External tool execution - inject tool results and resume from model execution
-            external_tool_reqs = [
-                r for r in context.requirements 
-                if r.pause_type == 'external_tool' and 
-                   r.tool_execution and 
-                   r.tool_execution.result is not None and
-                   r.resolved_at is None
-            ]
+            external_tool_reqs = output.get_external_tool_requirements_with_results()
             
             if not external_tool_reqs:
                 raise ValueError(
@@ -3442,82 +3349,23 @@ class Agent(BaseAgent):
                     "Set tool results using requirement.set_external_execution_result(result)."
                 )
             
-            # Restore agent state from first requirement
-            first_req = external_tool_reqs[0]
-            messages, _, agent_state = first_req.get_continuation_data()
-            if agent_state:
-                context.tool_call_count = agent_state.get('tool_call_count', 0)
-                context.tool_limit_reached = agent_state.get('tool_limit_reached', False)
-                self._tool_call_count = context.tool_call_count
-                self._tool_limit_reached = context.tool_limit_reached
-            context.chat_history = messages
-            
-            # Inject tool results and mark requirements resolved
-            await self._inject_external_tool_results(context, external_tool_reqs)
-            resume_step_index = get_model_execution_step_index()
-            
-        elif run_status == RunStatus.error:
-            # ERROR: Durable execution - resume from failed step
-            error_step = context.get_error_step()
-            if not error_step:
-                raise ValueError("Run has error status but no error step found in context")
-            
-            # Restore agent state from error requirement
-            error_reqs = [r for r in context.requirements if r.pause_type == 'durable_execution' and not r.is_resolved()]
-            if error_reqs:
-                messages, _, agent_state = error_reqs[0].get_continuation_data()
-                if agent_state:
-                    context.tool_call_count = agent_state.get('tool_call_count', 0)
-                    context.tool_limit_reached = agent_state.get('tool_limit_reached', False)
-                    self._tool_call_count = context.tool_call_count
-                    self._tool_limit_reached = context.tool_limit_reached
-                context.chat_history = messages
-            
-            resume_step_index = error_step.step_number
-            
-        elif run_status == RunStatus.cancelled:
-            # CANCELLED: Cancel run resumption - resume from cancelled step
-            cancelled_step = context.get_cancelled_step()
-            if not cancelled_step:
-                raise ValueError("Run has cancelled status but no cancelled step found in context")
-            
-            # Restore agent state from cancel requirement
-            cancel_reqs = [r for r in context.requirements if r.pause_type == 'cancel' and not r.is_resolved()]
-            if cancel_reqs:
-                messages, _, agent_state = cancel_reqs[0].get_continuation_data()
-                if agent_state:
-                    context.tool_call_count = agent_state.get('tool_call_count', 0)
-                    context.tool_limit_reached = agent_state.get('tool_limit_reached', False)
-                    self._tool_call_count = context.tool_call_count
-                    self._tool_limit_reached = context.tool_limit_reached
-                context.chat_history = messages
-            
-            resume_step_index = cancelled_step.step_number
-            
-        else:
-            raise ValueError(
-                f"Cannot continue run with status '{run_status}'. "
-                "Only paused, error, or cancelled runs can be continued."
-            )
+            # Inject tool results (chat_history already preserved in output)
+            await self._inject_external_tool_results(output, external_tool_reqs)
         
-        # Step 5: Clear paused state and set up for continuation
+        # Clear paused state and set up for continuation
         task.is_paused = False
-        context.task = task
-        
-        # Note: Resolved requirements are kept in context for traceability
-        # They can be accessed via context.requirements and filtered by is_resolved()
+        output.task = task
         
         if task.enable_cache:
             task.set_cache_manager(self._cache_manager)
         
-        self.current_task = task
-        
-        return context, task, resume_step_index
+        return output, task, resume_step_index
     
     async def continue_run_async(
         self,
         task: Optional["Task"] = None,
         run_id: Optional[str] = None,
+        requirements: Optional[List["RunRequirement"]] = None,
         model: Optional[Union[str, "Model"]] = None,
         debug: bool = False,
         retry: int = 1,
@@ -3534,10 +3382,12 @@ class Agent(BaseAgent):
         
         Note: HITL continuation is only supported in direct call mode (streaming=False).
         
-        Supports all HITL continuation scenarios:
-        1. External tool execution: Resume from MessageBuildStep with tool results
-        2. Durable execution (error recovery): Resume from exact failed step
-        3. Cancel run resumption: Resume from exact cancelled step
+        Supports HITL continuation for external tool execution:
+        - PAUSED status: External tool execution - inject tool results and resume
+        - ERROR/CANCELLED status: Resume from the problematic step
+        
+        If the run is NOT problematic (not paused, cancelled, or error), this method
+        will log an informative message and call do_async to start a fresh run.
         
         Args:
             task: Task object with external results (for external tool continuation)
@@ -3562,6 +3412,8 @@ class Agent(BaseAgent):
         Raises:
             ValueError: If streaming=True is passed
         """
+        from upsonic.utils.printing import info_log, warning_log
+        
         # HITL continuation is only supported in direct call mode
         if streaming:
             raise ValueError(
@@ -3569,15 +3421,59 @@ class Agent(BaseAgent):
                 "Use streaming=False (default) for continue_run_async."
             )
         
-        # Prepare context and determine resume point
-        context, task, resume_step_index = await self._prepare_continuation_context(
-            task, run_id, model, debug
-        )
-        
-        # Execute and handle any subsequent external tool calls automatically
-        return await self._continue_run_direct_impl(
-            task, model, debug, retry, return_output, context, resume_step_index, external_tool_executor
-        )
+        # Ensure storage connection is active for status checks
+        async with self._managed_storage_connection():
+            # Check if task is already completed - cannot continue a completed task
+            is_completed, run_status = await self._check_if_run_is_completed(task, run_id)
+            if is_completed:
+                resolved_run_id = (task.run_id if task else run_id) or "unknown"
+                warning_log(
+                    f"Task is already completed (run_id={resolved_run_id}). Cannot continue a completed task.",
+                    "Agent"
+                )
+                completed_output = AgentRunOutput(
+                    run_id=resolved_run_id,
+                    agent_id=self.agent_id,
+                    agent_name=self.name,
+                    session_id=self.session_id,
+                    user_id=self.user_id,
+                    status=RunStatus.completed,
+                    output=f"Task is already completed (run_id={resolved_run_id}). Cannot continue a completed task.",
+                )
+                if return_output:
+                    return completed_output
+                return completed_output.output
+            
+            # Check if run is problematic (paused, cancelled, error) before preparing continuation
+            is_problematic, run_status = await self._check_if_run_is_problematic(task, run_id)
+            
+            if not is_problematic:
+                # Run is not problematic - log and call do_async for a fresh run
+                status_str = run_status.value if run_status else "unknown"
+                info_log(
+                    f"Run status is '{status_str}' (not paused, cancelled, or error). "
+                    f"Starting fresh run via do_async.",
+                    "Agent"
+                )
+                return await self.do_async(
+                    task=task,
+                    model=model,
+                    debug=debug,
+                    retry=retry,
+                    return_output=return_output,
+                    state=state,
+                    graph_execution_id=graph_execution_id,
+                )
+            
+            # Prepare context and determine resume point for problematic runs
+            output, task, resume_step_index = await self._prepare_continuation_context(
+                task, run_id, model, debug, requirements
+            )
+            
+            # Execute and handle any subsequent external tool calls automatically
+            return await self._continue_run_direct_impl(
+                task, model, debug, retry, return_output, output, resume_step_index, external_tool_executor
+            )
     
     async def _continue_run_direct_impl(
         self,
@@ -3586,7 +3482,7 @@ class Agent(BaseAgent):
         debug: bool,
         retry: int,
         return_output: bool,
-        context: "AgentRunContext",
+        output: AgentRunOutput,
         resume_step_index: int,
         external_tool_executor: Optional[Callable[["RunRequirement"], str]] = None,
     ) -> Any:
@@ -3600,23 +3496,9 @@ class Agent(BaseAgent):
         the whole run completes successfully. For cancelled runs, calls cleanup_run
         on successful completion.
         """
-        from upsonic.utils.pipeline import get_model_execution_step_index
-        from upsonic.run.cancel import cleanup_run
-        
         max_rounds = 10  # Safety limit
         rounds = 0
         result = None
-        
-        # Track if this was a cancelled or errored run for proper handling on completion
-        was_cancelled_run = self._agent_run_output and self._agent_run_output.status == RunStatus.cancelled
-        was_error_run = self._agent_run_output and self._agent_run_output.status == RunStatus.error
-        run_id = context.run_id
-        
-        # Get durable/cancel requirements to mark resolved on completion
-        durable_cancel_reqs = [
-            r for r in context.requirements 
-            if r.pause_type in ('durable_execution', 'cancel') and not r.is_resolved()
-        ]
         
         while rounds < max_rounds:
             rounds += 1
@@ -3627,50 +3509,32 @@ class Agent(BaseAgent):
                 model=model,
                 debug=debug,
                 retry=retry,
-                return_output=True,  # Always get full output to check for new requirements
-                _resume_context=context,
+                return_output=True,
+                _resume_output=output,
                 _resume_step_index=resume_step_index,
             )
             
             # Check if run completed successfully
+            # Note: MemorySaveStep marks durable/cancel requirements as resolved and saves session
             if result.is_complete:
-                # Mark durable execution and cancel requirements as resolved
-                # Note: For cancel/durable, we mark resolved AFTER successful completion
-                # (external tool requirements are already marked resolved in _inject_external_tool_results)
-                needs_save = len(durable_cancel_reqs) > 0
-                for req in durable_cancel_reqs:
-                    req.mark_resolved()
-                
-                # Save to storage ONLY if we marked cancel/durable requirements as resolved
-                # (PipelineManager already saved, but with unresolved requirements)
-                if needs_save and self.db and hasattr(self.db, 'storage') and self.db.storage:
-                    try:
-                        await self._save_checkpoint_to_storage(self._agent_run_context)
-                    except Exception:
-                        pass
-                
-                # For cancelled runs that completed successfully, call cleanup_run
-                if was_cancelled_run and run_id:
-                    cleanup_run(run_id)
-                
                 if return_output:
                     return result
-                return result.content if hasattr(result, 'content') else result
+                return result.output if hasattr(result, 'output') else result
             
             # Check if there are external tool requirements that need handling
-            external_tool_active = [r for r in result.active_requirements if r.pause_type == 'external_tool']
+            external_tool_active = [r for r in result.active_requirements if r.needs_external_execution]
             
             if not external_tool_active:
                 # No external tools - return result (might be error or paused for other reasons)
                 if return_output:
                     return result
-                return result.content if hasattr(result, 'content') else result
+                return result.output if hasattr(result, 'output') else result
             
             # If no executor provided, return paused result with external tool requirements
             if not external_tool_executor:
                 if return_output:
                     return result
-                return result.content if hasattr(result, 'content') else result
+                return result.output if hasattr(result, 'output') else result
             
             # Execute ALL new external tools using the provided executor
             for requirement in result.active_requirements:
@@ -3678,27 +3542,23 @@ class Agent(BaseAgent):
                     tool_result = external_tool_executor(requirement)
                     requirement.tool_execution.result = tool_result
             
-            # Prepare context for next round
-            context = self._agent_run_context
-            resume_step_index = get_model_execution_step_index()
+            # Prepare output for next round - use get_problematic_step() for resume point
+            output = getattr(self, '_agent_run_output', None)
+            problematic_step = output.get_problematic_step()
+            if problematic_step:
+                resume_step_index = problematic_step.step_number
             
             # Clear task.is_paused so ResponseProcessingStep extracts output properly
             task.is_paused = False
             
-            # Inject the new external tool results into context
-            external_tool_reqs = [
-                r for r in context.requirements 
-                if r.pause_type == 'external_tool' and 
-                   r.tool_execution and 
-                   r.tool_execution.result is not None and
-                   r.resolved_at is None
-            ]
+            # Inject the new external tool results into output
+            external_tool_reqs = output.get_external_tool_requirements_with_results()
             if external_tool_reqs:
-                await self._inject_external_tool_results(context, external_tool_reqs)
+                await self._inject_external_tool_results(output, external_tool_reqs)
             
             # Loop continues to execute the next round with the injected results
         
         # If we hit max_rounds, return what we have
         if return_output:
             return result
-        return result.content if hasattr(result, 'content') else result
+        return result.output if hasattr(result, 'output') else result

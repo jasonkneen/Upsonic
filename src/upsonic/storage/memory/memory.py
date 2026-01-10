@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 import asyncio
 import uuid
-from typing import Any, Dict, List, Optional, Type, Literal, Union
+from typing import Any, Dict, List, Optional, Type, Literal, Union, TYPE_CHECKING
 import json
 import copy
 import time
@@ -13,6 +15,10 @@ from upsonic.session.agent import AgentSession
 from upsonic.schemas import UserTraits
 from upsonic.models import Model
 from upsonic.utils.printing import info_log
+
+if TYPE_CHECKING:
+    from upsonic.session.agent import RunData
+    from upsonic.run.agent.output import AgentRunOutput
 
 
 class Memory:
@@ -320,125 +326,6 @@ class Memory:
         
         return prepared_data
 
-    async def update_memories_after_task(self, model_response, agent_run_output=None) -> None:
-        """
-        Updates all relevant memories after a task has been completed, saving
-        the run output to the AgentSession.
-        
-        This method ALWAYS upserts the AgentSession to storage, regardless of
-        full_session_memory setting. The full_session_memory only controls
-        whether chat history is injected into the prompt.
-        """
-        await self._update_agent_session(model_response, agent_run_output)
-
-    async def _update_agent_session(self, model_response, agent_run_output):
-        """Helper to handle updating the AgentSession object."""
-        from upsonic.run.agent.output import AgentRunOutput as RunOutputType
-        
-        if self.debug:
-            info_log("Updating agent session...", "Memory")
-        
-        session = await self.storage.read_async(self.session_id, AgentSession)
-        if not session:
-            session = AgentSession(
-                session_id=self.session_id,
-                user_id=self.user_id,
-                agent_id=agent_run_output.agent_id if agent_run_output else None,
-                created_at=int(time.time()),
-                metadata={},
-                runs={},
-            )
-            if self.debug:
-                info_log(f"Created new session: {self.session_id}", "Memory")
-        
-        # Create a run output if not provided
-        run_to_add = agent_run_output
-        if not run_to_add and model_response:
-            # Try to create a minimal run output from model_response
-            try:
-                messages = None
-                if hasattr(model_response, 'all_messages'):
-                    messages = model_response.all_messages()
-                elif hasattr(model_response, 'new_messages'):
-                    messages = model_response.new_messages()
-                
-                if messages:
-                    run_to_add = RunOutputType(
-                        run_id=str(uuid.uuid4()),
-                        session_id=self.session_id,
-                        user_id=self.user_id,
-                        messages=messages,
-                        content=str(model_response.output) if hasattr(model_response, 'output') else None,
-                    )
-                    if self.debug:
-                        info_log(f"Created run output from model_response with {len(messages)} messages", "Memory")
-            except Exception as e:
-                if self.debug:
-                    info_log(f"Could not create run output from model_response: {e}", "Memory")
-        
-        # Always add the run output to the session if available
-        if run_to_add:
-            session.upsert_run(run_to_add)
-            if self.debug:
-                info_log(f"Added run output to session (total runs: {len(session.runs or [])})", "Memory")
-            
-            # Populate session_data and agent_data from run output
-            session.populate_from_run_output(run_to_add)
-
-        # Generate summary if enabled - use agent_run_output which has new_messages() method
-        if self.summary_memory_enabled:
-            if not self.model:
-                from upsonic.utils.printing import warning_log
-                warning_log("Summary memory is enabled but no model is configured. Skipping summary generation.", "MemoryStorage")
-            else:
-                try:
-                    if self.debug:
-                        info_log("Generating new session summary...", "Memory")
-                    session.summary = await self._generate_new_summary(session, agent_run_output)
-                    if self.debug:
-                        info_log(f"Summary generated ({len(session.summary) if session.summary else 0} chars)", "Memory")
-                except Exception as e:
-                    from upsonic.utils.printing import warning_log
-                    warning_log(f"Failed to generate session summary: {e}", "MemoryStorage")
-        
-        # Flatten messages if full_session_memory enabled
-        if self.full_session_memory_enabled:
-            session.messages = session.flatten_messages_from_runs()
-            if self.debug:
-                info_log(f"Flattened {len(session.messages)} messages from {len(session.runs or [])} runs", "Memory")
-        
-        # Update user profile if enabled - use agent_run_output which has new_messages() method
-        if self.user_analysis_memory_enabled:
-            if not self.model:
-                from upsonic.utils.printing import warning_log
-                warning_log("User analysis memory is enabled but no model is configured. Skipping user profile analysis.", "MemoryStorage")
-            else:
-                try:
-                    updated_traits = await self._analyze_interaction_for_traits(session, agent_run_output)
-                    
-                    if self.debug:
-                        info_log(f"Extracted traits: {updated_traits}", "Memory")
-                    
-                    if self.user_memory_mode == 'replace':
-                        session.user_profile = updated_traits
-                        if self.debug:
-                            info_log(f"Replaced user profile with {len(updated_traits)} traits", "Memory")
-                    elif self.user_memory_mode == 'update':
-                        if not session.user_profile:
-                            session.user_profile = {}
-                        before_count = len(session.user_profile)
-                        session.user_profile.update(updated_traits)
-                        if self.debug:
-                            info_log(f"Updated user profile: {before_count} -> {len(session.user_profile)} traits", "Memory")
-                except Exception as e:
-                    from upsonic.utils.printing import warning_log
-                    warning_log(f"Failed to analyze user profile: {e}", "MemoryStorage")
-        
-        # Always upsert the session to storage
-        session.updated_at = int(time.time())
-        await self.storage.upsert_async(session)
-        if self.debug:
-            info_log("Agent session saved to storage", "Memory")
 
 
     def _limit_message_history(self, message_history: List) -> List:
@@ -790,12 +677,13 @@ YOUR TASK: Fill in trait fields based on what the user explicitly stated in the 
         return self._run_sync(self.get_messages_async(session_id, limit))
     
     # --- Write/Upsert ---
-    async def save_session_async(self, session: AgentSession) -> None:
-        """Save/upsert an AgentSession."""
+    async def upsert_session_async(self, session: AgentSession) -> None:
+        """Upsert an AgentSession directly to storage."""
         await self.storage.upsert_agent_session_async(session)
     
-    def save_session(self, session: AgentSession) -> None:
-        self._run_sync(self.save_session_async(session))
+    def upsert_session(self, session: AgentSession) -> None:
+        """Synchronous version of upsert_session_async."""
+        self._run_sync(self.upsert_session_async(session))
     
     async def save_run_async(self, run_output: Any, session_id: Optional[str] = None) -> None:
         """Save a run output to session (creates session if needed)."""
@@ -807,10 +695,10 @@ YOUR TASK: Fill in trait fields based on what the user explicitly stated in the 
                 agent_id=getattr(run_output, 'agent_id', None),
                 created_at=int(time.time())
             )
-        session.upsert_run(run_output)
-        
         # Populate session_data and agent_data from run output
         session.populate_from_run_output(run_output)
+
+        session.upsert_run(run_output)
         
         await self.storage.upsert_agent_session_async(session)
     
@@ -878,4 +766,308 @@ YOUR TASK: Fill in trait fields based on what the user explicitly stated in the 
     
     def get_metadata(self, session_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         return self._run_sync(self.get_metadata_async(session_id))
+    
+    
+    async def save_session_async(
+        self,
+        output: "AgentRunOutput",
+        agent_id: Optional[str] = None,
+    ) -> None:
+        """
+        Save agent session to storage.
+        
+        This is the centralized method for ALL session saving operations:
+        
+        For INCOMPLETE runs (paused, error, cancelled):
+        - Saves checkpoint state for HITL resumption
+        - Sets pause_reason and error_details from requirements
+        - Does NOT process memory features (summary, user profile)
+        
+        For COMPLETED runs:
+        - Saves the completed run output
+        - Processes memory features if enabled:
+          - Generates session summary (if summary_memory enabled)
+          - Flattens messages (if full_session_memory enabled)
+          - Analyzes user profile (if user_analysis_memory enabled)
+        
+        Args:
+            output: AgentRunOutput object with run details (single source of truth)
+            agent_id: Optional agent identifier
+        """
+        from upsonic.run.base import RunStatus
+        from upsonic.utils.printing import warning_log
+        
+        if output is None:
+            return
+        
+        try:
+            # Load or create session
+            session = await self.storage.read_async(self.session_id, AgentSession)
+            if not session:
+                session = AgentSession(
+                    session_id=self.session_id,
+                    agent_id=agent_id or output.agent_id,
+                    user_id=self.user_id,
+                    created_at=int(time.time()),
+                    metadata={},
+                    runs={},
+                )
+                if self.debug:
+                    info_log(f"Created new session: {self.session_id}", "Memory")
+            
+            # Handle based on run status
+            if output.status == RunStatus.completed:
+                # COMPLETED RUN: Save and process memory features
+                await self._save_completed_run(session, output)
+            else:
+                # INCOMPLETE RUN (paused, error, cancelled): Save checkpoint only
+                await self._save_incomplete_run(session, output)
+            
+            # Always upsert the session to storage
+            session.updated_at = int(time.time())
+            await self.storage.upsert_async(session)
+            
+            if self.debug:
+                info_log(f"Session saved for run {output.run_id} (status: {output.status.value})", "Memory")
+                
+        except Exception as save_error:
+            if self.debug:
+                import traceback
+                error_trace = ''.join(traceback.format_exception(type(save_error), save_error, save_error.__traceback__))
+                warning_log(f"Failed to save session: {save_error}\n{error_trace[-500:]}", "Memory")
+    
+    async def _save_incomplete_run(
+        self,
+        session: AgentSession,
+        output: "AgentRunOutput",
+    ) -> None:
+        """
+        Save checkpoint for incomplete run (paused, error, cancelled).
+        
+        This is called for HITL scenarios where the run is not yet complete.
+        Only saves the run state without processing memory features.
+        
+        The pause_reason and error_details are set directly on the output
+        by the PipelineManager.
+        """
+        # Populate session_data and agent_data from run output
+        session.populate_from_run_output(output)
+        
+        # Upsert run with output only (output contains all needed state)
+        session.upsert_run(output)
+        
+        if self.debug:
+            step_info = ""
+            if output.requirements:
+                unresolved = [r for r in output.requirements if not r.is_resolved]
+                if unresolved:
+                    # Get step info from output's paused step
+                    paused_step = output.get_paused_step()
+                    if paused_step:
+                        step_info = f" at step {paused_step.step_number} ({paused_step.name})"
+            info_log(f"Checkpoint saved for run {output.run_id}{step_info}", "Memory")
+    
+    async def _save_completed_run(
+        self,
+        session: AgentSession,
+        output: "AgentRunOutput",
+    ) -> None:
+        """
+        Save completed run and process memory features.
+        
+        This is called when the run has completed successfully.
+        Processes all enabled memory features (summary, user profile, etc.).
+        """
+        from upsonic.utils.printing import warning_log
+        
+        if self.debug:
+            info_log("Saving completed run...", "Memory")
+        
+        # Populate session_data and agent_data from run output
+        session.populate_from_run_output(output)
+        
+        # Upsert run (output contains all needed state)
+        session.upsert_run(output)
+        
+        if self.debug:
+            info_log(f"Added run output to session (total runs: {len(session.runs or [])})", "Memory")
+        
+        # Generate summary if enabled
+        if self.summary_memory_enabled:
+            if not self.model:
+                warning_log("Summary memory is enabled but no model is configured. Skipping summary generation.", "Memory")
+            else:
+                try:
+                    if self.debug:
+                        info_log("Generating new session summary...", "Memory")
+                    session.summary = await self._generate_new_summary(session, output)
+                    if self.debug:
+                        info_log(f"Summary generated ({len(session.summary) if session.summary else 0} chars)", "Memory")
+                except Exception as e:
+                    warning_log(f"Failed to generate session summary: {e}", "Memory")
+        
+        # Flatten messages if full_session_memory enabled
+        if self.full_session_memory_enabled:
+            session.messages = session.flatten_messages_from_runs_all()
+            if self.debug:
+                info_log(f"Flattened {len(session.messages)} messages from {len(session.runs or [])} runs", "Memory")
+        
+        # Update user profile if enabled
+        if self.user_analysis_memory_enabled:
+            if not self.model:
+                warning_log("User analysis memory is enabled but no model is configured. Skipping user profile analysis.", "Memory")
+            else:
+                try:
+                    updated_traits = await self._analyze_interaction_for_traits(session, output)
+                    
+                    if self.debug:
+                        info_log(f"Extracted traits: {updated_traits}", "Memory")
+                    
+                    if self.user_memory_mode == 'replace':
+                        session.user_profile = updated_traits
+                        if self.debug:
+                            info_log(f"Replaced user profile with {len(updated_traits)} traits", "Memory")
+                    elif self.user_memory_mode == 'update':
+                        if not session.user_profile:
+                            session.user_profile = {}
+                        before_count = len(session.user_profile)
+                        session.user_profile.update(updated_traits)
+                        if self.debug:
+                            info_log(f"Updated user profile: {before_count} -> {len(session.user_profile)} traits", "Memory")
+                except Exception as e:
+                    warning_log(f"Failed to analyze user profile: {e}", "Memory")
+    
+    def save_session(
+        self,
+        output: "AgentRunOutput",
+        agent_id: Optional[str] = None,
+    ) -> None:
+        """Synchronous version of save_session_async."""
+        self._run_sync(self.save_session_async(output, agent_id))
+    
+    async def load_resumable_run_async(
+        self,
+        run_id: str,
+        agent_id: Optional[str] = None,
+    ) -> Optional["RunData"]:
+        """
+        Load a resumable run from storage by run_id.
+        
+        Resumable runs include:
+        - paused: External tool execution pause
+        - error: Durable execution (error recovery)
+        - cancelled: Cancel run resumption
+        
+        Args:
+            run_id: The run ID to search for
+            agent_id: Optional agent_id to search across all agent's sessions
+            
+        Returns:
+            RunData if found and resumable, None otherwise
+        """
+        from upsonic.run.base import RunStatus
+        from upsonic.utils.printing import debug_log_level2
+        
+        # Resumable statuses: paused (external tool), error (durable), cancelled
+        resumable_statuses = {RunStatus.paused, RunStatus.error, RunStatus.cancelled}
+        
+        if self.debug:
+            debug_log_level2(
+                f"Searching for run_id {run_id}",
+                "Memory.load_resumable_run_async",
+                debug=self.debug,
+                debug_level=self.debug_level,
+                session_id=self.session_id,
+                agent_id=agent_id
+            )
+        
+        # Try to find in current session first
+        if self.session_id:
+            session = await self.storage.read_async(self.session_id, AgentSession)
+            if session and session.runs:
+                if self.debug:
+                    debug_log_level2(
+                        f"Found session with {len(session.runs)} runs",
+                        "Memory.load_resumable_run_async",
+                        debug=self.debug,
+                        debug_level=self.debug_level,
+                        run_ids=list(session.runs.keys())
+                    )
+                if run_id in session.runs:
+                    run_data = session.runs[run_id]
+                    if run_data.output and run_data.output.status in resumable_statuses:
+                        return run_data
+        
+        # Search all sessions for this agent if agent_id provided
+        if agent_id and hasattr(self.storage, 'list_agent_sessions_async'):
+            sessions = await self.storage.list_agent_sessions_async(agent_id=agent_id)
+            for session in sessions:
+                if session.runs and run_id in session.runs:
+                    run_data = session.runs[run_id]
+                    if run_data.output and run_data.output.status in resumable_statuses:
+                        return run_data
+        
+        return None
+    
+    def load_resumable_run(
+        self,
+        run_id: str,
+        agent_id: Optional[str] = None,
+    ) -> Optional["RunData"]:
+        """Synchronous version of load_resumable_run_async."""
+        return self._run_sync(self.load_resumable_run_async(run_id, agent_id))
+
+    async def load_run_async(
+        self,
+        run_id: str,
+        agent_id: Optional[str] = None,
+    ) -> Optional["RunData"]:
+        """
+        Load a run from storage by run_id (regardless of status).
+        
+        Unlike load_resumable_run_async, this returns any run regardless of status.
+        Used for checking if a run is completed before attempting to continue.
+        
+        Args:
+            run_id: The run ID to search for
+            agent_id: Optional agent_id to search across all agent's sessions
+            
+        Returns:
+            RunData if found, None otherwise
+        """
+        from upsonic.utils.printing import debug_log_level2
+        
+        if self.debug:
+            debug_log_level2(
+                f"Loading run {run_id}",
+                "Memory.load_run_async",
+                debug=self.debug,
+                debug_level=self.debug_level,
+                session_id=self.session_id,
+                agent_id=agent_id
+            )
+        
+        # Try to find in current session first
+        if self.session_id:
+            session = await self.storage.read_async(self.session_id, AgentSession)
+            if session and session.runs and run_id in session.runs:
+                return session.runs[run_id]
+        
+        # Search all sessions for this agent if agent_id provided
+        if agent_id and hasattr(self.storage, 'list_agent_sessions_async'):
+            sessions = await self.storage.list_agent_sessions_async(agent_id=agent_id)
+            for session in sessions:
+                if session.runs and run_id in session.runs:
+                    return session.runs[run_id]
+        
+        return None
+    
+    def load_run(
+        self,
+        run_id: str,
+        agent_id: Optional[str] = None,
+    ) -> Optional["RunData"]:
+        """Synchronous version of load_run_async."""
+        return self._run_sync(self.load_run_async(run_id, agent_id))
+
     

@@ -13,7 +13,6 @@ import os
 from upsonic import Agent, Task
 from upsonic.tools import tool
 from upsonic.db.database import SqliteDatabase
-from upsonic.session.agent import AgentSession
 
 
 def cleanup_db():
@@ -151,7 +150,47 @@ async def external_direct_call_with_task_same_agent():
 
 
 # ============================================================================
-# VARIANT 2: Direct Call with run_id - New Agent (Cross-process resumption)
+# VARIANT 2A: Direct Call with task - New Agent (Cross-process resumption)
+# ============================================================================
+
+async def external_direct_call_with_task_new_agent():
+    """
+    Direct call mode with external tool using task and new agent instance.
+    
+    Simulates cross-process resumption where a new agent instance uses
+    the task object for continuation (in-memory context).
+    
+    Note: This uses task parameter, so it relies on in-memory context.
+    For true cross-process, use run_id variant instead.
+    """
+    cleanup_db()
+    db = SqliteDatabase(db_file="external.db", session_id="session_1", user_id="user_1")
+    agent = Agent("openai/gpt-4o-mini", name="external_tool_agent", db=db)
+    task = Task(
+        description="Send an email to test@example.com with subject 'Hello' and body 'Test message'.",
+        tools=[send_email]
+    )
+    
+    output = await agent.do_async(task, return_output=True)
+    
+    for requirement in output.active_requirements:
+        if requirement.is_external_tool_execution:
+            result = execute_tool_externally(requirement)
+            requirement.tool_execution.result = result
+    
+    # New agent uses task for continuation
+    # Pass requirements (with results) so new agent can inject them into loaded state
+    new_agent = Agent("openai/gpt-4o-mini", name="external_tool_agent", db=db)
+    result = await new_agent.continue_run_async(
+        task=task, 
+        requirements=output.requirements,
+        return_output=True
+    )
+    return result
+
+
+# ============================================================================
+# VARIANT 2B: Direct Call with run_id - New Agent (Cross-process resumption)
 # ============================================================================
 
 async def external_direct_call_with_run_id_new_agent():
@@ -160,12 +199,6 @@ async def external_direct_call_with_run_id_new_agent():
     
     Simulates cross-process resumption where a new agent instance loads
     the paused run from storage using run_id.
-    
-    IMPORTANT: When using a new agent, you must:
-    1. Load the session from storage
-    2. Set tool results on the requirements from storage (not in-memory)
-    3. Save the session back to storage
-    4. Then the new agent can load and resume
     """
     cleanup_db()
     db = SqliteDatabase(db_file="external.db", session_id="session_1", user_id="user_1")
@@ -178,27 +211,56 @@ async def external_direct_call_with_run_id_new_agent():
     output = await agent.do_async(task, return_output=True)
     run_id = output.run_id
     
-    # CRITICAL: Load session from storage and set results on STORAGE requirements
-    session = await db.storage.read_async("session_1", AgentSession)
-    if session and session.runs and run_id in session.runs:
-        run_data = session.runs[run_id]
-        for req in run_data.context.requirements:
-            if req.is_external_tool_execution and not req.is_resolved():
-                # Execute the tool
-                result = execute_tool_externally(req)
-                req.tool_execution.result = result
-        
-        # Save the updated session back to storage
-        await db.storage.upsert_agent_session_async(session)
+    # Execute tools and set results on in-memory requirements
+    for requirement in output.active_requirements:
+        if requirement.is_external_tool_execution:
+            result = execute_tool_externally(requirement)
+            requirement.tool_execution.result = result
     
-    # New agent will load from storage with the tool result already set
+    # New agent loads from storage and injects results from passed requirements
     new_agent = Agent("openai/gpt-4o-mini", name="external_tool_agent", db=db)
-    result = await new_agent.continue_run_async(run_id=run_id, return_output=True)
+    result = await new_agent.continue_run_async(
+        run_id=run_id,
+        requirements=output.requirements,
+        return_output=True
+    )
     return result
 
 
 # ============================================================================
-# VARIANT 3: Using external_tool_executor parameter
+# VARIANT 3A: Using external_tool_executor parameter with task
+# ============================================================================
+
+async def external_with_executor_callback_task():
+    """
+    Use the external_tool_executor parameter with task parameter to handle tools automatically.
+    
+    When provided, if the agent pauses again with NEW external tool requirements,
+    the executor is called automatically for each requirement.
+    """
+    agent = Agent("openai/gpt-4o-mini", name="external_tool_agent")
+    task = Task(
+        description="Send an email to test@example.com with subject 'Hello' and body 'Test message'.",
+        tools=[send_email]
+    )
+    
+    output = await agent.do_async(task, return_output=True)
+    
+    for requirement in output.active_requirements:
+        if requirement.is_external_tool_execution:
+            result = execute_tool_externally(requirement)
+            requirement.tool_execution.result = result
+    
+    result = await agent.continue_run_async(
+        task=task, 
+        return_output=True,
+        external_tool_executor=execute_tool_externally
+    )
+    return result
+
+
+# ============================================================================
+# VARIANT 3B: Using external_tool_executor parameter with run_id
 # ============================================================================
 
 async def external_with_executor_callback():
@@ -230,7 +292,75 @@ async def external_with_executor_callback():
 
 
 # ============================================================================
-# VARIANT 4: Multiple External Tools in Single Run
+# VARIANT 4A: Multiple External Tools with task parameter
+# ============================================================================
+
+async def external_multiple_tools_direct_call_task():
+    """
+    Multiple external tools executed in a single run with task parameter.
+    
+    Uses a loop to handle sequential external tool pauses.
+    """
+    agent = Agent("openai/gpt-4o-mini", name="external_tool_agent")
+    task = Task(
+        description=(
+            "First, send an email to admin@example.com with subject 'Report' and body 'Monthly report'. "
+            "Then query the database with 'SELECT * FROM users'. "
+            "Finally, call the external API at https://api.example.com/data."
+        ),
+        tools=[send_email, execute_database_query, call_external_api]
+    )
+    
+    output = await agent.do_async(task, return_output=True)
+    
+    while output.active_requirements:
+        for requirement in output.active_requirements:
+            if requirement.is_external_tool_execution:
+                result = execute_tool_externally(requirement)
+                requirement.tool_execution.result = result
+        
+        output = await agent.continue_run_async(
+            task=task, 
+            return_output=True
+        )
+    
+    return output
+
+
+async def external_multiple_tools_with_executor_task():
+    """
+    Multiple external tools with automatic executor callback using task parameter.
+    
+    The external_tool_executor handles all subsequent tool pauses automatically.
+    """
+    agent = Agent("openai/gpt-4o-mini", name="external_tool_agent")
+    task = Task(
+        description=(
+            "First, send an email to admin@example.com with subject 'Report' and body 'Monthly report'. "
+            "Then query the database with 'SELECT * FROM users'. "
+            "Finally, call the external API at https://api.example.com/data."
+        ),
+        tools=[send_email, execute_database_query, call_external_api]
+    )
+    
+    output = await agent.do_async(task, return_output=True)
+    
+    for requirement in output.active_requirements:
+        if requirement.is_external_tool_execution:
+            result = execute_tool_externally(requirement)
+            requirement.tool_execution.result = result
+    
+    result = await agent.continue_run_async(
+        task=task, 
+        return_output=True,
+        external_tool_executor=execute_tool_externally
+    )
+    
+    return result
+
+
+# ============================================================================
+# VARIANT 4B: Multiple External Tools in Single Run with run_id
 # ============================================================================
 
 async def external_multiple_tools_direct_call():
@@ -298,17 +428,20 @@ async def external_multiple_tools_with_executor():
 
 
 # ============================================================================
-# VARIANT 5: Cross-process External Tool Handling
+# VARIANT 5A: Cross-process External Tool Handling with task
 # ============================================================================
 
-async def external_cross_process_handling():
+async def external_cross_process_handling_task():
     """
-    Pattern for handling external tools across process restarts.
+    Pattern for handling external tools across process restarts using task parameter.
     
-    Demonstrates the full flow:
+    Demonstrates the flow:
     1. Process A: do_async returns with paused status and requirements
-    2. External system executes tools and stores results to storage
-    3. Process B: Creates new agent, loads run by run_id, and continues
+    2. External system executes tools and sets results on in-memory requirements
+    3. Process B: Creates new agent, uses task object for continuation
+    
+    Note: This uses task parameter, so it relies on in-memory context.
+    For true cross-process persistence, use run_id variant instead.
     """
     cleanup_db()
     
@@ -331,26 +464,83 @@ async def external_cross_process_handling():
                 print(f"    Call ID: {req.tool_execution.tool_call_id}")
                 print(f"    Args: {req.tool_execution.tool_args}")
     
-    # STEP 2: Load from storage, set tool results, save back
-    print(f"\nExecuting external tools and saving results to storage...")
-    session = await db.storage.read_async("session_1", AgentSession)
-    if session and session.runs and run_id in session.runs:
-        run_data = session.runs[run_id]
-        for req in run_data.context.requirements:
-            if req.is_external_tool_execution and not req.is_resolved():
-                result = execute_tool_externally(req)
-                req.tool_execution.result = result
-                print(f"  Set result for {req.tool_execution.tool_name}: {result}")
-        
-        await db.storage.upsert_agent_session_async(session)
+    # STEP 2: Execute tools and set results on in-memory requirements
+    print("\nExecuting external tools and setting results...")
+    for req in output.active_requirements:
+        if req.is_external_tool_execution and not req.is_resolved:
+            tool_result = execute_tool_externally(req)
+            req.tool_execution.result = tool_result
+            print(f"  Set result for {req.tool_execution.tool_name}: {tool_result}")
+    
+    # STEP 3: New agent instance uses task for continuation (simulates Process B)
+    # Pass requirements (with results) so new agent can inject them into loaded state
+    print(f"\nCreating new agent to resume run {run_id} with task...")
+    new_db = SqliteDatabase(db_file="external.db", session_id="session_1", user_id="user_1")
+    new_agent = Agent("openai/gpt-4o-mini", name="external_tool_agent", db=new_db)
+    
+    result = await new_agent.continue_run_async(
+        task=task, 
+        requirements=output.requirements,
+        return_output=True
+    )
+    print(f"Final result: {result.output}")
+    return result
+
+
+# ============================================================================
+# VARIANT 5B: Cross-process External Tool Handling with run_id
+# ============================================================================
+
+async def external_cross_process_handling():
+    """
+    Pattern for handling external tools across process restarts.
+    
+    Demonstrates the full flow:
+    1. Process A: do_async returns with paused status and requirements
+    2. External system executes tools and sets results on in-memory requirements
+    3. Process B: Creates new agent, loads run by run_id, and continues with requirements
+    """
+    cleanup_db()
+    
+    # STEP 1: Initial run pauses for external tool
+    db = SqliteDatabase(db_file="external.db", session_id="session_1", user_id="user_1")
+    agent = Agent("openai/gpt-4o-mini", name="external_tool_agent", db=db)
+    task = Task(
+        description="Send an email to test@example.com with subject 'Test' and body 'Hello'.",
+        tools=[send_email]
+    )
+    
+    output = await agent.do_async(task, return_output=True)
+    run_id = output.run_id
+    
+    if output.is_paused and output.active_requirements:
+        print(f"Run {run_id} paused for external tools:")
+        for req in output.active_requirements:
+            if req.tool_execution:
+                print(f"  - Tool: {req.tool_execution.tool_name}")
+                print(f"    Call ID: {req.tool_execution.tool_call_id}")
+                print(f"    Args: {req.tool_execution.tool_args}")
+    
+    # STEP 2: Execute tools and set results on in-memory requirements
+    print("\nExecuting external tools and setting results...")
+    for req in output.active_requirements:
+        if req.is_external_tool_execution and not req.is_resolved:
+            tool_result = execute_tool_externally(req)
+            req.tool_execution.result = tool_result
+            print(f"  Set result for {req.tool_execution.tool_name}: {tool_result}")
     
     # STEP 3: New agent instance resumes from storage (simulates Process B)
+    # Pass requirements (with results) so new agent can inject them into loaded state
     print(f"\nCreating new agent to resume run {run_id}...")
     new_db = SqliteDatabase(db_file="external.db", session_id="session_1", user_id="user_1")
     new_agent = Agent("openai/gpt-4o-mini", name="external_tool_agent", db=new_db)
     
-    result = await new_agent.continue_run_async(run_id=run_id, return_output=True)
-    print(f"Final result: {result.content}")
+    result = await new_agent.continue_run_async(
+        run_id=run_id,
+        requirements=output.requirements,
+        return_output=True
+    )
+    print(f"Final result: {result.output}")
     return result
 
 
@@ -379,32 +569,67 @@ async def run_all_tests():
     print("TEST 3 PASSED")
     
     print("\n" + "="*80)
-    print("TEST 4: Using external_tool_executor parameter")
+    print("TEST 3A: Direct Call with task - New Agent (Cross-process)")
+    print("="*80)
+    result = await external_direct_call_with_task_new_agent()
+    assert result.is_complete, f"TEST 3A FAILED: Expected complete, got {result.status}"
+    print("TEST 3A PASSED")
+    
+    print("\n" + "="*80)
+    print("TEST 4: Using external_tool_executor parameter with run_id")
     print("="*80)
     result = await external_with_executor_callback()
     assert result.is_complete, f"TEST 4 FAILED: Expected complete, got {result.status}"
     print("TEST 4 PASSED")
     
     print("\n" + "="*80)
-    print("TEST 5: Multiple External Tools - Direct Call")
+    print("TEST 4A: Using external_tool_executor parameter with task")
+    print("="*80)
+    result = await external_with_executor_callback_task()
+    assert result.is_complete, f"TEST 4A FAILED: Expected complete, got {result.status}"
+    print("TEST 4A PASSED")
+    
+    print("\n" + "="*80)
+    print("TEST 5: Multiple External Tools - Direct Call with run_id")
     print("="*80)
     result = await external_multiple_tools_direct_call()
     assert result.is_complete, f"TEST 5 FAILED: Expected complete, got {result.status}"
     print("TEST 5 PASSED")
     
     print("\n" + "="*80)
-    print("TEST 6: Multiple External Tools - With Executor")
+    print("TEST 5A: Multiple External Tools - Direct Call with task")
+    print("="*80)
+    result = await external_multiple_tools_direct_call_task()
+    assert result.is_complete, f"TEST 5A FAILED: Expected complete, got {result.status}"
+    print("TEST 5A PASSED")
+    
+    print("\n" + "="*80)
+    print("TEST 6: Multiple External Tools - With Executor (run_id)")
     print("="*80)
     result = await external_multiple_tools_with_executor()
     assert result.is_complete, f"TEST 6 FAILED: Expected complete, got {result.status}"
     print("TEST 6 PASSED")
     
     print("\n" + "="*80)
-    print("TEST 7: Cross-process External Tool Handling")
+    print("TEST 6A: Multiple External Tools - With Executor (task)")
+    print("="*80)
+    result = await external_multiple_tools_with_executor_task()
+    assert result.is_complete, f"TEST 6A FAILED: Expected complete, got {result.status}"
+    print("TEST 6A PASSED")
+    
+    print("\n" + "="*80)
+    print("TEST 7: Cross-process External Tool Handling (run_id)")
     print("="*80)
     result = await external_cross_process_handling()
     assert result.is_complete, f"TEST 7 FAILED: Expected complete, got {result.status}"
     print("TEST 7 PASSED")
+    
+    print("\n" + "="*80)
+    print("TEST 7A: Cross-process External Tool Handling (task)")
+    print("="*80)
+    result = await external_cross_process_handling_task()
+    assert result.is_complete, f"TEST 7A FAILED: Expected complete, got {result.status}"
+    print("TEST 7A PASSED")
     
     # Cleanup
     cleanup_db()

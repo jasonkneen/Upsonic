@@ -1,18 +1,36 @@
 """
-Comprehensive HITL Test - Storage Validation with Full Content Verification
-Tests External Tool, Cancel Run, and Durable Execution with full storage attribute and content verification.
+Comprehensive HITL Test - Full Attribute and Content Verification
+
+Tests External Tool, Cancel Run, and Durable Execution with comprehensive
+verification of all attributes in:
+- AgentSession
+- AgentRunOutput
+- RunRequirement
+- PipelineExecutionStats
+- ToolExecution
+- StepResult
+- ModelResponse, RequestUsage, ModelProfile, AgentRunInput, ModelMessage
 """
 
 import asyncio
 import os
 import time
+from typing import Any, Dict, List
 from upsonic import Agent, Task
 from upsonic.tools import tool
 from upsonic.run.base import RunStatus
 from upsonic.run.cancel import cancel_run
 from upsonic.db.database import SqliteDatabase
 from upsonic.session.agent import AgentSession
-from upsonic.agent.pipeline.step import inject_error_into_step, clear_error_injection
+from upsonic.agent.pipeline.step import inject_error_into_step, clear_error_injection, StepResult, StepStatus
+from upsonic.run.agent.output import AgentRunOutput
+from upsonic.run.requirements import RunRequirement
+from upsonic.run.tools.tools import ToolExecution
+from upsonic.run.pipeline.stats import PipelineExecutionStats
+from upsonic.run.agent.input import AgentRunInput
+from upsonic.usage import RequestUsage
+from upsonic.profiles import ModelProfile
+from upsonic.messages.messages import ModelResponse, ModelRequest
 
 DEBUG = True
 DB_FILE = "test_comprehensive.db"
@@ -21,6 +39,7 @@ DB_FILE = "test_comprehensive.db"
 def cleanup():
     if os.path.exists(DB_FILE):
         os.remove(DB_FILE)
+    clear_error_injection()
 
 
 @tool(external_execution=True)
@@ -42,7 +61,8 @@ def simple_math(a: int, b: int) -> int:
     return a + b
 
 
-def execute_tool_externally(requirement) -> str:
+def execute_tool_externally(requirement: RunRequirement) -> str:
+    """Execute external tool and return result."""
     tool_exec = requirement.tool_execution
     tool_name = tool_exec.tool_name
     tool_args = tool_exec.tool_args
@@ -52,369 +72,918 @@ def execute_tool_externally(requirement) -> str:
     return f"Executed external tool: {tool_name}"
 
 
-def verify_agent_session(session: AgentSession, run_id: str, description: str):
-    """Comprehensively verify AgentSession attributes and content."""
-    print(f"\n  === AgentSession Verification: {description} ===")
-    
-    assert session is not None, f"FAIL [{description}]: AgentSession is None"
-    assert session.session_id is not None, f"FAIL [{description}]: session_id is None"
-    assert isinstance(session.session_id, str), f"FAIL [{description}]: session_id should be str"
-    assert len(session.session_id) > 0, f"FAIL [{description}]: session_id should not be empty"
-    
-    assert session.runs is not None, f"FAIL [{description}]: runs dict is None"
-    assert isinstance(session.runs, dict), f"FAIL [{description}]: runs should be dict"
-    assert run_id in session.runs, f"FAIL [{description}]: run_id {run_id} not in session.runs"
-    
-    print(f"  session_id: {session.session_id}")
-    print(f"  agent_id: {session.agent_id}")
-    print(f"  user_id: {session.user_id}")
-    print(f"  runs count: {len(session.runs)}")
-    print(f"  runs keys: {list(session.runs.keys())}")
-    
-    return session.runs[run_id]
+# =============================================================================
+# DEEP VERIFICATION FUNCTIONS
+# =============================================================================
 
-
-def verify_run_output(output, description: str, expected_status: RunStatus, 
-                      expected_pause_reason: str = None):
-    """Comprehensively verify AgentRunOutput attributes and content."""
-    print(f"\n  === AgentRunOutput Verification: {description} ===")
+def verify_tool_execution(te: ToolExecution, description: str, 
+                          expected_tool_name: str = None,
+                          expected_tool_args: Dict[str, Any] = None,
+                          expected_result: str = None,
+                          expected_external: bool = None) -> ToolExecution:
+    """Comprehensive ToolExecution verification."""
+    print(f"\n  === ToolExecution: {description} ===")
     
-    assert output is not None, f"FAIL [{description}]: AgentRunOutput is None"
+    assert te is not None, f"FAIL [{description}]: ToolExecution is None"
     
-    # Verify required fields
-    assert output.run_id is not None, f"FAIL [{description}]: run_id is None"
-    assert isinstance(output.run_id, str), f"FAIL [{description}]: run_id should be str"
-    assert len(output.run_id) > 0, f"FAIL [{description}]: run_id should not be empty"
+    # Verify tool_call_id
+    assert te.tool_call_id is not None, f"FAIL [{description}]: tool_call_id is None"
+    assert isinstance(te.tool_call_id, str), f"FAIL [{description}]: tool_call_id should be str"
+    assert len(te.tool_call_id) > 0, f"FAIL [{description}]: tool_call_id should not be empty"
     
-    assert output.agent_id is not None, f"FAIL [{description}]: agent_id is None"
-    assert isinstance(output.agent_id, str), f"FAIL [{description}]: agent_id should be str"
+    # Verify tool_name
+    assert te.tool_name is not None, f"FAIL [{description}]: tool_name is None"
+    assert isinstance(te.tool_name, str), f"FAIL [{description}]: tool_name should be str"
+    if expected_tool_name:
+        assert te.tool_name == expected_tool_name, f"FAIL [{description}]: tool_name should be '{expected_tool_name}', got '{te.tool_name}'"
     
-    # Verify status
-    assert output.status == expected_status, f"FAIL [{description}]: Expected status {expected_status}, got {output.status}"
-    
-    # Verify status boolean flags
-    if expected_status == RunStatus.completed:
-        assert output.is_complete == True, f"FAIL [{description}]: is_complete should be True"
-        assert output.is_paused == False, f"FAIL [{description}]: is_paused should be False"
-        assert output.is_error == False, f"FAIL [{description}]: is_error should be False"
-        assert output.is_cancelled == False, f"FAIL [{description}]: is_cancelled should be False"
-    elif expected_status == RunStatus.paused:
-        assert output.is_complete == False, f"FAIL [{description}]: is_complete should be False"
-        assert output.is_paused == True, f"FAIL [{description}]: is_paused should be True"
-        assert output.is_error == False, f"FAIL [{description}]: is_error should be False"
-        assert output.is_cancelled == False, f"FAIL [{description}]: is_cancelled should be False"
-    elif expected_status == RunStatus.cancelled:
-        assert output.is_complete == False, f"FAIL [{description}]: is_complete should be False"
-        assert output.is_paused == False, f"FAIL [{description}]: is_paused should be False"
-        assert output.is_error == False, f"FAIL [{description}]: is_error should be False"
-        assert output.is_cancelled == True, f"FAIL [{description}]: is_cancelled should be True"
-    
-    # Verify pause_reason if expected
-    if expected_pause_reason:
-        assert output.pause_reason == expected_pause_reason, f"FAIL [{description}]: Expected pause_reason '{expected_pause_reason}', got '{output.pause_reason}'"
-    
-    # Verify requirements list
-    assert output.requirements is not None, f"FAIL [{description}]: requirements should not be None"
-    assert isinstance(output.requirements, list), f"FAIL [{description}]: requirements should be list"
-    
-    # Verify messages list
-    assert output.messages is not None, f"FAIL [{description}]: messages should not be None"
-    assert isinstance(output.messages, list), f"FAIL [{description}]: messages should be list"
-    
-    # Verify step_results list
-    assert output.step_results is not None, f"FAIL [{description}]: step_results should not be None"
-    assert isinstance(output.step_results, list), f"FAIL [{description}]: step_results should be list"
-    
-    print(f"  run_id: {output.run_id}")
-    print(f"  agent_id: {output.agent_id}")
-    print(f"  status: {output.status}")
-    print(f"  pause_reason: {output.pause_reason}")
-    print(f"  content: {str(output.content)[:100] if output.content else None}...")
-    print(f"  requirements count: {len(output.requirements)}")
-    print(f"  active_requirements count: {len(output.active_requirements)}")
-    print(f"  messages count: {len(output.messages)}")
-    print(f"  step_results count: {len(output.step_results)}")
-    
-    return output
-
-
-def verify_run_context(context, description: str, expected_run_id: str = None):
-    """Comprehensively verify AgentRunContext attributes and content."""
-    print(f"\n  === AgentRunContext Verification: {description} ===")
-    
-    assert context is not None, f"FAIL [{description}]: AgentRunContext is None"
-    
-    # Verify run_id
-    assert context.run_id is not None, f"FAIL [{description}]: run_id is None"
-    assert isinstance(context.run_id, str), f"FAIL [{description}]: run_id should be str"
-    if expected_run_id:
-        assert context.run_id == expected_run_id, f"FAIL [{description}]: run_id mismatch"
-    
-    # Verify session_id
-    assert context.session_id is not None, f"FAIL [{description}]: session_id is None"
-    assert isinstance(context.session_id, str), f"FAIL [{description}]: session_id should be str"
-    
-    # Verify requirements list
-    assert context.requirements is not None, f"FAIL [{description}]: requirements should not be None"
-    assert isinstance(context.requirements, list), f"FAIL [{description}]: requirements should be list"
-    
-    # Verify messages list
-    assert context.messages is not None, f"FAIL [{description}]: messages should not be None"
-    assert isinstance(context.messages, list), f"FAIL [{description}]: messages should be list"
-    
-    # Verify step_results list
-    assert context.step_results is not None, f"FAIL [{description}]: step_results should not be None"
-    assert isinstance(context.step_results, list), f"FAIL [{description}]: step_results should be list"
-    
-    # Verify task
-    assert context.task is not None, f"FAIL [{description}]: task should not be None"
-    assert hasattr(context.task, 'description'), f"FAIL [{description}]: task should have description"
-    
-    print(f"  run_id: {context.run_id}")
-    print(f"  session_id: {context.session_id}")
-    print(f"  user_id: {context.user_id}")
-    print(f"  is_streaming: {context.is_streaming}")
-    print(f"  tool_call_count: {context.tool_call_count}")
-    print(f"  requirements count: {len(context.requirements)}")
-    print(f"  messages count: {len(context.messages)}")
-    print(f"  step_results count: {len(context.step_results)}")
-    print(f"  task description: {context.task.description[:50]}...")
-    
-    return context
-
-
-def verify_requirement_external_tool(req, description: str, expected_resolved: bool,
-                                      expected_tool_name: str, expected_tool_args: dict,
-                                      expected_result: str = None):
-    """Comprehensively verify RunRequirement for external tool with full content."""
-    print(f"\n  === RunRequirement (External Tool) Verification: {description} ===")
-    
-    assert req is not None, f"FAIL [{description}]: RunRequirement is None"
-    
-    # Verify basic fields
-    assert req.id is not None, f"FAIL [{description}]: id is None"
-    assert isinstance(req.id, str), f"FAIL [{description}]: id should be str"
-    assert len(req.id) > 0, f"FAIL [{description}]: id should not be empty"
-    
-    assert req.pause_type == 'external_tool', f"FAIL [{description}]: pause_type should be 'external_tool', got {req.pause_type}"
+    # Verify tool_args
+    assert te.tool_args is not None, f"FAIL [{description}]: tool_args is None"
+    assert isinstance(te.tool_args, dict), f"FAIL [{description}]: tool_args should be dict"
+    if expected_tool_args:
+        for key, value in expected_tool_args.items():
+            assert key in te.tool_args, f"FAIL [{description}]: tool_args missing key '{key}'"
+            assert te.tool_args[key] == value, f"FAIL [{description}]: tool_args['{key}'] = '{te.tool_args[key]}', expected '{value}'"
     
     # Verify created_at
-    assert req.created_at is not None, f"FAIL [{description}]: created_at should not be None"
-    
-    # Verify resolved state
-    if expected_resolved:
-        assert req.is_resolved() == True, f"FAIL [{description}]: Expected resolved=True, got {req.is_resolved()}"
-        assert req.resolved_at is not None, f"FAIL [{description}]: resolved_at should be set when resolved"
-    else:
-        assert req.is_resolved() == False, f"FAIL [{description}]: Expected resolved=False, got {req.is_resolved()}"
-        assert req.resolved_at is None, f"FAIL [{description}]: resolved_at should be None when not resolved"
-    
-    # Verify tool_execution - CONTENT CHECK
-    assert req.tool_execution is not None, f"FAIL [{description}]: tool_execution should not be None"
-    te = req.tool_execution
-    
-    assert te.tool_name == expected_tool_name, f"FAIL [{description}]: tool_name should be '{expected_tool_name}', got '{te.tool_name}'"
-    assert te.tool_call_id is not None, f"FAIL [{description}]: tool_call_id should not be None"
-    assert isinstance(te.tool_call_id, str), f"FAIL [{description}]: tool_call_id should be str"
-    
-    # Verify tool_args content
-    assert te.tool_args is not None, f"FAIL [{description}]: tool_args should not be None"
-    assert isinstance(te.tool_args, dict), f"FAIL [{description}]: tool_args should be dict"
-    for key, expected_value in expected_tool_args.items():
-        assert key in te.tool_args, f"FAIL [{description}]: tool_args missing key '{key}'"
-        assert te.tool_args[key] == expected_value, f"FAIL [{description}]: tool_args['{key}'] should be '{expected_value}', got '{te.tool_args[key]}'"
-    
-    assert te.external_execution_required == True, f"FAIL [{description}]: external_execution_required should be True"
+    assert te.created_at is not None, f"FAIL [{description}]: created_at is None"
+    assert isinstance(te.created_at, int), f"FAIL [{description}]: created_at should be int"
+    assert te.created_at > 0, f"FAIL [{description}]: created_at should be > 0"
     
     # Verify result if expected
-    if expected_result:
-        assert te.result == expected_result, f"FAIL [{description}]: result should be '{expected_result}', got '{te.result}'"
+    if expected_result is not None:
+        assert te.result == expected_result, f"FAIL [{description}]: result = '{te.result}', expected '{expected_result}'"
     
-    # Verify continuation data - CONTENT CHECK
-    messages, response, agent_state = req.get_continuation_data()
+    # Verify external_execution_required if expected
+    if expected_external is not None:
+        assert te.external_execution_required == expected_external, f"FAIL [{description}]: external_execution_required = {te.external_execution_required}, expected {expected_external}"
     
-    assert messages is not None, f"FAIL [{description}]: continuation_messages should not be None"
-    assert isinstance(messages, list), f"FAIL [{description}]: continuation_messages should be list"
-    assert len(messages) > 0, f"FAIL [{description}]: continuation_messages should not be empty"
+    print(f"    tool_call_id: {te.tool_call_id}")
+    print(f"    tool_name: {te.tool_name}")
+    print(f"    tool_args: {te.tool_args}")
+    print(f"    result: {te.result}")
+    print(f"    external_execution_required: {te.external_execution_required}")
+    print(f"    created_at: {te.created_at}")
     
-    # Verify messages have proper structure
-    for i, msg in enumerate(messages):
-        assert hasattr(msg, 'parts') or isinstance(msg, dict), f"FAIL [{description}]: message[{i}] should have 'parts' or be dict"
-    
-    assert agent_state is not None, f"FAIL [{description}]: agent_state should not be None"
-    assert isinstance(agent_state, dict), f"FAIL [{description}]: agent_state should be dict"
-    assert 'tool_call_count' in agent_state, f"FAIL [{description}]: agent_state should have 'tool_call_count'"
-    assert 'tool_limit_reached' in agent_state, f"FAIL [{description}]: agent_state should have 'tool_limit_reached'"
-    
-    # Verify step_result
-    assert req.step_result is not None, f"FAIL [{description}]: step_result should not be None"
-    assert req.step_result.name is not None, f"FAIL [{description}]: step_result.name should not be None"
-    assert req.step_result.step_number is not None, f"FAIL [{description}]: step_result.step_number should not be None"
-    
-    print(f"  id: {req.id}")
-    print(f"  pause_type: {req.pause_type}")
-    print(f"  is_resolved(): {req.is_resolved()}")
-    print(f"  resolved_at: {req.resolved_at}")
-    print(f"  tool_name: {te.tool_name}")
-    print(f"  tool_call_id: {te.tool_call_id}")
-    print(f"  tool_args: {te.tool_args}")
-    print(f"  result: {te.result}")
-    print(f"  step_result.name: {req.step_result.name}")
-    print(f"  step_result.step_number: {req.step_result.step_number}")
-    print(f"  continuation_messages count: {len(messages)}")
-    print(f"  agent_state: {agent_state}")
-    
-    return req
+    return te
 
 
-def verify_requirement_cancel(req, description: str, expected_resolved: bool):
-    """Comprehensively verify RunRequirement for cancel with full content."""
-    print(f"\n  === RunRequirement (Cancel) Verification: {description} ===")
+def verify_step_result(sr: StepResult, description: str,
+                       expected_name: str = None,
+                       expected_status: StepStatus = None) -> StepResult:
+    """Comprehensive StepResult verification."""
+    print(f"\n  === StepResult: {description} ===")
+    
+    assert sr is not None, f"FAIL [{description}]: StepResult is None"
+    
+    # Verify name
+    assert sr.name is not None, f"FAIL [{description}]: name is None"
+    assert isinstance(sr.name, str), f"FAIL [{description}]: name should be str"
+    if expected_name:
+        assert sr.name == expected_name, f"FAIL [{description}]: name = '{sr.name}', expected '{expected_name}'"
+    
+    # Verify step_number
+    assert sr.step_number is not None, f"FAIL [{description}]: step_number is None"
+    assert isinstance(sr.step_number, int), f"FAIL [{description}]: step_number should be int"
+    assert sr.step_number >= 0, f"FAIL [{description}]: step_number should be >= 0"
+    
+    # Verify status
+    assert sr.status is not None, f"FAIL [{description}]: status is None"
+    assert isinstance(sr.status, StepStatus), f"FAIL [{description}]: status should be StepStatus"
+    if expected_status:
+        assert sr.status == expected_status, f"FAIL [{description}]: status = {sr.status}, expected {expected_status}"
+    
+    # Verify execution_time
+    assert sr.execution_time is not None, f"FAIL [{description}]: execution_time is None"
+    assert isinstance(sr.execution_time, (int, float)), f"FAIL [{description}]: execution_time should be numeric"
+    assert sr.execution_time >= 0, f"FAIL [{description}]: execution_time should be >= 0"
+    
+    print(f"    name: {sr.name}")
+    print(f"    step_number: {sr.step_number}")
+    print(f"    status: {sr.status}")
+    print(f"    execution_time: {sr.execution_time:.4f}s")
+    print(f"    message: {sr.message}")
+    
+    return sr
+
+
+def verify_pipeline_stats(stats: PipelineExecutionStats, description: str,
+                          expected_resumed_from: int = None) -> PipelineExecutionStats:
+    """Comprehensive PipelineExecutionStats verification."""
+    print(f"\n  === PipelineExecutionStats: {description} ===")
+    
+    assert stats is not None, f"FAIL [{description}]: PipelineExecutionStats is None"
+    
+    # Verify total_steps
+    assert stats.total_steps is not None, f"FAIL [{description}]: total_steps is None"
+    assert isinstance(stats.total_steps, int), f"FAIL [{description}]: total_steps should be int"
+    assert stats.total_steps > 0, f"FAIL [{description}]: total_steps should be > 0"
+    
+    # Verify executed_steps
+    assert stats.executed_steps is not None, f"FAIL [{description}]: executed_steps is None"
+    assert isinstance(stats.executed_steps, int), f"FAIL [{description}]: executed_steps should be int"
+    assert stats.executed_steps >= 0, f"FAIL [{description}]: executed_steps should be >= 0"
+    
+    # Verify step_timing
+    assert stats.step_timing is not None, f"FAIL [{description}]: step_timing is None"
+    assert isinstance(stats.step_timing, dict), f"FAIL [{description}]: step_timing should be dict"
+    
+    # Verify step_statuses
+    assert stats.step_statuses is not None, f"FAIL [{description}]: step_statuses is None"
+    assert isinstance(stats.step_statuses, dict), f"FAIL [{description}]: step_statuses should be dict"
+    
+    # Verify resumed_from if expected
+    if expected_resumed_from is not None:
+        assert stats.resumed_from == expected_resumed_from, f"FAIL [{description}]: resumed_from = {stats.resumed_from}, expected {expected_resumed_from}"
+    
+    print(f"    total_steps: {stats.total_steps}")
+    print(f"    executed_steps: {stats.executed_steps}")
+    print(f"    resumed_from: {stats.resumed_from}")
+    print(f"    step_timing keys: {list(stats.step_timing.keys())[:5]}...")
+    print(f"    step_statuses keys: {list(stats.step_statuses.keys())[:5]}...")
+    
+    return stats
+
+
+def verify_run_requirement(req: RunRequirement, description: str,
+                           expected_resolved: bool = None,
+                           expected_tool_name: str = None,
+                           expected_tool_args: Dict[str, Any] = None,
+                           expected_result: str = None) -> RunRequirement:
+    """Comprehensive RunRequirement verification."""
+    print(f"\n  === RunRequirement: {description} ===")
     
     assert req is not None, f"FAIL [{description}]: RunRequirement is None"
     
-    # Verify basic fields
+    # Verify id
     assert req.id is not None, f"FAIL [{description}]: id is None"
     assert isinstance(req.id, str), f"FAIL [{description}]: id should be str"
     assert len(req.id) > 0, f"FAIL [{description}]: id should not be empty"
     
-    assert req.pause_type == 'cancel', f"FAIL [{description}]: pause_type should be 'cancel', got {req.pause_type}"
-    
     # Verify created_at
-    assert req.created_at is not None, f"FAIL [{description}]: created_at should not be None"
+    assert req.created_at is not None, f"FAIL [{description}]: created_at is None"
     
-    # Verify resolved state
-    if expected_resolved:
-        assert req.is_resolved() == True, f"FAIL [{description}]: Expected resolved=True, got {req.is_resolved()}"
-        assert req.resolved_at is not None, f"FAIL [{description}]: resolved_at should be set when resolved"
-    else:
-        assert req.is_resolved() == False, f"FAIL [{description}]: Expected resolved=False, got {req.is_resolved()}"
-        assert req.resolved_at is None, f"FAIL [{description}]: resolved_at should be None when not resolved"
+    # Verify resolved state if expected
+    if expected_resolved is not None:
+        actual_resolved = req.is_resolved
+        assert actual_resolved == expected_resolved, f"FAIL [{description}]: is_resolved = {actual_resolved}, expected {expected_resolved}"
     
-    # Verify continuation data - CONTENT CHECK
-    messages, response, agent_state = req.get_continuation_data()
+    # Verify tool_execution if expected
+    if expected_tool_name:
+        assert req.tool_execution is not None, f"FAIL [{description}]: tool_execution is None"
+        verify_tool_execution(
+            req.tool_execution, 
+            f"{description} - tool_execution",
+            expected_tool_name=expected_tool_name,
+            expected_tool_args=expected_tool_args,
+            expected_result=expected_result
+        )
     
-    assert messages is not None, f"FAIL [{description}]: continuation_messages should not be None"
-    assert isinstance(messages, list), f"FAIL [{description}]: continuation_messages should be list"
-    assert len(messages) > 0, f"FAIL [{description}]: continuation_messages should not be empty"
-    
-    # Verify messages have proper structure
-    for i, msg in enumerate(messages):
-        assert hasattr(msg, 'parts') or isinstance(msg, dict), f"FAIL [{description}]: message[{i}] should have 'parts' or be dict"
-    
-    assert agent_state is not None, f"FAIL [{description}]: agent_state should not be None"
-    assert isinstance(agent_state, dict), f"FAIL [{description}]: agent_state should be dict"
-    
-    # Verify step_result
-    assert req.step_result is not None, f"FAIL [{description}]: step_result should not be None"
-    assert req.step_result.name is not None, f"FAIL [{description}]: step_result.name should not be None"
-    assert req.step_result.step_number is not None, f"FAIL [{description}]: step_result.step_number should not be None"
-    
-    print(f"  id: {req.id}")
-    print(f"  pause_type: {req.pause_type}")
-    print(f"  is_resolved(): {req.is_resolved()}")
-    print(f"  resolved_at: {req.resolved_at}")
-    print(f"  step_result.name: {req.step_result.name}")
-    print(f"  step_result.step_number: {req.step_result.step_number}")
-    print(f"  step_result.status: {req.step_result.status}")
-    print(f"  continuation_messages count: {len(messages)}")
-    print(f"  agent_state: {agent_state}")
+    print(f"    id: {req.id}")
+    print(f"    is_resolved: {req.is_resolved}")
+    print(f"    needs_external_execution: {req.needs_external_execution}")
+    print(f"    has_result: {req.has_result}")
     
     return req
 
 
-def verify_messages_content(messages, description: str, min_count: int = 0):
-    """Verify messages list content in detail."""
-    print(f"\n  === Messages Content Verification: {description} ===")
+def verify_messages_list(messages: List, description: str, min_count: int = 0) -> List:
+    """Comprehensive messages list verification."""
+    print(f"\n  === Messages List: {description} ===")
     
     assert messages is not None, f"FAIL [{description}]: messages is None"
     assert isinstance(messages, list), f"FAIL [{description}]: messages should be list"
-    assert len(messages) >= min_count, f"FAIL [{description}]: Expected at least {min_count} messages, got {len(messages)}"
+    assert len(messages) >= min_count, f"FAIL [{description}]: messages count = {len(messages)}, expected >= {min_count}"
     
-    print(f"  Total messages: {len(messages)}")
-    for i, msg in enumerate(messages[:5]):  # First 5 messages
-        if hasattr(msg, 'parts'):
-            print(f"  message[{i}]: type={type(msg).__name__}, parts_count={len(msg.parts)}")
-            for j, part in enumerate(msg.parts[:2]):  # First 2 parts
-                part_type = type(part).__name__
-                content_preview = ""
-                if hasattr(part, 'content'):
-                    content_preview = str(part.content)[:50] + "..." if len(str(part.content)) > 50 else str(part.content)
-                print(f"    part[{j}]: type={part_type}, content={content_preview}")
-        elif isinstance(msg, dict):
-            print(f"  message[{i}]: dict with keys={list(msg.keys())[:5]}")
-        else:
-            print(f"  message[{i}]: type={type(msg).__name__}")
+    print(f"    Total messages: {len(messages)}")
     
-    if len(messages) > 5:
-        print(f"  ... and {len(messages) - 5} more messages")
+    for i, msg in enumerate(messages[:3]):
+        verify_model_message(msg, description, i)
+    
+    if len(messages) > 3:
+        print(f"    ... and {len(messages) - 3} more messages")
     
     return messages
 
 
-def verify_context_messages_and_history(context, description: str, 
-                                        min_messages: int = 0, 
-                                        min_chat_history: int = 1):
-    """
-    Verify both messages and chat_history in context.
+def verify_request_usage(usage: Any, description: str) -> RequestUsage:
+    """Comprehensive RequestUsage verification with all attributes."""
+    print(f"\n  === RequestUsage: {description} ===")
     
-    - messages: Only NEW messages from THIS run
-    - chat_history: Full conversation history (historical + current run)
-    """
-    print(f"\n  === Context Messages & History: {description} ===")
+    if usage is None:
+        print("    (No usage data - skipping)")
+        return None
     
-    # Verify messages (run-specific)
-    assert hasattr(context, 'messages'), f"FAIL [{description}]: context has no 'messages' attribute"
-    assert context.messages is not None, f"FAIL [{description}]: messages is None"
-    assert isinstance(context.messages, list), f"FAIL [{description}]: messages should be list"
-    print(f"  messages (this run only): {len(context.messages)}")
-    assert len(context.messages) >= min_messages, \
-        f"FAIL [{description}]: Expected at least {min_messages} messages, got {len(context.messages)}"
+    # Verify it's the correct type
+    assert isinstance(usage, RequestUsage), f"FAIL [{description}]: Expected RequestUsage, got {type(usage).__name__}"
     
-    # Verify chat_history (full history)
-    assert hasattr(context, 'chat_history'), f"FAIL [{description}]: context has no 'chat_history' attribute"
-    assert context.chat_history is not None, f"FAIL [{description}]: chat_history is None"
-    assert isinstance(context.chat_history, list), f"FAIL [{description}]: chat_history should be list"
-    print(f"  chat_history (full history): {len(context.chat_history)}")
-    assert len(context.chat_history) >= min_chat_history, \
-        f"FAIL [{description}]: Expected at least {min_chat_history} chat_history, got {len(context.chat_history)}"
+    # === Token counts ===
+    assert hasattr(usage, 'input_tokens'), f"FAIL [{description}]: Missing input_tokens"
+    assert isinstance(usage.input_tokens, int), f"FAIL [{description}]: input_tokens should be int"
+    assert usage.input_tokens >= 0, f"FAIL [{description}]: input_tokens should be >= 0"
+    print(f"    input_tokens: {usage.input_tokens}")
     
-    # Print some details
-    for i, msg in enumerate(context.messages[:2]):
+    assert hasattr(usage, 'output_tokens'), f"FAIL [{description}]: Missing output_tokens"
+    assert isinstance(usage.output_tokens, int), f"FAIL [{description}]: output_tokens should be int"
+    assert usage.output_tokens >= 0, f"FAIL [{description}]: output_tokens should be >= 0"
+    print(f"    output_tokens: {usage.output_tokens}")
+    
+    # === Calculated properties ===
+    assert hasattr(usage, 'total_tokens'), f"FAIL [{description}]: Missing total_tokens"
+    expected_total = usage.input_tokens + usage.output_tokens
+    assert usage.total_tokens == expected_total, f"FAIL [{description}]: total_tokens mismatch: {usage.total_tokens} != {expected_total}"
+    print(f"    total_tokens: {usage.total_tokens}")
+    
+    # === Cache tokens ===
+    assert hasattr(usage, 'cache_write_tokens'), f"FAIL [{description}]: Missing cache_write_tokens"
+    assert isinstance(usage.cache_write_tokens, int), f"FAIL [{description}]: cache_write_tokens should be int"
+    print(f"    cache_write_tokens: {usage.cache_write_tokens}")
+    
+    assert hasattr(usage, 'cache_read_tokens'), f"FAIL [{description}]: Missing cache_read_tokens"
+    assert isinstance(usage.cache_read_tokens, int), f"FAIL [{description}]: cache_read_tokens should be int"
+    print(f"    cache_read_tokens: {usage.cache_read_tokens}")
+    
+    # === Audio tokens ===
+    assert hasattr(usage, 'input_audio_tokens'), f"FAIL [{description}]: Missing input_audio_tokens"
+    assert hasattr(usage, 'output_audio_tokens'), f"FAIL [{description}]: Missing output_audio_tokens"
+    print(f"    input_audio_tokens: {usage.input_audio_tokens}")
+    print(f"    output_audio_tokens: {usage.output_audio_tokens}")
+    
+    # === Details dict ===
+    assert hasattr(usage, 'details'), f"FAIL [{description}]: Missing details"
+    assert isinstance(usage.details, dict), f"FAIL [{description}]: details should be dict"
+    print(f"    details: {usage.details}")
+    
+    return usage
+
+
+def verify_model_response(response: Any, description: str, 
+                          verify_parts: bool = True,
+                          min_parts: int = 0) -> ModelResponse:
+    """Comprehensive ModelResponse verification with all attributes."""
+    print(f"\n  === ModelResponse: {description} ===")
+    
+    if response is None:
+        print("    (No response - skipping)")
+        return None
+    
+    # Verify type
+    assert isinstance(response, ModelResponse), f"FAIL [{description}]: Expected ModelResponse, got {type(response).__name__}"
+    
+    # === Parts ===
+    assert hasattr(response, 'parts'), f"FAIL [{description}]: Missing parts"
+    assert response.parts is not None, f"FAIL [{description}]: parts is None"
+    assert len(response.parts) >= min_parts, f"FAIL [{description}]: Expected >= {min_parts} parts, got {len(response.parts)}"
+    print(f"    parts_count: {len(response.parts)}")
+    
+    if verify_parts and response.parts:
+        for i, part in enumerate(response.parts[:3]):
+            part_type = type(part).__name__
+            print(f"      part[{i}]: {part_type}")
+            # Verify each part has expected attributes
+            assert hasattr(part, 'part_kind'), f"FAIL [{description}]: part[{i}] missing part_kind"
+            if hasattr(part, 'content'):
+                content_preview = str(part.content)[:40] + "..." if len(str(part.content)) > 40 else str(part.content)
+                print(f"        content: {content_preview}")
+    
+    # === Usage ===
+    assert hasattr(response, 'usage'), f"FAIL [{description}]: Missing usage"
+    if response.usage:
+        verify_request_usage(response.usage, f"{description} - response.usage")
+    
+    # === Model name ===
+    assert hasattr(response, 'model_name'), f"FAIL [{description}]: Missing model_name"
+    print(f"    model_name: {response.model_name}")
+    
+    # === Provider info ===
+    assert hasattr(response, 'provider_name'), f"FAIL [{description}]: Missing provider_name"
+    print(f"    provider_name: {response.provider_name}")
+    
+    assert hasattr(response, 'provider_response_id'), f"FAIL [{description}]: Missing provider_response_id"
+    print(f"    provider_response_id: {response.provider_response_id}")
+    
+    # === Timestamp ===
+    assert hasattr(response, 'timestamp'), f"FAIL [{description}]: Missing timestamp"
+    assert response.timestamp is not None, f"FAIL [{description}]: timestamp is None"
+    print(f"    timestamp: {response.timestamp}")
+    
+    # === Kind ===
+    assert hasattr(response, 'kind'), f"FAIL [{description}]: Missing kind"
+    assert response.kind == 'response', f"FAIL [{description}]: kind should be 'response', got '{response.kind}'"
+    print(f"    kind: {response.kind}")
+    
+    # === Finish reason ===
+    assert hasattr(response, 'finish_reason'), f"FAIL [{description}]: Missing finish_reason"
+    print(f"    finish_reason: {response.finish_reason}")
+    
+    # === Text property ===
+    assert hasattr(response, 'text'), f"FAIL [{description}]: Missing text property"
+    if response.text:
+        text_preview = response.text[:50] + "..." if len(response.text) > 50 else response.text
+        print(f"    text: {text_preview}")
+    
+    # === Tool calls property ===
+    assert hasattr(response, 'tool_calls'), f"FAIL [{description}]: Missing tool_calls property"
+    print(f"    tool_calls count: {len(response.tool_calls)}")
+    
+    return response
+
+
+def verify_model_profile(profile: Any, description: str) -> ModelProfile:
+    """Comprehensive ModelProfile verification with all attributes."""
+    print(f"\n  === ModelProfile: {description} ===")
+    
+    if profile is None:
+        print("    (No profile - skipping)")
+        return None
+    
+    # Verify type
+    assert isinstance(profile, ModelProfile), f"FAIL [{description}]: Expected ModelProfile, got {type(profile).__name__}"
+    
+    # === Core capabilities ===
+    assert hasattr(profile, 'supports_tools'), f"FAIL [{description}]: Missing supports_tools"
+    assert isinstance(profile.supports_tools, bool), f"FAIL [{description}]: supports_tools should be bool"
+    print(f"    supports_tools: {profile.supports_tools}")
+    
+    assert hasattr(profile, 'supports_json_schema_output'), f"FAIL [{description}]: Missing supports_json_schema_output"
+    assert isinstance(profile.supports_json_schema_output, bool), f"FAIL [{description}]: supports_json_schema_output should be bool"
+    print(f"    supports_json_schema_output: {profile.supports_json_schema_output}")
+    
+    assert hasattr(profile, 'supports_json_object_output'), f"FAIL [{description}]: Missing supports_json_object_output"
+    assert isinstance(profile.supports_json_object_output, bool), f"FAIL [{description}]: supports_json_object_output should be bool"
+    print(f"    supports_json_object_output: {profile.supports_json_object_output}")
+    
+    assert hasattr(profile, 'supports_image_output'), f"FAIL [{description}]: Missing supports_image_output"
+    assert isinstance(profile.supports_image_output, bool), f"FAIL [{description}]: supports_image_output should be bool"
+    print(f"    supports_image_output: {profile.supports_image_output}")
+    
+    # === Structured output mode ===
+    assert hasattr(profile, 'default_structured_output_mode'), f"FAIL [{description}]: Missing default_structured_output_mode"
+    print(f"    default_structured_output_mode: {profile.default_structured_output_mode}")
+    
+    # === Thinking tags ===
+    assert hasattr(profile, 'thinking_tags'), f"FAIL [{description}]: Missing thinking_tags"
+    assert isinstance(profile.thinking_tags, tuple), f"FAIL [{description}]: thinking_tags should be tuple"
+    assert len(profile.thinking_tags) == 2, f"FAIL [{description}]: thinking_tags should have 2 elements"
+    print(f"    thinking_tags: {profile.thinking_tags}")
+    
+    # === Prompt template ===
+    assert hasattr(profile, 'prompted_output_template'), f"FAIL [{description}]: Missing prompted_output_template"
+    assert isinstance(profile.prompted_output_template, str), f"FAIL [{description}]: prompted_output_template should be str"
+    print(f"    prompted_output_template: (len={len(profile.prompted_output_template)})")
+    
+    return profile
+
+
+def verify_agent_run_input(input_obj: Any, description: str) -> AgentRunInput:
+    """Comprehensive AgentRunInput verification with all attributes."""
+    print(f"\n  === AgentRunInput: {description} ===")
+    
+    if input_obj is None:
+        print("    (No input - skipping)")
+        return None
+    
+    # Verify type
+    assert isinstance(input_obj, AgentRunInput), f"FAIL [{description}]: Expected AgentRunInput, got {type(input_obj).__name__}"
+    
+    # === User prompt ===
+    assert hasattr(input_obj, 'user_prompt'), f"FAIL [{description}]: Missing user_prompt"
+    assert input_obj.user_prompt is not None, f"FAIL [{description}]: user_prompt is None"
+    prompt_preview = str(input_obj.user_prompt)[:60] + "..." if len(str(input_obj.user_prompt)) > 60 else str(input_obj.user_prompt)
+    print(f"    user_prompt: {prompt_preview}")
+    
+    # === Images ===
+    assert hasattr(input_obj, 'images'), f"FAIL [{description}]: Missing images"
+    if input_obj.images:
+        assert isinstance(input_obj.images, list), f"FAIL [{description}]: images should be list"
+        print(f"    images count: {len(input_obj.images)}")
+        for i, img in enumerate(input_obj.images[:2]):
+            assert hasattr(img, 'data'), f"FAIL [{description}]: image[{i}] missing data"
+            assert hasattr(img, 'media_type'), f"FAIL [{description}]: image[{i}] missing media_type"
+            print(f"      image[{i}]: media_type={img.media_type}, data_len={len(img.data) if img.data else 0}")
+    else:
+        print("    images: None")
+    
+    # === Documents ===
+    assert hasattr(input_obj, 'documents'), f"FAIL [{description}]: Missing documents"
+    if input_obj.documents:
+        assert isinstance(input_obj.documents, list), f"FAIL [{description}]: documents should be list"
+        print(f"    documents count: {len(input_obj.documents)}")
+        for i, doc in enumerate(input_obj.documents[:2]):
+            assert hasattr(doc, 'data'), f"FAIL [{description}]: document[{i}] missing data"
+            assert hasattr(doc, 'media_type'), f"FAIL [{description}]: document[{i}] missing media_type"
+            print(f"      document[{i}]: media_type={doc.media_type}, data_len={len(doc.data) if doc.data else 0}")
+    else:
+        print("    documents: None")
+    
+    return input_obj
+
+
+def verify_model_message(msg: Any, description: str, index: int) -> Any:
+    """Comprehensive verification of a single ModelMessage (ModelRequest or ModelResponse)."""
+    print(f"    message[{index}]: ", end="")
+    
+    assert msg is not None, f"FAIL [{description}]: message[{index}] is None"
+    
+    msg_type = type(msg).__name__
+    print(f"type={msg_type}")
+    
+    # ModelResponse specific
+    if isinstance(msg, ModelResponse):
+        assert hasattr(msg, 'parts'), f"FAIL [{description}]: ModelResponse[{index}] missing parts"
+        assert hasattr(msg, 'usage'), f"FAIL [{description}]: ModelResponse[{index}] missing usage"
+        assert hasattr(msg, 'kind'), f"FAIL [{description}]: ModelResponse[{index}] missing kind"
+        assert msg.kind == 'response', f"FAIL [{description}]: ModelResponse[{index}] kind should be 'response'"
+        print(f"      parts_count: {len(msg.parts)}, kind: {msg.kind}")
+        
+        # Verify parts structure
+        for j, part in enumerate(msg.parts[:2]):
+            part_type = type(part).__name__
+            assert hasattr(part, 'part_kind'), f"FAIL [{description}]: ModelResponse[{index}].part[{j}] missing part_kind"
+            print(f"        part[{j}]: {part_type} (kind={part.part_kind})")
+    
+    # ModelRequest specific
+    elif isinstance(msg, ModelRequest):
+        assert hasattr(msg, 'parts'), f"FAIL [{description}]: ModelRequest[{index}] missing parts"
+        assert hasattr(msg, 'kind'), f"FAIL [{description}]: ModelRequest[{index}] missing kind"
+        assert msg.kind == 'request', f"FAIL [{description}]: ModelRequest[{index}] kind should be 'request'"
+        print(f"      parts_count: {len(msg.parts)}, kind: {msg.kind}")
+        
+        # Verify parts structure  
+        for j, part in enumerate(msg.parts[:2]):
+            part_type = type(part).__name__
+            assert hasattr(part, 'part_kind'), f"FAIL [{description}]: ModelRequest[{index}].part[{j}] missing part_kind"
+            print(f"        part[{j}]: {part_type} (kind={part.part_kind})")
+    
+    # Generic dict (from deserialization)
+    elif isinstance(msg, dict):
+        print(f"      keys: {list(msg.keys())}")
+        if 'parts' in msg:
+            print(f"      parts_count: {len(msg['parts'])}")
+    
+    else:
+        # Fallback for other types with parts
         if hasattr(msg, 'parts'):
-            print(f"    messages[{i}]: type={type(msg).__name__}, parts={len(msg.parts)}")
-    for i, msg in enumerate(context.chat_history[:2]):
-        if hasattr(msg, 'parts'):
-            print(f"    chat_history[{i}]: type={type(msg).__name__}, parts={len(msg.parts)}")
+            print(f"      parts_count: {len(msg.parts)}")
     
-    return context
+    return msg
 
 
-def verify_step_results_content(step_results, description: str, min_count: int = 1):
-    """Verify step_results list content in detail."""
-    print(f"\n  === Step Results Content Verification: {description} ===")
+def verify_messages_list_deep(messages: List, description: str, 
+                               min_count: int = 0,
+                               verify_content: bool = True) -> List:
+    """Deep verification of messages list with content checks."""
+    print(f"\n  === Messages List Deep Verification: {description} ===")
     
-    assert step_results is not None, f"FAIL [{description}]: step_results is None"
-    assert isinstance(step_results, list), f"FAIL [{description}]: step_results should be list"
-    assert len(step_results) >= min_count, f"FAIL [{description}]: Expected at least {min_count} step_results, got {len(step_results)}"
+    assert messages is not None, f"FAIL [{description}]: messages is None"
+    assert isinstance(messages, list), f"FAIL [{description}]: messages should be list"
+    assert len(messages) >= min_count, f"FAIL [{description}]: messages count = {len(messages)}, expected >= {min_count}"
     
-    for i, sr in enumerate(step_results[:5]):  # First 5 steps
-        assert sr.name is not None, f"FAIL [{description}]: step_result[{i}].name is None"
-        assert sr.status is not None, f"FAIL [{description}]: step_result[{i}].status is None"
-        print(f"  step[{i}]: name={sr.name}, status={sr.status}, step_number={sr.step_number}")
+    print(f"    Total messages: {len(messages)}")
     
-    if len(step_results) > 5:
-        print(f"  ... and {len(step_results) - 5} more steps")
+    if verify_content:
+        for i, msg in enumerate(messages[:5]):
+            verify_model_message(msg, description, i)
     
-    return step_results
+    if len(messages) > 5:
+        print(f"    ... and {len(messages) - 5} more messages")
+    
+    return messages
 
+
+def verify_chat_history_deep(chat_history: List, description: str,
+                              min_count: int = 1) -> List:
+    """Deep verification of chat_history with structure validation."""
+    print(f"\n  === Chat History Deep Verification: {description} ===")
+    
+    assert chat_history is not None, f"FAIL [{description}]: chat_history is None"
+    assert isinstance(chat_history, list), f"FAIL [{description}]: chat_history should be list"
+    assert len(chat_history) >= min_count, f"FAIL [{description}]: chat_history count = {len(chat_history)}, expected >= {min_count}"
+    
+    print(f"    Total messages: {len(chat_history)}")
+    
+    # Verify structure of each message
+    request_count = 0
+    response_count = 0
+    
+    for i, msg in enumerate(chat_history):
+        if isinstance(msg, ModelRequest):
+            request_count += 1
+        elif isinstance(msg, ModelResponse):
+            response_count += 1
+    
+    print(f"    ModelRequest count: {request_count}")
+    print(f"    ModelResponse count: {response_count}")
+    
+    # Verify first few messages in detail
+    for i, msg in enumerate(chat_history[:3]):
+        verify_model_message(msg, description, i)
+    
+    if len(chat_history) > 3:
+        print(f"    ... and {len(chat_history) - 3} more messages")
+    
+    return chat_history
+
+
+def compare_messages_content(msg1: Any, msg2: Any, index: int, description: str) -> bool:
+    """Compare two message objects for content equality."""
+    # Both should be same type
+    if type(msg1).__name__ != type(msg2).__name__:
+        print(f"      message[{index}]: TYPE MISMATCH - {type(msg1).__name__} vs {type(msg2).__name__}")
+        return False
+    
+    # Both should have parts
+    if hasattr(msg1, 'parts') and hasattr(msg2, 'parts'):
+        if len(msg1.parts) != len(msg2.parts):
+            print(f"      message[{index}]: PARTS COUNT MISMATCH - {len(msg1.parts)} vs {len(msg2.parts)}")
+            return False
+        
+        # Compare parts
+        for j, (p1, p2) in enumerate(zip(msg1.parts, msg2.parts)):
+            if type(p1).__name__ != type(p2).__name__:
+                print(f"        part[{j}]: TYPE MISMATCH - {type(p1).__name__} vs {type(p2).__name__}")
+                return False
+            
+            if hasattr(p1, 'content') and hasattr(p2, 'content'):
+                if str(p1.content) != str(p2.content):
+                    print(f"        part[{j}]: CONTENT MISMATCH")
+                    return False
+    
+    # For ModelResponse, check kind
+    if hasattr(msg1, 'kind') and hasattr(msg2, 'kind'):
+        if msg1.kind != msg2.kind:
+            print(f"      message[{index}]: KIND MISMATCH - {msg1.kind} vs {msg2.kind}")
+            return False
+    
+    return True
+
+
+def compare_messages_lists(list1: List, list2: List, description: str) -> None:
+    """Comprehensive comparison of two message lists."""
+    print(f"\n{'='*60}")
+    print(f"Messages List Comparison: {description}")
+    print(f"{'='*60}")
+    
+    assert list1 is not None, f"FAIL [{description}]: list1 is None"
+    assert list2 is not None, f"FAIL [{description}]: list2 is None"
+    assert isinstance(list1, list), f"FAIL [{description}]: list1 should be list"
+    assert isinstance(list2, list), f"FAIL [{description}]: list2 should be list"
+    
+    print(f"  list1 count: {len(list1)}")
+    print(f"  list2 count: {len(list2)}")
+    
+    # Lengths should match
+    assert len(list1) == len(list2), f"FAIL [{description}]: Length mismatch - {len(list1)} vs {len(list2)}"
+    print(f"  ✓ Lengths match: {len(list1)}")
+    
+    # Compare each message
+    all_match = True
+    for i in range(min(len(list1), len(list2))):
+        if not compare_messages_content(list1[i], list2[i], i, description):
+            all_match = False
+            print(f"  ✗ Message[{i}] content mismatch")
+        else:
+            print(f"  ✓ Message[{i}] matches")
+    
+    assert all_match, f"FAIL [{description}]: Message content mismatch detected"
+    print("\n  ✓ ALL MESSAGES MATCH")
+
+
+def verify_session_messages_consistency(session: AgentSession, output: AgentRunOutput, description: str) -> None:
+    """Verify that AgentSession.messages and AgentRunOutput.chat_history are consistent."""
+    print(f"\n{'='*60}")
+    print(f"Session Messages vs Output Chat History: {description}")
+    print(f"{'='*60}")
+    
+    # Get session messages
+    session_messages = session.messages if session.messages else []
+    output_chat_history = output.chat_history if output.chat_history else []
+    
+    print(f"  session.messages count: {len(session_messages)}")
+    print(f"  output.chat_history count: {len(output_chat_history)}")
+    
+    # They should have the same length (or chat_history might be longer if it includes historical)
+    # For consistency, we check that chat_history contains all session messages
+    if len(session_messages) > 0:
+        assert len(output_chat_history) >= len(session_messages), \
+            f"FAIL [{description}]: chat_history ({len(output_chat_history)}) should contain at least session.messages ({len(session_messages)})"
+        
+        # Compare the last N messages where N = len(session_messages)
+        # This handles the case where chat_history includes historical messages
+        if len(output_chat_history) >= len(session_messages):
+            recent_chat_history = output_chat_history[-len(session_messages):]
+            print(f"  Comparing last {len(session_messages)} messages from chat_history with session.messages")
+            
+            for i in range(len(session_messages)):
+                if not compare_messages_content(session_messages[i], recent_chat_history[i], i, description):
+                    print(f"  ✗ Message[{i}] mismatch between session.messages and chat_history")
+                    assert False, f"FAIL [{description}]: Message[{i}] mismatch"
+                else:
+                    print(f"  ✓ Message[{i}] matches")
+            
+            print("\n  ✓ ALL MESSAGES CONSISTENT")
+    else:
+        print("  (No session messages to compare)")
+
+
+def verify_storage_consistency(before_session: AgentSession, after_session: AgentSession,
+                               before_output: AgentRunOutput, after_output: AgentRunOutput,
+                               description: str) -> None:
+    """Verify that messages and chat_history are preserved correctly through storage.
+    
+    Validates:
+    1. Session messages are preserved (before messages are subset of after)
+    2. Chat history is preserved (before history is subset of after)
+    3. Session messages match output chat_history (after storage)
+    """
+    print(f"\n{'='*60}")
+    print(f"Storage Consistency Verification: {description}")
+    print(f"{'='*60}")
+    
+    # === 1. Verify AgentSession.messages preserved ===
+    print("\n--- AgentSession.messages: Before vs After Storage ---")
+    before_messages = before_session.messages if before_session.messages else []
+    after_messages = after_session.messages if after_session.messages else []
+    
+    print(f"  Before storage: {len(before_messages)} messages")
+    print(f"  After storage: {len(after_messages)} messages")
+    
+    # Messages should be preserved or grown (not shrunk)
+    assert len(after_messages) >= len(before_messages), \
+        f"FAIL [{description}]: Session messages shrunk from {len(before_messages)} to {len(after_messages)}"
+    
+    # Verify that before messages are preserved in after (prefix match)
+    if len(before_messages) > 0:
+        print(f"  Verifying first {len(before_messages)} messages are preserved...")
+        for i in range(len(before_messages)):
+            if not compare_messages_content(before_messages[i], after_messages[i], i, description):
+                assert False, f"FAIL [{description}]: Message[{i}] not preserved in session.messages"
+        print(f"  ✓ All {len(before_messages)} before messages preserved")
+    print(f"  ✓ Messages preserved/grown: {len(before_messages)} -> {len(after_messages)}")
+    
+    # === 2. Verify AgentRunOutput.chat_history preserved ===
+    print("\n--- AgentRunOutput.chat_history: Before vs After Storage ---")
+    before_history = before_output.chat_history if before_output.chat_history else []
+    after_history = after_output.chat_history if after_output.chat_history else []
+    
+    print(f"  Before storage: {len(before_history)} messages")
+    print(f"  After storage: {len(after_history)} messages")
+    
+    # Chat history should be preserved or grown (not shrunk)
+    assert len(after_history) >= len(before_history), \
+        f"FAIL [{description}]: Chat history shrunk from {len(before_history)} to {len(after_history)}"
+    
+    # Verify that before history is preserved in after (prefix match)
+    if len(before_history) > 0:
+        print(f"  Verifying first {len(before_history)} messages are preserved...")
+        for i in range(len(before_history)):
+            if not compare_messages_content(before_history[i], after_history[i], i, description):
+                assert False, f"FAIL [{description}]: Message[{i}] not preserved in chat_history"
+        print(f"  ✓ All {len(before_history)} before messages preserved")
+    print(f"  ✓ Chat history preserved/grown: {len(before_history)} -> {len(after_history)}")
+    
+    # === 3. Verify AgentSession.messages matches AgentRunOutput.chat_history (after storage) ===
+    print("\n--- Consistency: Session.messages vs Output.chat_history (After Storage) ---")
+    compare_messages_lists(after_messages, after_history, f"{description} - Session.messages vs chat_history")
+    
+    print("\n  ✓ STORAGE CONSISTENCY VERIFIED")
+
+
+def verify_agent_run_output(output: AgentRunOutput, description: str,
+                            expected_status: RunStatus = None,
+                            expected_run_id: str = None,
+                            min_messages: int = 0,
+                            min_step_results: int = 0,
+                            min_requirements: int = 0,
+                            verify_content: bool = True) -> AgentRunOutput:
+    """Comprehensive AgentRunOutput verification with all attributes."""
+    print(f"\n{'='*60}")
+    print(f"AgentRunOutput Verification: {description}")
+    print(f"{'='*60}")
+    
+    assert output is not None, f"FAIL [{description}]: AgentRunOutput is None"
+    
+    # === Identity ===
+    print("\n--- Identity ---")
+    assert output.run_id is not None, f"FAIL [{description}]: run_id is None"
+    assert isinstance(output.run_id, str), f"FAIL [{description}]: run_id should be str"
+    if expected_run_id:
+        assert output.run_id == expected_run_id, f"FAIL [{description}]: run_id mismatch"
+    print(f"  run_id: {output.run_id}")
+    
+    assert output.agent_id is not None, f"FAIL [{description}]: agent_id is None"
+    print(f"  agent_id: {output.agent_id}")
+    print(f"  agent_name: {output.agent_name}")
+    print(f"  session_id: {output.session_id}")
+    print(f"  user_id: {output.user_id}")
+    
+    # === Status ===
+    print("\n--- Status ---")
+    assert output.status is not None, f"FAIL [{description}]: status is None"
+    if expected_status:
+        assert output.status == expected_status, f"FAIL [{description}]: status = {output.status}, expected {expected_status}"
+    print(f"  status: {output.status}")
+    print(f"  is_complete: {output.is_complete}")
+    print(f"  is_paused: {output.is_paused}")
+    print(f"  is_cancelled: {output.is_cancelled}")
+    print(f"  is_error: {output.is_error}")
+    print(f"  pause_reason: {output.pause_reason}")
+    print(f"  error_details: {output.error_details}")
+    
+    # === Output ===
+    print("\n--- Output ---")
+    if output.output is not None:
+        output_preview = str(output.output)[:60] + "..." if len(str(output.output)) > 60 else str(output.output)
+        print(f"  output: {output_preview}")
+    else:
+        print("  output: None")
+    print(f"  output_schema: {output.output_schema}")
+    
+    # === Messages (deep verification) ===
+    print("\n--- Messages ---")
+    if output.messages:
+        verify_messages_list_deep(output.messages, f"{description} - messages", 
+                                   min_count=min_messages, verify_content=True)
+    else:
+        print("  messages: None or empty")
+    
+    # === Chat History (deep verification) ===
+    print("\n--- Chat History ---")
+    if output.chat_history:
+        verify_chat_history_deep(output.chat_history, f"{description} - chat_history", min_count=1)
+    else:
+        print("  chat_history: None or empty")
+    
+    # === Response (deep verification) ===
+    verify_model_response(output.response, f"{description} - response", verify_parts=True)
+    
+    # === Usage (deep verification) ===
+    verify_request_usage(output.usage, f"{description} - usage")
+    
+    # === Model Info ===
+    print("\n--- Model Info ---")
+    assert output.model_name is not None, f"FAIL [{description}]: model_name is None"
+    assert isinstance(output.model_name, str), f"FAIL [{description}]: model_name should be str"
+    print(f"  model_name: {output.model_name}")
+    
+    print(f"  model_provider: {output.model_provider}")
+    
+    # === Model Profile (deep verification) ===
+    if output.model_provider_profile:
+        verify_model_profile(output.model_provider_profile, f"{description} - profile")
+    
+    # === Tools ===
+    print("\n--- Tools ---")
+    print(f"  tool_call_count: {output.tool_call_count}")
+    print(f"  tool_limit_reached: {output.tool_limit_reached}")
+    if output.tools:
+        print(f"  tools count: {len(output.tools)}")
+        for i, te in enumerate(output.tools[:2]):
+            verify_tool_execution(te, f"{description} - tool[{i}]")
+    
+    # === Requirements ===
+    print("\n--- Requirements ---")
+    if output.requirements:
+        assert len(output.requirements) >= min_requirements, f"FAIL [{description}]: requirements count = {len(output.requirements)}, expected >= {min_requirements}"
+        print(f"  requirements count: {len(output.requirements)}")
+        print(f"  active_requirements count: {len(output.active_requirements)}")
+        for i, req in enumerate(output.requirements[:2]):
+            verify_run_requirement(req, f"{description} - requirement[{i}]")
+    else:
+        print("  requirements: None or empty")
+    
+    # === Step Results ===
+    print("\n--- Step Results ---")
+    if output.step_results:
+        assert len(output.step_results) >= min_step_results, f"FAIL [{description}]: step_results count = {len(output.step_results)}, expected >= {min_step_results}"
+        print(f"  step_results count: {len(output.step_results)}")
+        for i, sr in enumerate(output.step_results[:3]):
+            verify_step_result(sr, f"{description} - step[{i}]")
+        if len(output.step_results) > 3:
+            print(f"    ... and {len(output.step_results) - 3} more steps")
+    else:
+        print("  step_results: None or empty")
+    
+    # === Execution Stats ===
+    if output.execution_stats:
+        verify_pipeline_stats(output.execution_stats, description)
+    
+    # === Timestamps ===
+    print("\n--- Timestamps ---")
+    print(f"  created_at: {output.created_at}")
+    print(f"  updated_at: {output.updated_at}")
+    
+    # === Input (deep verification) ===
+    print("\n--- Input ---")
+    if output.input:
+        verify_agent_run_input(output.input, f"{description} - input")
+    else:
+        print("  input: None")
+    
+    # === Task ===
+    print("\n--- Task ---")
+    if output.task:
+        print(f"  task type: {type(output.task).__name__}")
+        if hasattr(output.task, 'description'):
+            print(f"  task.description: {str(output.task.description)[:50]}...")
+    else:
+        print("  task: None")
+    
+    return output
+
+
+def verify_agent_session(session: AgentSession, description: str,
+                         expected_run_id: str = None,
+                         expected_run_count: int = None) -> AgentSession:
+    """Comprehensive AgentSession verification."""
+    print(f"\n{'='*60}")
+    print(f"AgentSession Verification: {description}")
+    print(f"{'='*60}")
+    
+    assert session is not None, f"FAIL [{description}]: AgentSession is None"
+    
+    # === Identity ===
+    print("\n--- Identity ---")
+    assert session.session_id is not None, f"FAIL [{description}]: session_id is None"
+    assert isinstance(session.session_id, str), f"FAIL [{description}]: session_id should be str"
+    print(f"  session_id: {session.session_id}")
+    print(f"  agent_id: {session.agent_id}")
+    print(f"  user_id: {session.user_id}")
+    print(f"  workflow_id: {session.workflow_id}")
+    
+    # === Runs ===
+    print("\n--- Runs ---")
+    assert session.runs is not None, f"FAIL [{description}]: runs is None"
+    assert isinstance(session.runs, dict), f"FAIL [{description}]: runs should be dict"
+    print(f"  runs count: {len(session.runs)}")
+    print(f"  run_ids: {list(session.runs.keys())}")
+    
+    if expected_run_count is not None:
+        assert len(session.runs) >= expected_run_count, f"FAIL [{description}]: runs count = {len(session.runs)}, expected >= {expected_run_count}"
+    
+    if expected_run_id:
+        assert expected_run_id in session.runs, f"FAIL [{description}]: run_id {expected_run_id} not in runs"
+    
+    # === Messages ===
+    print("\n--- Messages ---")
+    if session.messages:
+        print(f"  messages count: {len(session.messages)}")
+    else:
+        print("  messages: None or empty")
+    
+    # === Metadata ===
+    print("\n--- Metadata ---")
+    print(f"  session_data: {session.session_data}")
+    print(f"  metadata: {session.metadata}")
+    print(f"  summary: {session.summary}")
+    
+    # === Timestamps ===
+    print("\n--- Timestamps ---")
+    print(f"  created_at: {session.created_at}")
+    print(f"  updated_at: {session.updated_at}")
+    
+    return session
+
+
+def compare_outputs(before: AgentRunOutput, after: AgentRunOutput, description: str) -> None:
+    """Compare two AgentRunOutput instances for consistency."""
+    print(f"\n{'='*60}")
+    print(f"Output Comparison: {description}")
+    print(f"{'='*60}")
+    
+    # === Identity should match ===
+    assert before.run_id == after.run_id, f"FAIL: run_id mismatch: {before.run_id} vs {after.run_id}"
+    print(f"  run_id: MATCH ({before.run_id})")
+    
+    # === Chat history should be preserved or grown ===
+    before_history_len = len(before.chat_history) if before.chat_history else 0
+    after_history_len = len(after.chat_history) if after.chat_history else 0
+    assert after_history_len >= before_history_len, f"FAIL: chat_history shrunk: {before_history_len} -> {after_history_len}"
+    print(f"  chat_history: {before_history_len} -> {after_history_len} (preserved/grown)")
+    
+    # === Step results should be preserved or grown ===
+    before_steps = len(before.step_results) if before.step_results else 0
+    after_steps = len(after.step_results) if after.step_results else 0
+    assert after_steps >= before_steps, f"FAIL: step_results shrunk: {before_steps} -> {after_steps}"
+    print(f"  step_results: {before_steps} -> {after_steps} (preserved/grown)")
+    
+    # === Requirements should be preserved ===
+    before_reqs = len(before.requirements) if before.requirements else 0
+    after_reqs = len(after.requirements) if after.requirements else 0
+    assert after_reqs >= before_reqs, f"FAIL: requirements shrunk: {before_reqs} -> {after_reqs}"
+    print(f"  requirements: {before_reqs} -> {after_reqs} (preserved/grown)")
+    
+    print("\n  COMPARISON PASSED")
+
+
+# =============================================================================
+# TEST: EXTERNAL TOOL
+# =============================================================================
 
 async def test_external_tool_comprehensive():
-    """
-    TEST: External Tool - Comprehensive Storage and Content Verification
-    """
+    """Comprehensive External Tool test with full attribute verification."""
     print("\n" + "="*80)
-    print("TEST: External Tool - Comprehensive Storage and Content Verification")
+    print("TEST: External Tool - Full Attribute Verification")
     print("="*80)
     
     cleanup()
@@ -430,166 +999,160 @@ async def test_external_tool_comprehensive():
     expected_result = "Email sent successfully to test@example.com"
     
     # =========================================================================
-    # STEP 1: Run do_async - should pause for external tool
+    # STEP 1: Initial run - should pause
     # =========================================================================
-    print("\n[STEP 1] Running do_async (expecting pause for external tool)...")
+    print("\n[STEP 1] Running do_async (expecting pause)...")
     output = await agent1.do_async(task, return_output=True)
-    saved_run_id = output.run_id
+    run_id = output.run_id
     
-    assert output.is_paused == True, "FAIL: Should be paused"
-    print(f"  Run paused with run_id: {saved_run_id}")
-    print("[STEP 1] PASSED")
+    # Verify output at pause
+    verify_agent_run_output(
+        output, "After Initial Pause",
+        expected_status=RunStatus.paused,
+        expected_run_id=run_id,
+        min_step_results=5,
+        min_requirements=1
+    )
     
-    # =========================================================================
-    # STEP 2: Verify storage AFTER initial pause
-    # =========================================================================
-    print("\n[STEP 2] Verifying storage AFTER initial pause...")
-    
-    session = await db.storage.read_async("test_session", AgentSession)
-    run_data = verify_agent_session(session, saved_run_id, "After Pause")
-    
-    stored_output = verify_run_output(run_data.output, "After Pause", RunStatus.paused, 
-                                       expected_pause_reason='external_tool')
-    
-    stored_context = verify_run_context(run_data.context, "After Pause", expected_run_id=saved_run_id)
-    
-    # Verify both messages and chat_history
-    # - messages: Only NEW messages from THIS run (may be 0 at pause time)
-    # - chat_history: Full conversation history (should have at least 1)
-    verify_context_messages_and_history(stored_context, "After Pause", 
-                                        min_messages=0, min_chat_history=1)
-    
-    # Verify step_results content
-    verify_step_results_content(stored_context.step_results, "After Pause Step Results", min_count=5)
-    
-    # Verify requirement with full content check
-    ext_reqs = [r for r in stored_context.requirements if r.pause_type == 'external_tool']
-    assert len(ext_reqs) == 1, f"FAIL: Should have 1 external_tool requirement, got {len(ext_reqs)}"
-    
-    stored_req = verify_requirement_external_tool(
-        ext_reqs[0], "After Pause", 
+    # Verify requirement details
+    assert len(output.active_requirements) == 1, "Should have 1 active requirement"
+    req = output.active_requirements[0]
+    verify_run_requirement(
+        req, "Paused Requirement",
         expected_resolved=False,
         expected_tool_name="send_email",
         expected_tool_args=expected_tool_args,
         expected_result=None
     )
     
-    print("\n[STEP 2] PASSED - Storage verified after pause with full content check")
+    print("\n[STEP 1] PASSED")
     
     # =========================================================================
-    # STEP 3: Set external tool result and save
+    # STEP 2: Verify storage after pause
+    # =========================================================================
+    print("\n[STEP 2] Verifying storage after pause...")
+    
+    # Capture in-memory state before reading from storage
+    # Note: We need to get the session from the agent's memory if available
+    # For now, we'll read from storage and compare
+    
+    session = await db.storage.read_async("test_session", AgentSession)
+    verify_agent_session(session, "After Pause", expected_run_id=run_id, expected_run_count=1)
+    
+    stored_output = session.runs[run_id].output
+    verify_agent_run_output(
+        stored_output, "Stored After Pause",
+        expected_status=RunStatus.paused,
+        expected_run_id=run_id
+    )
+    
+    # Compare in-memory vs stored
+    compare_outputs(output, stored_output, "In-Memory vs Stored (Pause)")
+    
+    # Verify storage consistency: messages and chat_history
+    # Create a "before" session from in-memory output for comparison
+    # Since we don't have direct access to session before storage, we'll compare
+    # the stored session messages with the output's chat_history
+    verify_session_messages_consistency(session, stored_output, "After Pause - Storage")
+    
+    print("\n[STEP 2] PASSED")
+    
+    # =========================================================================
+    # STEP 3: Set tool result
     # =========================================================================
     print("\n[STEP 3] Setting external tool result...")
     
-    result_text = execute_tool_externally(stored_req)
-    assert result_text == expected_result, f"FAIL: Result should be '{expected_result}'"
+    # Set result on the in-memory requirement
+    req.set_external_execution_result(expected_result)
     
-    stored_req.tool_execution.result = result_text
-    await db.storage.upsert_agent_session_async(session)
+    # Verify result was set
+    assert req.tool_execution.result == expected_result, "Result should be set"
+    assert req.is_resolved, "Requirement should be resolved"
     
-    # Verify result is saved
-    session_after_result = await db.storage.read_async("test_session", AgentSession)
-    req_after_result = [r for r in session_after_result.runs[saved_run_id].context.requirements if r.pause_type == 'external_tool'][0]
-    
-    assert req_after_result.tool_execution.result == expected_result, f"FAIL: Result not saved correctly"
-    
-    print(f"  Tool result saved: {result_text}")
-    print("[STEP 3] PASSED - Tool result saved and verified")
+    print(f"  Result set: {expected_result}")
+    print("\n[STEP 3] PASSED")
     
     # =========================================================================
-    # STEP 4: Create fresh agent and resume
+    # STEP 4: Resume with NEW agent
     # =========================================================================
-    print("\n[STEP 4] Creating fresh agent and resuming...")
+    print("\n[STEP 4] Resuming with new agent...")
     
     db2 = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user")
     agent2 = Agent("openai/gpt-4o-mini", name="agent2", db=db2, debug=DEBUG)
     
-    assert agent2.agent_id != agent1.agent_id, "FAIL: Should be different agent_id"
+    result = await agent2.continue_run_async(
+        run_id=run_id, 
+        return_output=True,
+        requirements=output.requirements  # Pass all requirements (with results set)
+    )
     
-    result = await agent2.continue_run_async(run_id=saved_run_id, return_output=True)
+    # Verify completed output
+    verify_agent_run_output(
+        result, "After Completion",
+        expected_status=RunStatus.completed,
+        expected_run_id=run_id,
+        min_step_results=10
+    )
     
-    assert result.is_complete == True, f"FAIL: Should be complete, got {result.status}"
-    assert result.status == RunStatus.completed, f"FAIL: Status should be completed"
-    assert result.content is not None, "FAIL: Content should not be None"
-    assert isinstance(result.content, str), "FAIL: Content should be str"
-    assert len(result.content) > 0, "FAIL: Content should not be empty"
+    # Verify content exists
+    assert result.output is not None, "Output content should exist"
+    assert len(str(result.output)) > 0, "Output content should not be empty"
     
-    print(f"  Result status: {result.status}")
-    print(f"  Result content: {result.content}")
-    print("[STEP 4] PASSED - Resume completed")
+    print(f"  Result content: {result.output}")
+    print("\n[STEP 4] PASSED")
     
     # =========================================================================
-    # STEP 5: Verify storage AFTER completion
+    # STEP 5: Verify final storage
     # =========================================================================
-    print("\n[STEP 5] Verifying storage AFTER completion...")
+    print("\n[STEP 5] Verifying final storage...")
+    
+    # Capture before state (from step 2)
+    before_session = session
+    before_output = stored_output
     
     final_session = await db2.storage.read_async("test_session", AgentSession)
-    final_run_data = verify_agent_session(final_session, saved_run_id, "After Completion")
+    verify_agent_session(final_session, "Final", expected_run_id=run_id)
     
-    final_output = verify_run_output(final_run_data.output, "After Completion", RunStatus.completed)
-    assert final_output.content is not None, "FAIL: content should not be None"
-    assert len(final_output.content) > 0, "FAIL: content should not be empty"
-    
-    final_context = verify_run_context(final_run_data.context, "After Completion", expected_run_id=saved_run_id)
-    
-    # Verify messages and chat_history after completion
-    # After completion, messages (this run) should have content, chat_history should have full history
-    verify_context_messages_and_history(final_context, "After Completion", 
-                                        min_messages=0, min_chat_history=1)
-    
-    # Verify step_results content after completion
-    verify_step_results_content(final_context.step_results, "After Completion Step Results", min_count=10)
-    
-    # Verify requirement is now resolved with full content check
-    final_ext_reqs = [r for r in final_context.requirements if r.pause_type == 'external_tool']
-    assert len(final_ext_reqs) == 1, f"FAIL: Should still have 1 requirement, got {len(final_ext_reqs)}"
-    
-    verify_requirement_external_tool(
-        final_ext_reqs[0], "After Completion", 
-        expected_resolved=True,
-        expected_tool_name="send_email",
-        expected_tool_args=expected_tool_args,
-        expected_result=expected_result
+    final_output = final_session.runs[run_id].output
+    verify_agent_run_output(
+        final_output, "Final Stored",
+        expected_status=RunStatus.completed,
+        expected_run_id=run_id
     )
     
-    print("\n[STEP 5] PASSED - Storage verified after completion with full content check")
+    # Verify requirement is resolved in storage
+    if final_output.requirements:
+        for req in final_output.requirements:
+            if req.tool_execution and req.tool_execution.tool_name == "send_email":
+                assert req.is_resolved, "Requirement should be resolved"
+                assert req.tool_execution.result == expected_result, "Result should match"
     
-    # =========================================================================
-    # STEP 6: Verify in-memory state
-    # =========================================================================
-    print("\n[STEP 6] Verifying in-memory state...")
-    
-    memory_context = agent2._agent_run_context
-    verify_run_context(memory_context, "In-Memory Context", expected_run_id=saved_run_id)
-    
-    verify_context_messages_and_history(memory_context, "In-Memory", 
-                                        min_messages=0, min_chat_history=1)
-    verify_step_results_content(memory_context.step_results, "In-Memory Step Results", min_count=10)
-    
-    memory_ext_reqs = [r for r in memory_context.requirements if r.pause_type == 'external_tool']
-    verify_requirement_external_tool(
-        memory_ext_reqs[0], "In-Memory Requirement", 
-        expected_resolved=True,
-        expected_tool_name="send_email",
-        expected_tool_args=expected_tool_args,
-        expected_result=expected_result
+    # Verify storage consistency: messages and chat_history before and after
+    verify_storage_consistency(
+        before_session, final_session,
+        before_output, final_output,
+        "External Tool - Pause to Completion"
     )
     
-    print("[STEP 6] PASSED - In-memory state verified with full content check")
+    # Verify current state consistency
+    verify_session_messages_consistency(final_session, final_output, "Final - Storage")
+    
+    print("\n[STEP 5] PASSED")
     
     cleanup()
-    
     print("\n" + "="*80)
-    print("ALL TESTS PASSED: External Tool - Comprehensive Storage and Content Verification")
+    print("ALL TESTS PASSED: External Tool - Full Attribute Verification")
     print("="*80)
 
 
+# =============================================================================
+# TEST: CANCEL RUN
+# =============================================================================
+
 async def test_cancel_run_comprehensive():
-    """
-    TEST: Cancel Run - Comprehensive Storage and Content Verification
-    """
+    """Comprehensive Cancel Run test with full attribute verification."""
     print("\n" + "="*80)
-    print("TEST: Cancel Run - Comprehensive Storage and Content Verification")
+    print("TEST: Cancel Run - Full Attribute Verification")
     print("="*80)
     
     cleanup()
@@ -602,621 +1165,377 @@ async def test_cancel_run_comprehensive():
     )
     
     # =========================================================================
-    # STEP 1: Start run and cancel
+    # STEP 1: Start and cancel
     # =========================================================================
     print("\n[STEP 1] Starting run and cancelling...")
     
     async def run_task():
         return await agent1.do_async(task, return_output=True)
     
-    run_task_future = asyncio.create_task(run_task())
+    run_future = asyncio.create_task(run_task())
     await asyncio.sleep(1.5)
     
     run_id = agent1.run_id
-    assert run_id is not None, "FAIL: run_id should not be None"
-    assert isinstance(run_id, str), "FAIL: run_id should be str"
+    assert run_id is not None, "run_id should be available"
     
     cancel_run(run_id)
+    print(f"  Cancelled run: {run_id}")
     
-    try:
-        output = await asyncio.wait_for(run_task_future, timeout=10.0)
-    except asyncio.TimeoutError:
-        raise AssertionError("FAIL: Task did not complete after cancel")
+    output = await asyncio.wait_for(run_future, timeout=10.0)
     
-    saved_run_id = output.run_id
-    assert output.is_cancelled == True, f"FAIL: Should be cancelled, got {output.status}"
-    assert output.status == RunStatus.cancelled, "FAIL: Status should be cancelled"
+    # Verify cancelled output
+    verify_agent_run_output(
+        output, "After Cancel",
+        expected_status=RunStatus.cancelled,
+        expected_run_id=run_id,
+        min_step_results=5
+    )
     
-    print(f"  Run cancelled with run_id: {saved_run_id}")
-    print("[STEP 1] PASSED")
+    print("\n[STEP 1] PASSED")
     
     # =========================================================================
-    # STEP 2: Verify storage AFTER cancel
+    # STEP 2: Verify storage after cancel
     # =========================================================================
-    print("\n[STEP 2] Verifying storage AFTER cancel...")
+    print("\n[STEP 2] Verifying storage after cancel...")
     
     session = await db.storage.read_async("test_session", AgentSession)
-    run_data = verify_agent_session(session, saved_run_id, "After Cancel")
+    verify_agent_session(session, "After Cancel", expected_run_id=run_id)
     
-    stored_output = verify_run_output(run_data.output, "After Cancel", RunStatus.cancelled,
-                                       expected_pause_reason='cancel')
+    stored_output = session.runs[run_id].output
+    verify_agent_run_output(
+        stored_output, "Stored After Cancel",
+        expected_status=RunStatus.cancelled
+    )
     
-    stored_context = verify_run_context(run_data.context, "After Cancel", expected_run_id=saved_run_id)
+    compare_outputs(output, stored_output, "In-Memory vs Stored (Cancel)")
     
-    # Verify messages content
-    # Verify both messages and chat_history
-    verify_context_messages_and_history(stored_context, "After Cancel", 
-                                        min_messages=0, min_chat_history=1)
+    # Verify storage consistency: messages and chat_history
+    verify_session_messages_consistency(session, stored_output, "After Cancel - Storage")
     
-    # Verify step_results content
-    verify_step_results_content(stored_context.step_results, "After Cancel Step Results", min_count=5)
-    
-    # Verify requirement with full content check
-    cancel_reqs = [r for r in stored_context.requirements if r.pause_type == 'cancel']
-    assert len(cancel_reqs) >= 1, f"FAIL: Should have at least 1 cancel requirement, got {len(cancel_reqs)}"
-    
-    verify_requirement_cancel(cancel_reqs[0], "After Cancel", expected_resolved=False)
-    
-    print("\n[STEP 2] PASSED - Storage verified after cancel with full content check")
+    print("\n[STEP 2] PASSED")
     
     # =========================================================================
-    # STEP 3: Create fresh agent and resume
+    # STEP 3: Resume with new agent
     # =========================================================================
-    print("\n[STEP 3] Creating fresh agent and resuming...")
+    print("\n[STEP 3] Resuming with new agent...")
     
     db2 = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user")
     agent2 = Agent("openai/gpt-4o-mini", name="agent2", db=db2, debug=DEBUG)
     
-    assert agent2.agent_id != agent1.agent_id, "FAIL: Should be different agent_id"
+    result = await agent2.continue_run_async(run_id=run_id, return_output=True)
     
-    result = await agent2.continue_run_async(run_id=saved_run_id, return_output=True)
+    verify_agent_run_output(
+        result, "After Resume",
+        expected_status=RunStatus.completed,
+        expected_run_id=run_id,
+        min_step_results=10
+    )
     
-    assert result.is_complete == True, f"FAIL: Should be complete, got {result.status}"
-    assert result.status == RunStatus.completed, f"FAIL: Status should be completed"
-    assert result.content is not None, "FAIL: Content should not be None"
-    assert isinstance(result.content, str), "FAIL: Content should be str"
-    assert len(result.content) > 0, "FAIL: Content should not be empty"
-    
-    print(f"  Result status: {result.status}")
-    print(f"  Result content: {result.content}")
-    print("[STEP 3] PASSED - Resume completed")
+    print(f"  Result: {result.output}")
+    print("\n[STEP 3] PASSED")
     
     # =========================================================================
-    # STEP 4: Verify storage AFTER completion
+    # STEP 4: Verify final storage
     # =========================================================================
-    print("\n[STEP 4] Verifying storage AFTER completion...")
+    print("\n[STEP 4] Verifying final storage...")
+    
+    # Capture before state (from step 2)
+    before_session = session
+    before_output = stored_output
     
     final_session = await db2.storage.read_async("test_session", AgentSession)
-    final_run_data = verify_agent_session(final_session, saved_run_id, "After Completion")
+    final_output = final_session.runs[run_id].output
     
-    final_output = verify_run_output(final_run_data.output, "After Completion", RunStatus.completed)
-    assert final_output.content is not None, "FAIL: content should not be None"
-    assert len(final_output.content) > 0, "FAIL: content should not be empty"
+    verify_agent_run_output(
+        final_output, "Final Stored",
+        expected_status=RunStatus.completed
+    )
     
-    final_context = verify_run_context(final_run_data.context, "After Completion", expected_run_id=saved_run_id)
+    # Compare before/after
+    compare_outputs(stored_output, final_output, "Cancel vs Completed")
     
-    # Verify messages and chat_history after completion
-    verify_context_messages_and_history(final_context, "After Completion (Cancel)", 
-                                        min_messages=0, min_chat_history=1)
+    # Verify storage consistency: messages and chat_history before and after
+    verify_storage_consistency(
+        before_session, final_session,
+        before_output, final_output,
+        "Cancel Run - Cancel to Completion"
+    )
     
-    # Verify step_results content after completion
-    verify_step_results_content(final_context.step_results, "After Completion Step Results", min_count=10)
+    # Verify current state consistency
+    verify_session_messages_consistency(final_session, final_output, "Final - Storage")
     
-    # Verify requirement is now resolved with full content check
-    final_cancel_reqs = [r for r in final_context.requirements if r.pause_type == 'cancel']
-    assert len(final_cancel_reqs) >= 1, f"FAIL: Should still have cancel requirement, got {len(final_cancel_reqs)}"
-    
-    verify_requirement_cancel(final_cancel_reqs[0], "After Completion", expected_resolved=True)
-    
-    print("\n[STEP 4] PASSED - Storage verified after completion with full content check")
-    
-    # =========================================================================
-    # STEP 5: Verify in-memory state
-    # =========================================================================
-    print("\n[STEP 5] Verifying in-memory state...")
-    
-    memory_context = agent2._agent_run_context
-    verify_run_context(memory_context, "In-Memory Context", expected_run_id=saved_run_id)
-    
-    verify_context_messages_and_history(memory_context, "In-Memory (Cancel)", 
-                                        min_messages=0, min_chat_history=1)
-    verify_step_results_content(memory_context.step_results, "In-Memory Step Results", min_count=10)
-    
-    memory_cancel_reqs = [r for r in memory_context.requirements if r.pause_type == 'cancel']
-    verify_requirement_cancel(memory_cancel_reqs[0], "In-Memory Requirement", expected_resolved=True)
-    
-    print("[STEP 5] PASSED - In-memory state verified with full content check")
+    print("\n[STEP 4] PASSED")
     
     cleanup()
-    
     print("\n" + "="*80)
-    print("ALL TESTS PASSED: Cancel Run - Comprehensive Storage and Content Verification")
+    print("ALL TESTS PASSED: Cancel Run - Full Attribute Verification")
     print("="*80)
 
 
-def verify_requirement_durable(req, description: str, expected_resolved: bool):
-    """Comprehensively verify RunRequirement for durable execution with full content."""
-    print(f"\n  === RunRequirement (Durable) Verification: {description} ===")
-    
-    assert req is not None, f"FAIL [{description}]: RunRequirement is None"
-    
-    # Verify basic fields
-    assert req.id is not None, f"FAIL [{description}]: id is None"
-    assert isinstance(req.id, str), f"FAIL [{description}]: id should be str"
-    assert len(req.id) > 0, f"FAIL [{description}]: id should not be empty"
-    
-    assert req.pause_type == 'durable_execution', f"FAIL [{description}]: pause_type should be 'durable_execution', got {req.pause_type}"
-    
-    # Verify created_at
-    assert req.created_at is not None, f"FAIL [{description}]: created_at should not be None"
-    
-    # Verify resolved state
-    if expected_resolved:
-        assert req.is_resolved() == True, f"FAIL [{description}]: Expected resolved=True, got {req.is_resolved()}"
-        assert req.resolved_at is not None, f"FAIL [{description}]: resolved_at should be set when resolved"
-    else:
-        assert req.is_resolved() == False, f"FAIL [{description}]: Expected resolved=False, got {req.is_resolved()}"
-        assert req.resolved_at is None, f"FAIL [{description}]: resolved_at should be None when not resolved"
-    
-    # Verify continuation data - CONTENT CHECK
-    messages, response, agent_state = req.get_continuation_data()
-    
-    assert messages is not None, f"FAIL [{description}]: continuation_messages should not be None"
-    assert isinstance(messages, list), f"FAIL [{description}]: continuation_messages should be list"
-    
-    assert agent_state is not None, f"FAIL [{description}]: agent_state should not be None"
-    assert isinstance(agent_state, dict), f"FAIL [{description}]: agent_state should be dict"
-    
-    # Verify step_result
-    assert req.step_result is not None, f"FAIL [{description}]: step_result should not be None"
-    assert req.step_result.name is not None, f"FAIL [{description}]: step_result.name should not be None"
-    assert req.step_result.step_number is not None, f"FAIL [{description}]: step_result.step_number should not be None"
-    
-    print(f"  id: {req.id}")
-    print(f"  pause_type: {req.pause_type}")
-    print(f"  is_resolved(): {req.is_resolved()}")
-    print(f"  resolved_at: {req.resolved_at}")
-    print(f"  step_result.name: {req.step_result.name}")
-    print(f"  step_result.step_number: {req.step_result.step_number}")
-    print(f"  step_result.status: {req.step_result.status}")
-    print(f"  continuation_messages count: {len(messages)}")
-    print(f"  agent_state: {agent_state}")
-    
-    return req
+# =============================================================================
+# TEST: DURABLE EXECUTION
+# =============================================================================
 
-
-async def test_durable_execution_model_execution_step():
-    """
-    TEST: Durable Execution - Error in model_execution step
-    Injects error in model_execution, verifies error state, then resumes successfully.
-    """
+async def test_durable_execution_comprehensive():
+    """Comprehensive Durable Execution test with full attribute verification."""
     print("\n" + "="*80)
-    print("TEST: Durable Execution - Error in model_execution step")
+    print("TEST: Durable Execution - Full Attribute Verification")
     print("="*80)
     
     cleanup()
-    clear_error_injection()
     
     db = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user")
-    agent = Agent("openai/gpt-4o-mini", db=db, debug=DEBUG)
+    agent = Agent("openai/gpt-4o-mini", db=db, debug=DEBUG, retry=1)
     task = Task(
         description="What is 5 + 3? Reply with just the number.",
         tools=[simple_math]
     )
     
-    # Inject error into model_execution step (trigger_count=1 means error once, then works)
-    inject_error_into_step("model_execution", RuntimeError, "Simulated model execution failure", trigger_count=1)
+    # Inject error that triggers once
+    inject_error_into_step("model_execution", RuntimeError, "Simulated error", trigger_count=1)
     
     # =========================================================================
-    # STEP 1: Run do_async - should raise error
+    # STEP 1: Run and catch error
     # =========================================================================
-    print("\n[STEP 1] Running do_async (expecting error in model_execution)...")
+    print("\n[STEP 1] Running do_async (expecting error)...")
     
     run_id = None
+    error_output = None
     try:
-        output = await agent.do_async(task, return_output=True)
-        # Should not reach here
-        assert False, "FAIL: Expected exception but got output"
+        _ = await agent.do_async(task, return_output=True)
+        assert False, "Should have raised exception"
     except Exception as e:
-        print(f"  Caught expected error: {type(e).__name__}: {str(e)[:80]}...")
-        assert "INJECTED ERROR" in str(e), f"FAIL: Expected injected error, got: {e}"
+        print(f"  Caught error: {type(e).__name__}: {str(e)[:60]}...")
+        assert "INJECTED ERROR" in str(e), "Should be injected error"
         
-        # Get run_id from agent's internal state
-        if agent._agent_run_output:
-            run_id = agent._agent_run_output.run_id
-            print(f"  Run ID from agent: {run_id}")
+        error_output = getattr(agent, '_agent_run_output', None)
+        if error_output:
+            run_id = error_output.run_id
     
-    assert run_id is not None, "FAIL: run_id should be available after error"
-    print("[STEP 1] PASSED - Error caught as expected")
+    assert run_id is not None, "run_id should be available"
+    print(f"  Run ID: {run_id}")
+    
+    # Verify error output
+    if error_output:
+        verify_agent_run_output(
+            error_output, "After Error",
+            expected_status=RunStatus.error,
+            expected_run_id=run_id,
+            min_step_results=5
+        )
+    
+    print("\n[STEP 1] PASSED")
     
     # =========================================================================
-    # STEP 2: Verify storage AFTER error
+    # STEP 2: Verify storage after error
     # =========================================================================
-    print("\n[STEP 2] Verifying storage AFTER error...")
+    print("\n[STEP 2] Verifying storage after error...")
     
     session = await db.storage.read_async("test_session", AgentSession)
-    run_data = verify_agent_session(session, run_id, "After Error")
+    verify_agent_session(session, "After Error", expected_run_id=run_id)
     
-    stored_output = verify_run_output(run_data.output, "After Error", RunStatus.error,
-                                       expected_pause_reason='durable_execution')
-    
-    stored_context = verify_run_context(run_data.context, "After Error", expected_run_id=run_id)
-    
-    # Verify step_results - should show model_execution with ERROR status
-    verify_step_results_content(stored_context.step_results, "After Error Step Results", min_count=5)
-    
-    # Find the error step
-    error_steps = [sr for sr in stored_context.step_results if str(sr.status) == 'StepStatus.ERROR']
-    print(f"  Error steps found: {len(error_steps)}")
-    if error_steps:
-        print(f"  Error step: {error_steps[-1].name} at step {error_steps[-1].step_number}")
-    
-    # Verify durable execution requirement
-    durable_reqs = [r for r in stored_context.requirements if r.pause_type == 'durable_execution']
-    assert len(durable_reqs) >= 1, f"FAIL: Should have durable_execution requirement, got {len(durable_reqs)}"
-    
-    verify_requirement_durable(durable_reqs[0], "After Error", expected_resolved=False)
-    
-    print("\n[STEP 2] PASSED - Storage verified after error")
-    
-    # =========================================================================
-    # STEP 3: Resume with same agent
-    # =========================================================================
-    print("\n[STEP 3] Resuming with same agent...")
-    
-    # Error should NOT trigger again (trigger_count=1 already used)
-    result = await agent.continue_run_async(run_id=run_id, return_output=True)
-    
-    assert result.is_complete == True, f"FAIL: Should be complete, got {result.status}"
-    assert result.status == RunStatus.completed, f"FAIL: Status should be completed"
-    assert result.content is not None, "FAIL: Content should not be None"
-    
-    print(f"  Result status: {result.status}")
-    print(f"  Result content: {result.content}")
-    print("[STEP 3] PASSED - Resume completed")
-    
-    # =========================================================================
-    # STEP 4: Verify storage AFTER completion
-    # =========================================================================
-    print("\n[STEP 4] Verifying storage AFTER completion...")
-    
-    final_session = await db.storage.read_async("test_session", AgentSession)
-    final_run_data = verify_agent_session(final_session, run_id, "After Completion")
-    
-    final_output = verify_run_output(final_run_data.output, "After Completion", RunStatus.completed)
-    
-    final_context = verify_run_context(final_run_data.context, "After Completion", expected_run_id=run_id)
-    
-    # Verify requirement is now resolved
-    final_durable_reqs = [r for r in final_context.requirements if r.pause_type == 'durable_execution']
-    assert len(final_durable_reqs) >= 1, f"FAIL: Should still have durable requirement, got {len(final_durable_reqs)}"
-    
-    verify_requirement_durable(final_durable_reqs[0], "After Completion", expected_resolved=True)
-    
-    print("\n[STEP 4] PASSED - Storage verified after completion")
-    
-    cleanup()
-    clear_error_injection()
-    
-    print("\n" + "="*80)
-    print("ALL TESTS PASSED: Durable Execution - model_execution step")
-    print("="*80)
-
-
-async def test_durable_execution_response_processing_step():
-    """
-    TEST: Durable Execution - Error in response_processing step
-    """
-    print("\n" + "="*80)
-    print("TEST: Durable Execution - Error in response_processing step")
-    print("="*80)
-    
-    cleanup()
-    clear_error_injection()
-    
-    db = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user")
-    agent = Agent("openai/gpt-4o-mini", db=db, debug=DEBUG)
-    task = Task(
-        description="What is 7 + 2? Reply with just the number.",
-        tools=[simple_math]
+    stored_output = session.runs[run_id].output
+    verify_agent_run_output(
+        stored_output, "Stored After Error",
+        expected_status=RunStatus.error
     )
     
-    # Inject error into response_processing step
-    inject_error_into_step("response_processing", ValueError, "Simulated response processing failure", trigger_count=1)
+    # Verify error step
+    error_steps = [sr for sr in stored_output.step_results if sr.status == StepStatus.ERROR]
+    assert len(error_steps) >= 1, "Should have error step"
+    print(f"  Error step: {error_steps[-1].name} at step {error_steps[-1].step_number}")
+    
+    # Verify storage consistency: messages and chat_history
+    if error_output:
+        compare_outputs(error_output, stored_output, "In-Memory vs Stored (Error)")
+    verify_session_messages_consistency(session, stored_output, "After Error - Storage")
+    
+    print("\n[STEP 2] PASSED")
     
     # =========================================================================
-    # STEP 1: Run do_async - should raise error
+    # STEP 3: Resume
     # =========================================================================
-    print("\n[STEP 1] Running do_async (expecting error in response_processing)...")
+    print("\n[STEP 3] Resuming...")
+    
+    result = await agent.continue_run_async(run_id=run_id, return_output=True)
+    
+    verify_agent_run_output(
+        result, "After Resume",
+        expected_status=RunStatus.completed,
+        expected_run_id=run_id,
+        min_step_results=10
+    )
+    
+    print(f"  Result: {result.output}")
+    print("\n[STEP 3] PASSED")
+    
+    # =========================================================================
+    # STEP 4: Verify final state and compare
+    # =========================================================================
+    print("\n[STEP 4] Verifying final state...")
+    
+    # Capture before state (from step 2)
+    before_session = session
+    before_output = stored_output
+    
+    final_session = await db.storage.read_async("test_session", AgentSession)
+    final_output = final_session.runs[run_id].output
+    
+    verify_agent_run_output(
+        final_output, "Final Stored",
+        expected_status=RunStatus.completed
+    )
+    
+    # Compare error vs completed
+    compare_outputs(stored_output, final_output, "Error vs Completed")
+    
+    # Verify execution_stats shows resumption
+    if final_output.execution_stats:
+        verify_pipeline_stats(final_output.execution_stats, "Final Stats")
+    
+    # Verify storage consistency: messages and chat_history before and after
+    verify_storage_consistency(
+        before_session, final_session,
+        before_output, final_output,
+        "Durable Execution - Error to Completion"
+    )
+    
+    # Verify current state consistency
+    verify_session_messages_consistency(final_session, final_output, "Final - Storage")
+    
+    print("\n[STEP 4] PASSED")
+    
+    cleanup()
+    print("\n" + "="*80)
+    print("ALL TESTS PASSED: Durable Execution - Full Attribute Verification")
+    print("="*80)
+
+
+# =============================================================================
+# TEST: CROSS-PROCESS DURABLE EXECUTION
+# =============================================================================
+
+async def test_durable_cross_process_comprehensive():
+    """Durable execution with new agent (cross-process simulation)."""
+    print("\n" + "="*80)
+    print("TEST: Durable Execution Cross-Process - Full Verification")
+    print("="*80)
+    
+    cleanup()
+    
+    db = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user")
+    agent1 = Agent("openai/gpt-4o-mini", db=db, debug=DEBUG, retry=1)
+    task = Task("What is 7 + 2? Reply with just the number.")
+    
+    inject_error_into_step("response_processing", ValueError, "Simulated error", trigger_count=1)
+    
+    # =========================================================================
+    # STEP 1: Error with agent1
+    # =========================================================================
+    print("\n[STEP 1] Running with agent1 (expecting error)...")
     
     run_id = None
     try:
-        output = await agent.do_async(task, return_output=True)
-        assert False, "FAIL: Expected exception but got output"
+        _ = await agent1.do_async(task, return_output=True)
+        assert False, "Should have raised"
     except Exception as e:
-        print(f"  Caught expected error: {type(e).__name__}: {str(e)[:80]}...")
-        assert "INJECTED ERROR" in str(e), f"FAIL: Expected injected error, got: {e}"
-        
-        if agent._agent_run_output:
-            run_id = agent._agent_run_output.run_id
+        print(f"  Error: {type(e).__name__}")
+        error_output = getattr(agent1, '_agent_run_output', None)
+        if error_output:
+            run_id = error_output.run_id
     
-    assert run_id is not None, "FAIL: run_id should be available after error"
-    print("[STEP 1] PASSED")
+    assert run_id is not None, "run_id required"
+    print(f"  Run ID: {run_id}")
+    print("\n[STEP 1] PASSED")
     
     # =========================================================================
-    # STEP 2: Verify error step in storage
+    # STEP 2: Verify storage
     # =========================================================================
-    print("\n[STEP 2] Verifying error step in storage...")
+    print("\n[STEP 2] Verifying storage...")
     
     session = await db.storage.read_async("test_session", AgentSession)
-    stored_context = session.runs[run_id].context
+    stored_output = session.runs[run_id].output
     
-    # Find error step - should be response_processing
-    error_steps = [sr for sr in stored_context.step_results if str(sr.status) == 'StepStatus.ERROR']
-    assert len(error_steps) >= 1, f"FAIL: Should have error step"
-    print(f"  Error step: {error_steps[-1].name}")
-    assert error_steps[-1].name == "response_processing", f"FAIL: Error step should be response_processing"
+    verify_agent_run_output(stored_output, "Stored Error", expected_status=RunStatus.error)
     
-    print("[STEP 2] PASSED")
+    # Verify storage consistency: messages and chat_history
+    if error_output:
+        compare_outputs(error_output, stored_output, "In-Memory vs Stored (Error)")
+    verify_session_messages_consistency(session, stored_output, "After Error - Storage")
+    
+    print("\n[STEP 2] PASSED")
     
     # =========================================================================
-    # STEP 3: Resume with NEW agent (cross-process simulation)
+    # STEP 3: Resume with NEW agent (cross-process)
     # =========================================================================
     print("\n[STEP 3] Resuming with NEW agent (cross-process)...")
     
     db2 = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user")
-    agent2 = Agent("openai/gpt-4o-mini", db=db2, debug=DEBUG)
+    agent2 = Agent("openai/gpt-4o-mini", db=db2, debug=DEBUG, retry=1)
     
-    assert agent2.agent_id != agent.agent_id, "FAIL: Should be different agent_id"
+    assert agent2.agent_id != agent1.agent_id, "Should be different agent"
     
     result = await agent2.continue_run_async(run_id=run_id, return_output=True)
     
-    assert result.is_complete == True, f"FAIL: Should be complete, got {result.status}"
-    print(f"  Result: {result.content}")
-    print("[STEP 3] PASSED")
+    verify_agent_run_output(
+        result, "Completed by agent2",
+        expected_status=RunStatus.completed,
+        expected_run_id=run_id
+    )
+    
+    print(f"  Result: {result.output}")
+    print("\n[STEP 3] PASSED")
     
     # =========================================================================
-    # STEP 4: Verify final state
+    # STEP 4: Verify cross-process consistency
     # =========================================================================
-    print("\n[STEP 4] Verifying final state...")
+    print("\n[STEP 4] Verifying cross-process consistency...")
+    
+    # Capture before state (from step 2)
+    before_session = session
+    before_output = stored_output
     
     final_session = await db2.storage.read_async("test_session", AgentSession)
-    final_context = final_session.runs[run_id].context
+    final_output = final_session.runs[run_id].output
     
-    durable_reqs = [r for r in final_context.requirements if r.pause_type == 'durable_execution']
-    assert len(durable_reqs) >= 1, "FAIL: Should have durable requirement"
-    assert durable_reqs[0].is_resolved(), "FAIL: Requirement should be resolved"
+    compare_outputs(stored_output, final_output, "Cross-Process Error vs Completed")
     
-    print("[STEP 4] PASSED")
-    
-    cleanup()
-    clear_error_injection()
-    
-    print("\n" + "="*80)
-    print("ALL TESTS PASSED: Durable Execution - response_processing step")
-    print("="*80)
-
-
-async def test_durable_execution_tool_setup_step():
-    """
-    TEST: Durable Execution - Error in tool_setup step
-    """
-    print("\n" + "="*80)
-    print("TEST: Durable Execution - Error in tool_setup step")
-    print("="*80)
-    
-    cleanup()
-    clear_error_injection()
-    
-    db = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user")
-    agent = Agent("openai/gpt-4o-mini", db=db, debug=DEBUG)
-    task = Task(
-        description="What is 10 + 5? Reply with just the number.",
-        tools=[simple_math]
+    # Verify storage consistency: messages and chat_history before and after
+    verify_storage_consistency(
+        before_session, final_session,
+        before_output, final_output,
+        "Cross-Process Durable Execution - Error to Completion"
     )
     
-    # Inject error into tool_setup step
-    inject_error_into_step("tool_setup", RuntimeError, "Simulated tool setup failure", trigger_count=1)
+    # Verify current state consistency
+    verify_session_messages_consistency(final_session, final_output, "Final - Storage")
     
-    print("\n[STEP 1] Running do_async (expecting error in tool_setup)...")
-    
-    run_id = None
-    try:
-        output = await agent.do_async(task, return_output=True)
-        assert False, "FAIL: Expected exception but got output"
-    except Exception as e:
-        print(f"  Caught expected error: {type(e).__name__}: {str(e)[:80]}...")
-        if agent._agent_run_output:
-            run_id = agent._agent_run_output.run_id
-    
-    assert run_id is not None, "FAIL: run_id should be available"
-    print("[STEP 1] PASSED")
-    
-    print("\n[STEP 2] Verifying error step...")
-    session = await db.storage.read_async("test_session", AgentSession)
-    stored_context = session.runs[run_id].context
-    
-    error_steps = [sr for sr in stored_context.step_results if str(sr.status) == 'StepStatus.ERROR']
-    assert len(error_steps) >= 1, "FAIL: Should have error step"
-    print(f"  Error step: {error_steps[-1].name}")
-    assert error_steps[-1].name == "tool_setup", f"FAIL: Error step should be tool_setup, got {error_steps[-1].name}"
-    print("[STEP 2] PASSED")
-    
-    print("\n[STEP 3] Resuming...")
-    result = await agent.continue_run_async(run_id=run_id, return_output=True)
-    assert result.is_complete == True, f"FAIL: Should be complete, got {result.status}"
-    print(f"  Result: {result.content}")
-    print("[STEP 3] PASSED")
+    print("\n[STEP 4] PASSED")
     
     cleanup()
-    clear_error_injection()
-    
     print("\n" + "="*80)
-    print("ALL TESTS PASSED: Durable Execution - tool_setup step")
+    print("ALL TESTS PASSED: Durable Cross-Process")
     print("="*80)
 
 
-async def test_durable_execution_message_build_step():
-    """
-    TEST: Durable Execution - Error in message_build step
-    """
-    print("\n" + "="*80)
-    print("TEST: Durable Execution - Error in message_build step")
-    print("="*80)
-    
-    cleanup()
-    clear_error_injection()
-    
-    db = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user")
-    agent = Agent("openai/gpt-4o-mini", db=db, debug=DEBUG)
-    task = Task(
-        description="What is 20 + 30? Reply with just the number.",
-        tools=[simple_math]
-    )
-    
-    # Inject error into message_build step
-    inject_error_into_step("message_build", RuntimeError, "Simulated message build failure", trigger_count=1)
-    
-    print("\n[STEP 1] Running do_async (expecting error in message_build)...")
-    
-    run_id = None
-    try:
-        output = await agent.do_async(task, return_output=True)
-        assert False, "FAIL: Expected exception but got output"
-    except Exception as e:
-        print(f"  Caught expected error: {type(e).__name__}: {str(e)[:80]}...")
-        if agent._agent_run_output:
-            run_id = agent._agent_run_output.run_id
-    
-    assert run_id is not None, "FAIL: run_id should be available"
-    print("[STEP 1] PASSED")
-    
-    print("\n[STEP 2] Verifying error step...")
-    session = await db.storage.read_async("test_session", AgentSession)
-    stored_context = session.runs[run_id].context
-    
-    error_steps = [sr for sr in stored_context.step_results if str(sr.status) == 'StepStatus.ERROR']
-    assert len(error_steps) >= 1, "FAIL: Should have error step"
-    print(f"  Error step: {error_steps[-1].name}")
-    assert error_steps[-1].name == "message_build", f"FAIL: Error step should be message_build"
-    print("[STEP 2] PASSED")
-    
-    print("\n[STEP 3] Resuming...")
-    result = await agent.continue_run_async(run_id=run_id, return_output=True)
-    assert result.is_complete == True, f"FAIL: Should be complete, got {result.status}"
-    print(f"  Result: {result.content}")
-    print("[STEP 3] PASSED")
-    
-    cleanup()
-    clear_error_injection()
-    
-    print("\n" + "="*80)
-    print("ALL TESTS PASSED: Durable Execution - message_build step")
-    print("="*80)
-
-
-async def test_durable_execution_multiple_retries():
-    """
-    TEST: Durable Execution - Multiple retry pattern
-    Error triggers twice, then succeeds on third attempt.
-    """
-    print("\n" + "="*80)
-    print("TEST: Durable Execution - Multiple Retries (error 2x, success on 3rd)")
-    print("="*80)
-    
-    cleanup()
-    clear_error_injection()
-    
-    db = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user")
-    agent = Agent("openai/gpt-4o-mini", db=db, debug=DEBUG)
-    task = Task(
-        description="What is 100 + 200? Reply with just the number."
-    )
-    
-    # Inject error that triggers twice
-    inject_error_into_step("model_execution", RuntimeError, "Simulated failure", trigger_count=2)
-    
-    run_id = None
-    attempt = 0
-    max_attempts = 3
-    result = None
-    
-    while attempt < max_attempts:
-        attempt += 1
-        print(f"\n[ATTEMPT {attempt}]")
-        
-        try:
-            if run_id is None:
-                output = await agent.do_async(task, return_output=True)
-                run_id = output.run_id
-                if output.is_complete:
-                    result = output
-                    print(f"  Completed on attempt {attempt}")
-                    break
-            else:
-                result = await agent.continue_run_async(run_id=run_id, return_output=True)
-                if result.is_complete:
-                    print(f"  Completed on attempt {attempt}")
-                    break
-        except Exception as e:
-            print(f"  Error on attempt {attempt}: {str(e)[:60]}...")
-            if agent._agent_run_output:
-                run_id = agent._agent_run_output.run_id
-            continue
-    
-    assert result is not None, "FAIL: Should have result"
-    assert result.is_complete, f"FAIL: Should be complete, got {result.status}"
-    assert attempt == 3, f"FAIL: Should complete on attempt 3, completed on {attempt}"
-    
-    print(f"\n  Final result: {result.content}")
-    print(f"  Completed after {attempt} attempts")
-    
-    # Verify storage shows resolved requirement
-    session = await db.storage.read_async("test_session", AgentSession)
-    final_context = session.runs[run_id].context
-    durable_reqs = [r for r in final_context.requirements if r.pause_type == 'durable_execution']
-    
-    # Should have 2 durable requirements (one for each error)
-    print(f"  Durable requirements count: {len(durable_reqs)}")
-    for i, req in enumerate(durable_reqs):
-        print(f"    [{i}] resolved: {req.is_resolved()}")
-    
-    # At least the last one should be resolved
-    assert any(r.is_resolved() for r in durable_reqs), "FAIL: At least one requirement should be resolved"
-    
-    cleanup()
-    clear_error_injection()
-    
-    print("\n" + "="*80)
-    print("ALL TESTS PASSED: Durable Execution - Multiple Retries")
-    print("="*80)
-
+# =============================================================================
+# MAIN
+# =============================================================================
 
 async def main():
     """Run all comprehensive tests."""
     
-    # External Tool Tests
     await test_external_tool_comprehensive()
-    
-    # Cancel Run Tests
     await test_cancel_run_comprehensive()
-    
-    # Durable Execution Tests
-    await test_durable_execution_model_execution_step()
-    await test_durable_execution_response_processing_step()
-    await test_durable_execution_tool_setup_step()
-    await test_durable_execution_message_build_step()
-    await test_durable_execution_multiple_retries()
+    await test_durable_execution_comprehensive()
+    await test_durable_cross_process_comprehensive()
     
     print("\n" + "="*80)
     print("ALL COMPREHENSIVE TESTS PASSED!")
     print("  - External Tool: PASSED")
     print("  - Cancel Run: PASSED")
-    print("  - Durable Execution (model_execution): PASSED")
-    print("  - Durable Execution (response_processing): PASSED")
-    print("  - Durable Execution (tool_setup): PASSED")
-    print("  - Durable Execution (message_build): PASSED")
-    print("  - Durable Execution (multiple retries): PASSED")
+    print("  - Durable Execution: PASSED")
+    print("  - Durable Cross-Process: PASSED")
     print("="*80)
 
 

@@ -333,6 +333,26 @@ class EmbeddingProvider(BaseModel, ABC):
         """Get current metrics for this embedding provider."""
         return self._metrics.copy()
     
+    def get_model_name(self) -> str:
+        """
+        Get the model name from the embedding provider configuration.
+        
+        Returns:
+            The model name string, or 'Unknown' if not available.
+        """
+        if hasattr(self, 'config') and hasattr(self.config, 'model_name'):
+            return self.config.model_name
+        return 'Unknown'
+    
+    async def aget_model_name(self) -> str:
+        """
+        Async version of get_model_name.
+        
+        Returns:
+            The model name string, or 'Unknown' if not available.
+        """
+        return self.get_model_name()
+    
     def clear_cache(self):
         """Clear the embedding cache."""
         self._cache.clear()

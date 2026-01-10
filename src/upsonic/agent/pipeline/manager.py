@@ -10,18 +10,19 @@ the execution pipeline.
 
 import time
 from typing import List, Optional, Dict, Any, AsyncIterator, TYPE_CHECKING
-from upsonic.agent.pipeline.step import Step
-from .step import Step, StepResult, StepStatus
+from .step import Step, StepStatus
 
 if TYPE_CHECKING:
-    from upsonic.run.agent.context import AgentRunContext
+    from upsonic.run.agent.output import AgentRunOutput
+    from upsonic.agent.pipeline.step import StepResult
     from upsonic.tasks.tasks import Task
     from upsonic.models import Model
     from upsonic.agent.agent import Agent
     from upsonic.tools.processor import ExternalExecutionPause
     from upsonic.run.events.events import AgentEvent
 else:
-    AgentRunContext = "AgentRunContext"
+    AgentRunOutput = "AgentRunOutput"
+    StepResult = "StepResult"
     Task = "Task"
     Model = "Model"
     Agent = "Agent"
@@ -67,7 +68,9 @@ class PipelineManager:
         self.agent = agent
         self.model = model
         self.debug = debug
-        self._execution_stats: Dict[str, Any] = {}
+        
+        # Manager registry for sharing managers across steps
+        self._managers: Dict[str, Any] = {}
     
     def add_step(self, step: Step) -> None:
         """Add a step to the pipeline."""
@@ -92,24 +95,127 @@ class PipelineManager:
                 return step
         return None
     
+    async def _save_session(self, output: "AgentRunOutput") -> None:
+        """
+        Save session to storage via Memory class.
+        
+        This is the centralized session saving for ALL scenarios:
+        - Successful completion (with memory features like summary, user profile)
+        - External tool pauses (checkpoint only)
+        - Cancel run (checkpoint only)
+        - Durable execution / error recovery (checkpoint only)
+        
+        Args:
+            output: The agent run output to save
+        """
+        if not self.agent:
+            return
+        
+        if self.agent.memory:
+            try:
+                await self.agent.memory.save_session_async(
+                    output=output,
+                    agent_id=self.agent.agent_id,
+                )
+            except Exception as save_error:
+                if self.debug:
+                    from upsonic.utils.printing import warning_log
+                    warning_log(f"Failed to save session: {save_error}", "PipelineManager")
+    
+    def _handle_cancellation(
+        self,
+        output: "AgentRunOutput",
+        cancelled_step_result: Optional["StepResult"] = None
+    ) -> None:
+        """
+        Handle run cancellation by marking output as cancelled.
+        
+        No requirements are created - the run status and step_results contain all needed info
+        for resumption via continue_run_async.
+        
+        Args:
+            output: The agent run output (single source of truth)
+            cancelled_step_result: Optional cancelled step result from output
+        """
+        if not cancelled_step_result:
+            cancelled_step_result = output.get_cancelled_step()
+        
+        output.mark_cancelled()
+        
+        if self.debug:
+            from upsonic.utils.printing import warning_log
+            step_name = cancelled_step_result.name if cancelled_step_result else 'unknown'
+            warning_log(f"Run cancelled at step {step_name}", "PipelineManager")
+    
+    async def _ahandle_cancellation(
+        self,
+        output: "AgentRunOutput",
+        cancelled_step_result: Optional["StepResult"] = None
+    ) -> None:
+        """
+        Async version of _handle_cancellation.
+        
+        Args:
+            output: The agent run output (single source of truth)
+            cancelled_step_result: Optional cancelled step result from output
+        """
+        self._handle_cancellation(output, cancelled_step_result)
+        await self._save_session(output)
+    
+    def _handle_durable_execution_error(
+        self,
+        output: "AgentRunOutput",
+        failed_step_result: Optional["StepResult"] = None
+    ) -> None:
+        """
+        Handle durable execution error by marking output as error.
+        
+        No requirements are created - the run status and step_results contain all needed info
+        for resumption via continue_run_async.
+        
+        Args:
+            output: The agent run output (single source of truth)
+            failed_step_result: Optional failed step result from output
+        """
+        if not failed_step_result:
+            failed_step_result = output.get_error_step()
+        
+        error_msg = failed_step_result.message if failed_step_result else None
+        output.mark_error(error_msg)
+    
+    async def _ahandle_durable_execution_error(
+        self,
+        output: "AgentRunOutput",
+        failed_step_result: Optional["StepResult"] = None
+    ) -> None:
+        """
+        Async version of _handle_durable_execution_error.
+        
+        Args:
+            output: The agent run output (single source of truth)
+            failed_step_result: Optional failed step result from output
+        """
+        self._handle_durable_execution_error(output, failed_step_result)
+        await self._save_session(output)
+    
     async def execute(
         self, 
-        context: "AgentRunContext",
+        context: "AgentRunOutput",
         start_step_index: int = 0
-    ) -> "AgentRunContext":
+    ) -> "AgentRunOutput":
         """
         Execute the pipeline (non-streaming).
 
-        Runs all steps in sequence, passing the context through each one.
+        Runs all steps in sequence, passing the output through each one.
         All steps must execute. If any step raises an error, the pipeline stops,
         logs the error properly, and raises it to the caller.
 
         Args:
-            context: The initial context
+            context: The agent run output (single source of truth)
             start_step_index: Index to start execution from (0-based). Used for HITL resumption.
 
         Returns:
-            AgentRunContext: The final context after all steps
+            AgentRunOutput: The final output after all steps
 
         Raises:
             Exception: Any exception from step execution is raised with proper error message
@@ -125,12 +231,6 @@ class PipelineManager:
                 step_name = self.steps[start_step_index].name if start_step_index < len(self.steps) else "unknown"
                 info_log(f"Resuming pipeline from step {start_step_index} ({step_name})", "PipelineManager")
         
-        self._execution_stats = {
-            "total_steps": len(self.steps),
-            "executed_steps": 0,
-            "step_results": {}
-        }
-
         with sentry_sdk.start_transaction(
             op="agent.pipeline.execute",
             name=f"Agent Pipeline ({len(self.steps)} steps)"
@@ -161,8 +261,6 @@ class PipelineManager:
             try:
                 for step_index in range(start_step_index, len(self.steps)):
                     step = self.steps[step_index]
-                    self._current_step_index = step_index
-                    self._current_step = step
                     
                     with sentry_sdk.start_span(
                         op=f"pipeline.step.{step.name}",
@@ -193,24 +291,12 @@ class PipelineManager:
                                 )
 
                         # Execute step - run() now returns StepResult directly
-                        result = await step.run(context, self.task, self.agent, self.model, step_index)
+                        result = await step.run(context, self.task, self.agent, self.model, step_index, pipeline_manager=self)
                         
-                        # Update execution stats
-                        context.execution_stats.executed_steps += 1
-                        context.execution_stats.step_timing[step.name] = result.execution_time
-                        context.execution_stats.step_statuses[step.name] = result.status.value
 
                         span.set_tag("step.status", result.status.value)
                         span.set_data("step.message", result.message)
                         span.set_data("step.execution_time", result.execution_time)
-
-                        self._execution_stats["step_results"][step.name] = {
-                            "status": result.status.value,
-                            "message": result.message,
-                            "execution_time": result.execution_time
-                        }
-
-                        self._execution_stats["executed_steps"] += 1
 
                         if self.debug:
                             from upsonic.utils.printing import pipeline_step_completed, debug_log_level2
@@ -232,26 +318,24 @@ class PipelineManager:
                                     step_status=result.status.value,
                                     execution_time=result.execution_time,
                                     step_message=result.message,
-                                    cumulative_execution_time=sum(s.get('execution_time', 0) for s in self._execution_stats["step_results"].values()),
-                                    steps_completed=self._execution_stats["executed_steps"]
+                                    cumulative_execution_time=sum(context.execution_stats.step_timing.values()),
+                                    steps_completed=context.execution_stats.executed_steps
                                 )
-                        
-                        if result.status == StepStatus.COMPLETED:
-                            pass
 
-                total_time = sum(r["execution_time"] for r in self._execution_stats["step_results"].values())
+
+                total_time = sum(context.execution_stats.step_timing.values())
                 
                 transaction.set_tag("pipeline.status", "success")
-                transaction.set_data("pipeline.executed_steps", self._execution_stats['executed_steps'])
+                transaction.set_data("pipeline.executed_steps", context.execution_stats.executed_steps)
                 transaction.set_data("pipeline.total_time", total_time)
 
                 _sentry_logger.info(
                     "Pipeline completed: %d/%d steps, %.3fs",
-                    self._execution_stats['executed_steps'],
+                    context.execution_stats.executed_steps,
                     len(self.steps),
                     total_time,
                     extra={
-                        "executed_steps": self._execution_stats['executed_steps'],
+                        "executed_steps": context.execution_stats.executed_steps,
                         "total_steps": len(self.steps),
                         "total_time": total_time,
                         "status": "success"
@@ -261,137 +345,41 @@ class PipelineManager:
                 if self.debug:
                     from upsonic.utils.printing import pipeline_completed, pipeline_timeline
                     pipeline_completed(
-                        self._execution_stats['executed_steps'],
+                        context.execution_stats.executed_steps,
                         len(self.steps),
                         total_time
                     )
+                    step_results_dict = {
+                        sr.name: {
+                            "status": sr.status.value,
+                            "message": sr.message,
+                            "execution_time": sr.execution_time
+                        }
+                        for sr in context.step_results
+                    }
                     pipeline_timeline(
-                        self._execution_stats["step_results"],
+                        step_results_dict,
                         total_time
                     )
-                
-                # Save on successful pipeline completion
-                last_step_result = context.step_results[-1] if context.step_results else None
-                if last_step_result and last_step_result.status == StepStatus.COMPLETED:
-                    if self.agent and self.agent._agent_run_output:
-                        from upsonic.run.base import RunStatus
-                        self.agent._agent_run_output.mark_completed()
-                        self.agent._agent_run_context = context
-                        self.agent._agent_run_output.sync_from_context(context)
-                        
-                        # Save completed run to storage
-                        if hasattr(self.agent, '_save_checkpoint_to_storage'):
-                            try:
-                                await self.agent._save_checkpoint_to_storage(context)
-                            except Exception:
-                                pass
-
                 return context
 
             except Exception as e:
-                from upsonic.run.requirements import RunRequirement
                 from upsonic.exceptions import RunCancelledException
                 from upsonic.tools.processor import ExternalExecutionPause
-                from upsonic.run.base import RunStatus
                 
                 # External tool pause - return normally with paused status
                 if isinstance(e, ExternalExecutionPause):
-                    await self._handle_external_tool_pause(context, e, self._execution_stats.get('executed_steps', 0))
+                    await self._handle_external_tool_pause(context, e)
                     return context
                 
                 # Cancel run - return normally with cancelled status (don't re-raise)
                 if isinstance(e, RunCancelledException):
-                    cancelled_step_result = context.get_cancelled_step()
-                    
-                    if cancelled_step_result is None and hasattr(self, '_current_step') and self._current_step is not None:
-                        cancelled_step_result = StepResult(
-                            name=self._current_step.name,
-                            step_number=getattr(self, '_current_step_index', 0),
-                            status=StepStatus.CANCELLED,
-                            message=str(e)[:500],
-                            execution_time=0.0
-                        )
-                        context.step_results.append(cancelled_step_result)
-                    
-                    if cancelled_step_result:
-                        if self.agent:
-                            context.tool_call_count = getattr(self.agent, '_tool_call_count', 0)
-                            context.tool_limit_reached = getattr(self.agent, '_tool_limit_reached', False)
-                        
-                        requirement = RunRequirement(pause_type='cancel')
-                        requirement.set_continuation_data(
-                            messages=list(context.chat_history),
-                            response=context.response,
-                            agent_state={
-                                'tool_call_count': context.tool_call_count,
-                                'tool_limit_reached': context.tool_limit_reached,
-                            },
-                            step_result=cancelled_step_result,
-                            execution_stats=context.execution_stats
-                        )
-                        context.add_requirement(requirement)
-                        
-                        if self.agent and hasattr(self.agent, '_save_checkpoint_to_storage'):
-                            try:
-                                await self.agent._save_checkpoint_to_storage(context)
-                            except Exception:
-                                pass
-                    
-                    if self.agent and self.agent._agent_run_output:
-                        self.agent._agent_run_output.status = RunStatus.cancelled
-                        self.agent._agent_run_context = context
-                        self.agent._agent_run_output.sync_from_context(context)
-                    
-                    if self.debug:
-                        from upsonic.utils.printing import warning_log
-                        step_name = cancelled_step_result.name if cancelled_step_result else 'unknown'
-                        warning_log(f"Run cancelled at step {step_name}", "PipelineManager")
-                    
+                    await self._ahandle_cancellation(context)
                     return context
                 
                 # Durable execution (error recovery) - save checkpoint and re-raise
                 failed_step_result = context.get_error_step()
-                
-                if failed_step_result is None and hasattr(self, '_current_step') and self._current_step is not None:
-                    failed_step_result = StepResult(
-                        name=self._current_step.name,
-                        step_number=getattr(self, '_current_step_index', 0),
-                        status=StepStatus.ERROR,
-                        message=str(e)[:500],
-                        execution_time=0.0
-                    )
-                    context.step_results.append(failed_step_result)
-                
-                if failed_step_result:
-                    if self.agent:
-                        context.tool_call_count = getattr(self.agent, '_tool_call_count', 0)
-                        context.tool_limit_reached = getattr(self.agent, '_tool_limit_reached', False)
-                    
-                    requirement = RunRequirement(pause_type='durable_execution')
-                    requirement.set_continuation_data(
-                        messages=list(context.chat_history),
-                        response=context.response,
-                        agent_state={
-                            'tool_call_count': context.tool_call_count,
-                            'tool_limit_reached': context.tool_limit_reached,
-                        },
-                        step_result=failed_step_result,
-                        execution_stats=context.execution_stats
-                    )
-                    context.add_requirement(requirement)
-                    
-                    if self.agent and hasattr(self.agent, '_save_checkpoint_to_storage'):
-                        try:
-                            await self.agent._save_checkpoint_to_storage(context)
-                        except Exception as save_error:
-                            if self.debug:
-                                from upsonic.utils.printing import warning_log
-                                warning_log(f"Failed to save checkpoint: {save_error}", "PipelineManager")
-                
-                if self.agent and self.agent._agent_run_output:
-                    self.agent._agent_run_output.status = RunStatus.error
-                    self.agent._agent_run_context = context
-                    self.agent._agent_run_output.sync_from_context(context)
+                await self._ahandle_durable_execution_error(context, failed_step_result)
                 
                 if self.debug:
                     from upsonic.utils.printing import warning_log, pipeline_failed, debug_log_level2
@@ -402,10 +390,12 @@ class PipelineManager:
                         f"❌ ERROR at step {step_number} ({step_name}): {str(e)[:100]}",
                         "PipelineManager"
                     )
+                    executed_steps = context.execution_stats.executed_steps if context.execution_stats else 0
+                    total_steps = context.execution_stats.total_steps if context.execution_stats else len(self.steps)
                     pipeline_failed(
                         str(e),
-                        self._execution_stats['executed_steps'],
-                        self._execution_stats['total_steps'],
+                        executed_steps,
+                        total_steps,
                         failed_step_result.message if failed_step_result else None,
                         failed_step_result.execution_time if failed_step_result else None
                     )
@@ -413,6 +403,14 @@ class PipelineManager:
                     debug_level = getattr(self.agent, 'debug_level', 1) if self.agent else 1
                     if debug_level >= 2:
                         error_traceback = ''.join(traceback.format_exception(type(e), e, e.__traceback__))
+                        step_results_dict = {
+                            sr.name: {
+                                "status": sr.status.value,
+                                "message": sr.message,
+                                "execution_time": sr.execution_time
+                            }
+                            for sr in context.step_results
+                        }
                         debug_log_level2(
                             "Pipeline execution error",
                             "PipelineManager",
@@ -423,9 +421,9 @@ class PipelineManager:
                             error_traceback=error_traceback[-2000:],
                             failed_step_index=failed_step_result.step_number if failed_step_result else 0,
                             failed_step_name=failed_step_result.name if failed_step_result else "Unknown",
-                            executed_steps=self._execution_stats['executed_steps'],
-                            total_steps=self._execution_stats['total_steps'],
-                            step_results=self._execution_stats["step_results"],
+                            executed_steps=executed_steps,
+                            total_steps=total_steps,
+                            step_results=step_results_dict,
                             task_description=self.task.description[:300] if self.task else None,
                             agent_name=getattr(self.agent, 'name', 'Unknown') if self.agent else None,
                             model_name=getattr(self.model, 'model_name', 'Unknown') if self.model else None
@@ -440,7 +438,7 @@ class PipelineManager:
     
     async def execute_stream(
         self, 
-        context: "AgentRunContext",
+        context: "AgentRunOutput",
         start_step_index: int = 0
     ) -> AsyncIterator["AgentEvent"]:
         """
@@ -452,11 +450,11 @@ class PipelineManager:
         - Step-specific events (cache, policy, tools, etc.)
         - LLM streaming events (text deltas, tool calls)
         
-        Events are collected in context.events and yielded after each step,
+        Events are collected in output.events and yielded after each step,
         as well as during streaming steps that emit events.
         
         Args:
-            context: The initial context with is_streaming=True
+            context: The agent run output (single source of truth) with is_streaming=True
             start_step_index: Index to start execution from (0-based). Used for HITL resumption.
             
         Yields:
@@ -480,12 +478,6 @@ class PipelineManager:
         from upsonic.run.pipeline.stats import PipelineExecutionStats
         if not context.execution_stats:
             context.execution_stats = PipelineExecutionStats(total_steps=len(self.steps))
-        
-        self._execution_stats = {
-            "total_steps": len(self.steps),
-            "executed_steps": 0,
-            "step_results": {}
-        }
         
         pipeline_start_time = time.time()
         
@@ -525,8 +517,6 @@ class PipelineManager:
         try:
             for step_index in range(start_step_index, len(self.steps)):
                 step = self.steps[step_index]
-                self._current_step_index = step_index
-                self._current_step = step
                 
                 if self.debug:
                     from upsonic.utils.printing import pipeline_step_started
@@ -539,7 +529,7 @@ class PipelineManager:
                 
                 # Use run_stream() for streaming execution - yields events including step start/end
                 if step.supports_streaming and context.is_streaming:
-                    async for event in step.run_stream(context, self.task, self.agent, self.model, step_index):
+                    async for event in step.run_stream(context, self.task, self.agent, self.model, step_index, pipeline_manager=self):
                         yield event
                         # Also collect in context.events if not already there
                         if event not in context.events:
@@ -555,7 +545,7 @@ class PipelineManager:
                         step_description=step.description
                     )
                     
-                    result = await step.run(context, self.task, self.agent, self.model, step_index)
+                    result = await step.run(context, self.task, self.agent, self.model, step_index, pipeline_manager=self)
                     
                     # Yield any events that were added to context during execution
                     for event in context.events[events_before:]:
@@ -575,18 +565,6 @@ class PipelineManager:
                 # Get result from context (last step result)
                 result = context.step_results[-1] if context.step_results else None
                 
-                # Update execution stats
-                if result:
-                    context.execution_stats.executed_steps += 1
-                    context.execution_stats.step_timing[step.name] = result.execution_time
-                    context.execution_stats.step_statuses[step.name] = result.status.value
-                    
-                    self._execution_stats["step_results"][step.name] = {
-                        "status": result.status.value,
-                        "message": result.message,
-                        "execution_time": result.execution_time
-                    }
-                    self._execution_stats["executed_steps"] += 1
                 
                 if self.debug and result:
                     from upsonic.utils.printing import pipeline_step_completed
@@ -596,28 +574,17 @@ class PipelineManager:
                         result.execution_time, 
                         result.message
                     )
-                
-                # Handle PAUSED status (simple break for streaming - no HITL in stream mode)
-                if result and result.status == StepStatus.PAUSED:
-                    from upsonic.run.events.events import RunPausedEvent
-                    reason = "Execution paused"
-                    yield RunPausedEvent(
-                        run_id=run_id or "",
-                        reason=reason,
-                        requirements=None
-                    )
-                    
-                    if self.debug:
-                        from upsonic.utils.printing import pipeline_paused
-                        pipeline_paused(step.name)
-                    break
+
             
             total_time = time.time() - pipeline_start_time
             
             last_step_status = context.step_results[-1].status if context.step_results else StepStatus.COMPLETED
             
-            # Note: RunCompletedEvent is already yielded by FinalizationStep/StreamFinalizationStep
-            # so we don't yield it here to avoid duplication
+            if last_step_status == StepStatus.COMPLETED:
+                if self.agent and self.agent._agent_run_output:
+                    self.agent._agent_run_output.mark_completed()
+                    context.tool_call_count = getattr(self.agent, '_tool_call_count', 0)
+                    context.tool_limit_reached = getattr(self.agent, '_tool_limit_reached', False)
             
             if self.debug:
                 from upsonic.utils.printing import pipeline_completed, pipeline_timeline
@@ -634,7 +601,8 @@ class PipelineManager:
             from upsonic.run.events.events import RunCancelledEvent
             
             if isinstance(e, RunCancelledException):
-                step_name = self._current_step.name if hasattr(self, '_current_step') and self._current_step else None
+                cancelled_step = context.get_cancelled_step()
+                step_name = cancelled_step.name if cancelled_step else None
                 yield RunCancelledEvent(
                     run_id=run_id or "",
                     message=str(e),
@@ -644,14 +612,13 @@ class PipelineManager:
             error_message = str(e)
             
             if self.agent and self.agent._agent_run_output:
-                from upsonic.run.base import RunStatus
                 if isinstance(e, RunCancelledException):
-                    self.agent._agent_run_output.status = RunStatus.cancelled
+                    self.agent._agent_run_output.mark_cancelled()
                 else:
-                    self.agent._agent_run_output.status = RunStatus.error
+                    self.agent._agent_run_output.mark_error()
                 
-                self.agent._agent_run_context = context
-                self.agent._agent_run_output.sync_from_context(context)
+                context.tool_call_count = getattr(self.agent, '_tool_call_count', 0)
+                context.tool_limit_reached = getattr(self.agent, '_tool_limit_reached', False)
             
             if self.debug:
                 from upsonic.utils.printing import pipeline_failed
@@ -667,39 +634,51 @@ class PipelineManager:
         
         finally:
             total_time = time.time() - pipeline_start_time
-            
-            derived_status: str = 'success'
-            if context.step_results:
-                last_status = context.step_results[-1].status
-                if last_status == StepStatus.ERROR:
-                    derived_status = 'error'
-                elif last_status == StepStatus.CANCELLED:
-                    derived_status = 'cancelled'
-                elif last_status == StepStatus.PAUSED:
-                    derived_status = 'paused'
+            executed_steps = context.execution_stats.executed_steps if context.execution_stats else 0
             
             # Emit pipeline end event
             yield PipelineEndEvent(
                 run_id=run_id or "",
-                status=derived_status,
+                status=context.step_results[-1].status.value if context.step_results else "unknown",
                 total_duration=total_time,
                 total_steps=len(self.steps),
-                executed_steps=self._execution_stats.get('executed_steps', 0),
+                executed_steps=executed_steps,
                 error_message=error_message
             )
             
             # Emit RunCompletedEvent LAST - after pipeline (only on success/completion)
-            if derived_status in ('success', 'completed'):
-                output_preview = str(context.final_output)[:100] if context.final_output else None
-                yield RunCompletedEvent(
-                    run_id=run_id or "",
-                    agent_id=agent_id or "",
-                    output_preview=output_preview
-                )
+            if context.step_results[-1].status == StepStatus.COMPLETED:
+                if self.agent and self.agent._agent_run_output:
+                    self.agent._agent_run_output.mark_completed()
+                    context.tool_call_count = getattr(self.agent, '_tool_call_count', 0)
+                    context.tool_limit_reached = getattr(self.agent, '_tool_limit_reached', False)
+                    yield RunCompletedEvent(
+                        run_id=run_id or "",
+                        agent_id=agent_id or "",
+                        output_preview=str(context.output)[:100] if context.output else None
+                    )
     
-    def get_execution_stats(self) -> Dict[str, Any]:
-        """Get statistics about the last execution."""
-        return self._execution_stats.copy()
+    def get_execution_stats(self, context: Optional["AgentRunOutput"] = None) -> Dict[str, Any]:
+        """Get statistics about the last execution from context."""
+        if context and context.execution_stats:
+            step_results_dict = {
+                sr.name: {
+                    "status": sr.status.value,
+                    "message": sr.message,
+                    "execution_time": sr.execution_time
+                }
+                for sr in context.step_results
+            }
+            return {
+                "total_steps": context.execution_stats.total_steps,
+                "executed_steps": context.execution_stats.executed_steps,
+                "step_results": step_results_dict,
+            }
+        return {
+            "total_steps": len(self.steps),
+            "executed_steps": 0,
+            "step_results": {}
+        }
     
     def find_step_index_by_name(self, step_name: str) -> int:
         """Find step index by step name."""
@@ -710,15 +689,16 @@ class PipelineManager:
     
     async def _handle_external_tool_pause(
         self, 
-        context: "AgentRunContext", 
+        output: "AgentRunOutput", 
         e: "ExternalExecutionPause", 
-        step_index: int
     ) -> None:
-        """Handle ExternalExecutionPause exception (non-streaming)."""
-        from upsonic.tools.processor import ExternalExecutionPause
+        """Handle ExternalExecutionPause exception (non-streaming).
+        
+        Creates RunRequirement for each external tool call. All context for resumption
+        is already in AgentRunOutput (chat_history, step_results, etc.).
+        """
         from upsonic.run.requirements import RunRequirement
         from upsonic.run.tools.tools import ToolExecution
-        from upsonic.run.base import RunStatus
         
         if self.task:
             self.task.is_paused = True
@@ -727,11 +707,7 @@ class PipelineManager:
         
         if not external_calls:
             raise RuntimeError("ExternalExecutionPause must have external_calls attached by ToolManager")
-        
-        if self.agent:
-            context.tool_call_count = getattr(self.agent, '_tool_call_count', 0)
-            context.tool_limit_reached = getattr(self.agent, '_tool_limit_reached', False)
-        
+
         for external_call in external_calls:
             tool_execution = ToolExecution(
                 tool_call_id=external_call.tool_call_id,
@@ -741,63 +717,69 @@ class PipelineManager:
                 external_execution_required=True,
             )
             
-            requirement = RunRequirement(
-                tool_execution=tool_execution,
-                pause_type='external_tool'
-            )
-            
-            requirement.set_continuation_data(
-                messages=list(context.chat_history),
-                response=context.response,
-                agent_state={
-                    'tool_call_count': context.tool_call_count,
-                    'tool_limit_reached': context.tool_limit_reached,
-                },
-                step_result=StepResult(
-                    name=self.steps[step_index].name if step_index < len(self.steps) else "unknown",
-                    step_number=step_index,
-                    status=StepStatus.PAUSED,
-                    message=f"Paused for external tool: {external_call.tool_name}",
-                    execution_time=0.0,
-                    extra_data={
-                        'tool_call_id': external_call.tool_call_id,
-                        'tool_name': external_call.tool_name,
-                        'tool_args': external_call.tool_args,
-                    }
-                ),
-                execution_stats=context.execution_stats
-            )
-            context.add_requirement(requirement)
+            requirement = RunRequirement(tool_execution=tool_execution)
+            output.add_requirement(requirement)
         
-        if self.task:
-            context.final_output = self.task.response
-        if self.agent and self.agent._agent_run_output:
-            self.agent._agent_run_output.content = context.final_output
+        output.mark_paused("external_tool")
         
-        paused_step_result = StepResult(
-            name=self.steps[step_index].name if step_index < len(self.steps) else "model_execution",
-            step_number=step_index,
-            status=StepStatus.PAUSED,
-            message=f"Execution paused for {len(external_calls)} external tool(s)",
-            execution_time=0.0,
-            extra_data={'external_tool_count': len(external_calls)}
-        )
-        context.step_results.append(paused_step_result)
-        
-        if self.agent and self.agent._agent_run_output:
-            self.agent._agent_run_output.status = RunStatus.paused
-            self.agent._agent_run_context = context
-            self.agent._agent_run_output.sync_from_context(context)
-        
-        if self.agent and hasattr(self.agent, '_save_checkpoint_to_storage'):
-            try:
-                await self.agent._save_checkpoint_to_storage(context)
-            except Exception:
-                pass
+        await self._save_session(output)
         
         if self.debug:
             from upsonic.utils.printing import info_log
             info_log(f"External tool pause: {len(external_calls)} tool(s) waiting", "PipelineManager")
+    
+    def set_manager(self, name: str, manager: Any) -> None:
+        """
+        Register a manager in the pipeline registry.
+        
+        Args:
+            name: Name identifier for the manager (e.g., 'memory_manager')
+            manager: The manager instance to register
+        """
+        self._managers[name] = manager
+    
+    def get_manager(self, name: str) -> Optional[Any]:
+        """
+        Retrieve a manager from the pipeline registry.
+        
+        Args:
+            name: Name identifier for the manager (e.g., 'memory_manager')
+            
+        Returns:
+            The manager instance if found, None otherwise
+        """
+        return self._managers.get(name)
+    
+    def has_manager(self, name: str) -> bool:
+        """
+        Check if a manager exists in the registry.
+        
+        Args:
+            name: Name identifier for the manager
+            
+        Returns:
+            True if manager exists, False otherwise
+        """
+        return name in self._managers
+    
+    def remove_manager(self, name: str) -> bool:
+        """
+        Remove a manager from the registry.
+        
+        Args:
+            name: Name identifier for the manager
+            
+        Returns:
+            True if manager was removed, False if not found
+        """
+        if name in self._managers:
+            del self._managers[name]
+            return True
+        return False
+    
+    def clear_managers(self) -> None:
+        """Clear all managers from the registry."""
+        self._managers.clear()
     
     def __repr__(self) -> str:
         """String representation of the pipeline."""
