@@ -3,22 +3,23 @@ from typing import Optional, Type, Union, Dict, Any, List, Literal, Generic, Typ
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
-    import aiosqlite
-    from mem0 import Memory as Mem0Memory, AsyncMemoryClient as Mem0AsyncMemoryClient
-    from ..storage.providers.mem0 import Mem0Storage
-    from ..storage.providers.postgres import PostgresStorage
-    from ..storage.providers.redis import RedisStorage
-    from ..storage.providers.sqlite import SqliteStorage
-    from ..storage.providers.mongo import MongoStorage
-    from ..storage.providers.in_memory import InMemoryStorage
-    from ..storage.providers.json import JSONStorage
-    from motor.motor_asyncio import AsyncIOMotorDatabase, AsyncIOMotorClient
-    from redis.asyncio import Redis
+    from sqlalchemy.engine import Engine
+    from pymongo import MongoClient
+    from redis import Redis
+    from mem0 import Memory as Mem0Memory, MemoryClient as Mem0MemoryClient
+    from mem0.configs.base import MemoryConfig
+    from ..storage.mem0 import Mem0Storage
+    from ..storage.postgres import PostgresStorage
+    from ..storage.redis import RedisStorage
+    from ..storage.sqlite import SqliteStorage
+    from ..storage.mongo import MongoStorage
+    from ..storage.in_memory import InMemoryStorage
+    from ..storage.json import JSONStorage
 
 from ..storage.base import Storage
 from ..storage.memory.memory import Memory
 from ..models import Model
-from ..storage.providers import (
+from ..storage import (
     InMemoryStorage,
     JSONStorage,
     Mem0Storage,
@@ -66,9 +67,11 @@ class SqliteDatabase(DatabaseBase[SqliteStorage]):
     
     def __init__(
         self,
-        db: Optional[aiosqlite.Connection] = None,
         db_file: Optional[str] = None,
-        agent_sessions_table_name: Optional[str] = None,
+        db_engine: Optional[Any] = None,
+        db_url: Optional[str] = None,
+        session_table: Optional[str] = None,
+        user_memory_table: Optional[str] = None,
         session_id: Optional[str] = None,
         user_id: Optional[str] = None,
         full_session_memory: bool = False,
@@ -84,9 +87,11 @@ class SqliteDatabase(DatabaseBase[SqliteStorage]):
         user_memory_mode: Literal['update', 'replace'] = 'update'
     ):
         storage = SqliteStorage(
-            db=db,
             db_file=db_file,
-            agent_sessions_table_name=agent_sessions_table_name
+            db_engine=db_engine,
+            db_url=db_url,
+            session_table=session_table,
+            user_memory_table=user_memory_table
         )
         
         memory = Memory(
@@ -116,10 +121,12 @@ class PostgresDatabase(DatabaseBase[PostgresStorage]):
     
     def __init__(
         self,
-        pool: Optional[aiosqlite.Pool] = None,
         db_url: Optional[str] = None,
-        schema: str = "public",
-        agent_sessions_table_name: Optional[str] = None,
+        db_engine: Optional[Any] = None,
+        db_schema: Optional[str] = None,
+        session_table: Optional[str] = None,
+        user_memory_table: Optional[str] = None,
+        create_schema: bool = True,
         session_id: Optional[str] = None,
         user_id: Optional[str] = None,
         full_session_memory: bool = False,
@@ -135,10 +142,12 @@ class PostgresDatabase(DatabaseBase[PostgresStorage]):
         user_memory_mode: Literal['update', 'replace'] = 'update'
     ):
         storage = PostgresStorage(
-            pool=pool,
             db_url=db_url,
-            schema=schema,
-            agent_sessions_table_name=agent_sessions_table_name
+            db_engine=db_engine,
+            db_schema=db_schema,
+            session_table=session_table,
+            user_memory_table=user_memory_table,
+            create_schema=create_schema
         )
         
         memory = Memory(
@@ -168,12 +177,11 @@ class MongoDatabase(DatabaseBase[MongoStorage]):
     
     def __init__(
         self,
-        database: Optional['AsyncIOMotorDatabase'] = None,
-        client: Optional['AsyncIOMotorClient'] = None,
+        db_client: Optional[Any] = None,
+        db_name: Optional[str] = None,
         db_url: Optional[str] = None,
-        database_name: Optional[str] = None,
-        agent_sessions_collection_name: Optional[str] = None,
-        cultural_knowledge_collection_name: Optional[str] = None,
+        session_collection: Optional[str] = None,
+        user_memory_collection: Optional[str] = None,
         session_id: Optional[str] = None,
         user_id: Optional[str] = None,
         full_session_memory: bool = False,
@@ -189,11 +197,11 @@ class MongoDatabase(DatabaseBase[MongoStorage]):
         user_memory_mode: Literal['update', 'replace'] = 'update'
     ):
         storage = MongoStorage(
-            database=database,
-            client=client,
+            db_client=db_client,
+            db_name=db_name,
             db_url=db_url,
-            database_name=database_name or "upsonic",
-            sessions_collection_name=agent_sessions_collection_name
+            session_collection=session_collection,
+            user_memory_collection=user_memory_collection
         )
         
         memory = Memory(
@@ -223,14 +231,12 @@ class RedisDatabase(DatabaseBase[RedisStorage]):
     
     def __init__(
         self,
-        redis_client: Optional['Redis'] = None,
-        prefix: Optional[str] = None,
-        host: str = "localhost",
-        port: int = 6379,
-        db: int = 0,
-        password: Optional[str] = None,
-        ssl: bool = False,
+        redis_client: Optional[Any] = None,
+        db_url: Optional[str] = None,
+        db_prefix: str = "upsonic",
         expire: Optional[int] = None,
+        session_table: Optional[str] = None,
+        user_memory_table: Optional[str] = None,
         session_id: Optional[str] = None,
         user_id: Optional[str] = None,
         full_session_memory: bool = False,
@@ -247,13 +253,11 @@ class RedisDatabase(DatabaseBase[RedisStorage]):
     ):
         storage = RedisStorage(
             redis_client=redis_client,
-            prefix=prefix,
-            host=host,
-            port=port,
-            db=db,
-            password=password,
-            ssl=ssl,
-            expire=expire
+            db_url=db_url,
+            db_prefix=db_prefix,
+            expire=expire,
+            session_table=session_table,
+            user_memory_table=user_memory_table
         )
         
         memory = Memory(
@@ -283,7 +287,8 @@ class InMemoryDatabase(DatabaseBase[InMemoryStorage]):
     
     def __init__(
         self,
-        max_sessions: Optional[int] = None,
+        session_table: Optional[str] = None,
+        user_memory_table: Optional[str] = None,
         session_id: Optional[str] = None,
         user_id: Optional[str] = None,
         full_session_memory: bool = False,
@@ -299,7 +304,8 @@ class InMemoryDatabase(DatabaseBase[InMemoryStorage]):
         user_memory_mode: Literal['update', 'replace'] = 'update'
     ):
         storage = InMemoryStorage(
-            max_sessions=max_sessions
+            session_table=session_table,
+            user_memory_table=user_memory_table
         )
         
         memory = Memory(
@@ -329,8 +335,9 @@ class JSONDatabase(DatabaseBase[JSONStorage]):
     
     def __init__(
         self,
-        directory_path: str,
-        pretty_print: bool = True,
+        db_path: Optional[str] = None,
+        session_table: Optional[str] = None,
+        user_memory_table: Optional[str] = None,
         session_id: Optional[str] = None,
         user_id: Optional[str] = None,
         full_session_memory: bool = False,
@@ -346,8 +353,9 @@ class JSONDatabase(DatabaseBase[JSONStorage]):
         user_memory_mode: Literal['update', 'replace'] = 'update'
     ):
         storage = JSONStorage(
-            directory_path=directory_path,
-            pretty_print=pretty_print
+            db_path=db_path,
+            session_table=session_table,
+            user_memory_table=user_memory_table
         )
         
         memory = Memory(
@@ -377,18 +385,15 @@ class Mem0Database(DatabaseBase[Mem0Storage]):
     
     def __init__(
         self,
-        client: Optional[Union['Mem0Memory', 'Mem0AsyncMemoryClient']] = None,
+        memory_client: Optional[Any] = None,
         api_key: Optional[str] = None,
+        host: Optional[str] = None,
         org_id: Optional[str] = None,
         project_id: Optional[str] = None,
-        local_config: Optional[Dict[str, Any]] = None,
-        namespace: str = "upsonic",
-        infer: bool = False,
-        custom_categories: Optional[List[str]] = None,
-        enable_caching: bool = True,
-        cache_ttl: int = 300,
-        output_format: str = "v1.1",
-        version: str = "v2",
+        config: Optional[Any] = None,
+        session_table: Optional[str] = None,
+        user_memory_table: Optional[str] = None,
+        default_user_id: str = "upsonic_default",
         session_id: Optional[str] = None,
         user_id: Optional[str] = None,
         full_session_memory: bool = False,
@@ -404,18 +409,15 @@ class Mem0Database(DatabaseBase[Mem0Storage]):
         user_memory_mode: Literal['update', 'replace'] = 'update'
     ):
         storage = Mem0Storage(
-            client=client,
+            memory_client=memory_client,
             api_key=api_key,
+            host=host,
             org_id=org_id,
             project_id=project_id,
-            local_config=local_config,
-            namespace=namespace,
-            infer=infer,
-            custom_categories=custom_categories,
-            enable_caching=enable_caching,
-            cache_ttl=cache_ttl,
-            output_format=output_format,
-            version=version
+            config=config,
+            session_table=session_table,
+            user_memory_table=user_memory_table,
+            default_user_id=default_user_id
         )
         
         memory = Memory(

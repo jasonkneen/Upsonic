@@ -46,16 +46,4 @@ class PipelineExecutionStats:
             step_timing=data.get("step_timing", {}),
             step_statuses=data.get("step_statuses", {}),
         )
-    
-    def serialize(self) -> bytes:
-        """Serialize to bytes for storage."""
-        import cloudpickle
-        return cloudpickle.dumps(self.to_dict())
-    
-    @classmethod
-    def deserialize(cls, data: bytes) -> "PipelineExecutionStats":
-        """Deserialize from bytes."""
-        import cloudpickle
-        dict_data = cloudpickle.loads(data)
-        return cls.from_dict(dict_data)
 

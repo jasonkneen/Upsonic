@@ -79,7 +79,12 @@ class ModelProfile:
         return replace(self, **non_default_attrs)
     
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary with raw values (no serialization)."""
+        """Convert to JSON-serializable dictionary."""
+        # Serialize json_schema_transformer class to its name for JSON compatibility
+        json_schema_transformer_value: Optional[str] = None
+        if self.json_schema_transformer is not None:
+            json_schema_transformer_value = self.json_schema_transformer.__name__
+        
         return {
             "supports_tools": self.supports_tools,
             "supports_json_schema_output": self.supports_json_schema_output,
@@ -87,9 +92,9 @@ class ModelProfile:
             "supports_image_output": self.supports_image_output,
             "default_structured_output_mode": self.default_structured_output_mode,
             "prompted_output_template": self.prompted_output_template,
-            "thinking_tags": self.thinking_tags,
+            "thinking_tags": list(self.thinking_tags),  # Convert tuple to list for JSON
             "ignore_streamed_leading_whitespace": self.ignore_streamed_leading_whitespace,
-            "json_schema_transformer": self.json_schema_transformer,
+            "json_schema_transformer": json_schema_transformer_value,
         }
     
     @classmethod
@@ -102,10 +107,19 @@ class ModelProfile:
         # Handle json_schema_transformer - can be class reference or string name
         json_schema_transformer = data.get("json_schema_transformer")
         if isinstance(json_schema_transformer, str):
-            if json_schema_transformer == "InlineDefsJsonSchemaTransformer":
-                json_schema_transformer = InlineDefsJsonSchemaTransformer
-            else:
-                json_schema_transformer = None
+            # Map known transformer names to their classes
+            transformer_map: Dict[str, type[JsonSchemaTransformer]] = {
+                "InlineDefsJsonSchemaTransformer": InlineDefsJsonSchemaTransformer,
+            }
+            # Lazy import provider-specific transformers to avoid circular imports
+            if json_schema_transformer == "OpenAIJsonSchemaTransformer":
+                from upsonic.profiles.openai import OpenAIJsonSchemaTransformer
+                transformer_map["OpenAIJsonSchemaTransformer"] = OpenAIJsonSchemaTransformer
+            elif json_schema_transformer == "GoogleJsonSchemaTransformer":
+                from upsonic.profiles.google import GoogleJsonSchemaTransformer
+                transformer_map["GoogleJsonSchemaTransformer"] = GoogleJsonSchemaTransformer
+            
+            json_schema_transformer = transformer_map.get(json_schema_transformer, None)
         
         return cls(
             supports_tools=data.get("supports_tools", True),
@@ -134,16 +148,7 @@ class ModelProfile:
         if self.json_schema_transformer is not None:
             result["json_schema_transformer"] = self.json_schema_transformer.__name__
         return result
-    
-    def serialize(self) -> bytes:
-        """Serialize to bytes using Pydantic TypeAdapter."""
-        return ModelProfileTypeAdapter.dump_json(self._to_serializable_dict())
-    
-    @classmethod
-    def deserialize(cls, data: bytes) -> "ModelProfile":
-        """Deserialize from bytes using Pydantic TypeAdapter."""
-        dict_data = ModelProfileTypeAdapter.validate_json(data)
-        return cls.from_dict(dict_data)
+
 
 
 ModelProfileTypeAdapter = pydantic.TypeAdapter(Dict[str, Any])

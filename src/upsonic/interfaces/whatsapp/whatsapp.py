@@ -202,7 +202,7 @@ class WhatsAppInterface(Interface):
             recipient: Recipient's WhatsApp ID
         """
         # Get ModelResponse from run_result only
-        run_result = self.agent.get_run_result()
+        run_result = self.agent.get_run_output()
         if not run_result:
             return False
         
@@ -307,7 +307,7 @@ class WhatsAppInterface(Interface):
             await self.agent.do_async(task)
             
             # Get ModelResponse from run_result only
-            run_result = self.agent.get_run_result()
+            run_result = self.agent.get_run_output()
             if not run_result:
                 error_log("No run_result available after agent execution")
                 return

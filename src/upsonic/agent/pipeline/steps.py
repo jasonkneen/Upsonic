@@ -9,9 +9,8 @@ PipelineManager passes task, agent, model, and step_number to each step.
 
 Each step is responsible for:
 1. Checking cancellation via raise_if_cancelled
-2. Checking injected errors via check_and_raise_injected_error (for testing)
-3. Executing business logic
-4. Creating StepResult with all attributes set and returning it
+2. Executing business logic
+3. Creating StepResult with all attributes set and returning it
 
 The base class Step.run() method handles:
 - Appending result to context.step_results
@@ -20,7 +19,7 @@ The base class Step.run() method handles:
 
 import time
 from typing import TYPE_CHECKING, Any, AsyncIterator, Optional
-from .step import Step, StepResult, StepStatus, check_and_raise_injected_error
+from .step import Step, StepResult, StepStatus
 
 if TYPE_CHECKING:
     from upsonic.run.agent.output import AgentRunOutput
@@ -59,7 +58,6 @@ class InitializationStep(Step):
         try:
             if agent and hasattr(agent, 'run_id') and agent.run_id:
                 raise_if_cancelled(agent.run_id)
-            check_and_raise_injected_error(self.name)
             
             from upsonic.utils.printing import agent_started
 
@@ -68,6 +66,9 @@ class InitializationStep(Step):
 
             context.tool_call_count = 0
             agent.current_task = context.task
+            
+            # Start usage timer for tracking run duration
+            context.start_usage_timer()
             
             if context.is_streaming:
                 from upsonic.utils.agent.events import ayield_agent_initialized_event
@@ -134,8 +135,7 @@ class CacheCheckStep(Step):
         try:
             if agent and hasattr(agent, 'run_id') and agent.run_id:
                 raise_if_cancelled(agent.run_id)
-            check_and_raise_injected_error(self.name)
-            
+
             if not task.enable_cache or task.is_paused:
                 if context.is_streaming:
                     from upsonic.utils.agent.events import ayield_cache_check_event
@@ -159,7 +159,7 @@ class CacheCheckStep(Step):
                 from upsonic.utils.printing import cache_configuration
                 embedding_provider_name = None
                 if task.cache_embedding_provider:
-                    embedding_provider_name = task.cache_embedding_provider.model_name
+                    embedding_provider_name = task.cache_embedding_provider.get_model_name()
                 
                 cache_configuration(
                     enable_cache=task.enable_cache,
@@ -308,7 +308,6 @@ class UserPolicyStep(Step):
         try:
             if agent and hasattr(agent, 'run_id') and agent.run_id:
                 raise_if_cancelled(agent.run_id)
-            check_and_raise_injected_error(self.name)
             
             policy_count = len(agent.user_policy_manager._policies) if hasattr(agent.user_policy_manager, '_policies') else 0
             
@@ -422,7 +421,6 @@ class ModelSelectionStep(Step):
         try:
             if agent and hasattr(agent, 'run_id') and agent.run_id:
                 raise_if_cancelled(agent.run_id)
-            check_and_raise_injected_error(self.name)
             
             context.model_name = model.model_name if model else None
             context.model_provider = model.system if model else None
@@ -508,7 +506,6 @@ class ToolSetupStep(Step):
         try:
             if agent and hasattr(agent, 'run_id') and agent.run_id:
                 raise_if_cancelled(agent.run_id)
-            check_and_raise_injected_error(self.name)
             
             agent._setup_task_tools(task)
             
@@ -615,7 +612,6 @@ class StorageConnectionStep(Step):
         try:
             if agent and hasattr(agent, 'run_id') and agent.run_id:
                 raise_if_cancelled(agent.run_id)
-            check_and_raise_injected_error(self.name)
             
             storage_type = None
             is_connected = False
@@ -707,7 +703,6 @@ class LLMManagerStep(Step):
         try:
             if agent and hasattr(agent, 'run_id') and agent.run_id:
                 raise_if_cancelled(agent.run_id)
-            check_and_raise_injected_error(self.name)
             
             default_model_name = agent.model.model_name if agent.model else 'Unknown'
             
@@ -803,7 +798,6 @@ class MessageBuildStep(Step):
         try:
             if agent and hasattr(agent, 'run_id') and agent.run_id:
                 raise_if_cancelled(agent.run_id)
-            check_and_raise_injected_error(self.name)
             
             if hasattr(task, '_cached_result') and task._cached_result:
                 step_result = StepResult(
@@ -847,6 +841,10 @@ class MessageBuildStep(Step):
                     await culture_manager_obj.aprepare()
                 
                 try:
+                    # Get historical message count BEFORE building messages
+                    # This is the count of messages loaded from memory (not including new user request)
+                    historical_message_count = len(memory_manager.get_message_history())
+                    
                     if culture_manager_obj:
                         messages = await agent._build_model_request(
                             task,
@@ -861,7 +859,11 @@ class MessageBuildStep(Step):
                             None,
                         )
                     context.chat_history = messages
-                    context.memory_message_count = len(memory_manager.get_message_history())
+                    
+                    # Mark the start of this run by recording the HISTORICAL message count
+                    # This ensures new messages include: user request + model response(s)
+                    # The boundary should be at the end of historical messages, not current chat_history length
+                    context._run_boundaries.append(historical_message_count)
                     
                     if agent.debug and agent.debug_level >= 2:
                         from upsonic.utils.printing import debug_log_level2
@@ -876,14 +878,14 @@ class MessageBuildStep(Step):
                             message_count=len(messages),
                             total_parts=total_parts,
                             message_details=message_details,
-                            has_memory=len(memory_manager.get_message_history()) > 0,
-                            memory_message_count=len(memory_manager.get_message_history()),
+                            has_memory=historical_message_count > 0,
+                            historical_message_count=historical_message_count,
                             has_culture=culture_manager_obj is not None,
                             task_description=task.description[:300] if task else None
                         )
                     
                     has_system = False
-                    has_memory = len(memory_manager.get_message_history()) > 0
+                    has_memory = historical_message_count > 0
                     from upsonic.messages import ModelRequest, SystemPromptPart
                     if messages:
                         first_msg = messages[0]
@@ -960,11 +962,11 @@ class ModelExecutionStep(Step):
         step_result: Optional[StepResult] = None
         memory_manager = None
         call_manager = None
+        response = None  # Track response for usage update in finally
         
         try:
             if agent and hasattr(agent, 'run_id') and agent.run_id:
                 raise_if_cancelled(agent.run_id)
-            check_and_raise_injected_error(self.name)
             
             if hasattr(task, '_cached_result') and task._cached_result:
                 step_result = StepResult(
@@ -999,8 +1001,17 @@ class ModelExecutionStep(Step):
                 ):
                     context.events.append(event)
             
+            memory_manager = None
             if pipeline_manager:
                 memory_manager = pipeline_manager.get_manager('memory_manager')
+            
+            # Fallback: Create memory_manager if not available (resumption case)
+            if memory_manager is None and task.guardrail and agent.memory:
+                from upsonic.agent.context_managers import MemoryManager
+                memory_manager = MemoryManager(agent.memory, agent_metadata=getattr(agent, 'metadata', None))
+                if pipeline_manager:
+                    pipeline_manager.set_manager('memory_manager', memory_manager)
+                await memory_manager.aprepare()
             
             # Create and register CallManager
             from upsonic.agent.context_managers import CallManager
@@ -1124,8 +1135,15 @@ class ModelExecutionStep(Step):
                 ):
                     context.events.append(event)
             
-            context.tool_call_count = getattr(agent, '_tool_call_count', 0)
+            agent_tool_calls = getattr(agent, '_tool_call_count', 0)
+            prev_tool_calls = context.tool_call_count
+            context.tool_call_count = agent_tool_calls
             context.tool_limit_reached = getattr(agent, '_tool_limit_reached', False)
+            
+            # Update usage with new tool calls made in this model execution
+            new_tool_calls = agent_tool_calls - prev_tool_calls
+            if new_tool_calls > 0:
+                context.increment_tool_calls(new_tool_calls)
             
             step_result = StepResult(
                 name=self.name,
@@ -1166,6 +1184,19 @@ class ModelExecutionStep(Step):
             )
             raise
         finally:
+            # Always update usage from model response if available (even on error/cancel)
+            # This ensures usage is tracked for durable execution recovery
+            if response is not None and hasattr(response, 'usage') and response.usage:
+                try:
+                    context.update_usage_from_response(response.usage)
+                    
+                    # Calculate and set cost
+                    from upsonic.utils.usage import calculate_cost_from_usage
+                    cost_value = calculate_cost_from_usage(response.usage, model)
+                    context.set_usage_cost(cost_value)
+                except Exception:
+                    pass  # Silently ignore usage update errors in finally
+            
             if step_result:
                 self._finalize_step_result(step_result, context)
             
@@ -1189,12 +1220,10 @@ class ResponseProcessingStep(Step):
         
         start_time = time.time()
         step_result: Optional[StepResult] = None
-        messages_added = 0
         
         try:
             if agent and hasattr(agent, 'run_id') and agent.run_id:
                 raise_if_cancelled(agent.run_id)
-            check_and_raise_injected_error(self.name)
             
             if hasattr(task, '_cached_result') and task._cached_result:
                 step_result = StepResult(
@@ -1245,18 +1274,15 @@ class ResponseProcessingStep(Step):
                 if images:
                     context.images = images
             
-            history_length = context.memory_message_count if hasattr(context, 'memory_message_count') else 0
-            new_messages = []
-            if context.chat_history and history_length < len(context.chat_history):
-                new_messages = context.chat_history[history_length:]
-                context.add_messages(new_messages)
-                messages_added = len(new_messages)
+            # Note: Message finalization is deferred to MemorySaveStep
+            # This ensures all steps (including AgentPolicyStep feedback loop) 
+            # can add their messages to chat_history before we extract new messages
             
             step_result = StepResult(
                 name=self.name,
                 step_number=step_number,
                 status=StepStatus.COMPLETED,
-                message=f"Response processed, {messages_added} messages tracked",
+                message="Response processed",
                 execution_time=time.time() - start_time,
             )
             return step_result
@@ -1306,7 +1332,6 @@ class ReflectionStep(Step):
         try:
             if agent and hasattr(agent, 'run_id') and agent.run_id:
                 raise_if_cancelled(agent.run_id)
-            check_and_raise_injected_error(self.name)
             
             if not (agent.reflection_processor and agent.reflection):
                 if context.is_streaming:
@@ -1367,16 +1392,38 @@ class ReflectionStep(Step):
                     reflection_config=str(agent.reflection_processor.config) if hasattr(agent.reflection_processor, 'config') else None
                 )
             
-            improved_output = await agent.reflection_processor.process_with_reflection(
+            # Execute reflection processing - returns ReflectionResult with all info
+            reflection_result = await agent.reflection_processor.process_with_reflection(
                 agent,
                 task,
                 context.output
             )
+            
+            # Extract values from ReflectionResult
+            improved_output = reflection_result.improved_output
+            improvement_made = reflection_result.improvement_made
+            improved_preview = str(improved_output)[:100] if improved_output else None
+            
+            # Track the reflection interaction in chat_history and update context attributes
+            from upsonic.messages import UserPromptPart, TextPart, ModelRequest, ModelResponse
+            
+            # FIRST INPUT: Create ModelRequest with the evaluation prompt from ReflectionResult
+            evaluation_request = ModelRequest(parts=[UserPromptPart(content=reflection_result.evaluation_prompt)])
+            
+            # LAST OUTPUT: Create ModelResponse with the improved output from ReflectionResult
+            improved_text = str(improved_output) if improved_output else ""
+            improved_response = ModelResponse(parts=[TextPart(content=improved_text)])
+            
+            # Add to chat_history (full session history)
+            context.chat_history.append(evaluation_request)
+            context.chat_history.append(improved_response)
+            
+            # Update context.response (last ModelResponse from LLM)
+            context.response = improved_response
+            
+            # Update context.output (last output of the agent)
             task._response = improved_output
             context.output = improved_output
-            
-            improved_preview = str(improved_output)[:100] if improved_output else None
-            improvement_made = str(original_output) != str(improved_output)
             
             if agent.debug and agent.debug_level >= 2:
                 from upsonic.utils.printing import debug_log_level2
@@ -1458,7 +1505,6 @@ class CallManagementStep(Step):
         try:
             if agent and hasattr(agent, 'run_id') and agent.run_id:
                 raise_if_cancelled(agent.run_id)
-            check_and_raise_injected_error(self.name)
             
             if hasattr(task, '_cached_result') and task._cached_result:
                 step_result = StepResult(
@@ -1518,6 +1564,45 @@ class CallManagementStep(Step):
                         response_format=str(task.response_format) if hasattr(task, 'response_format') and task.response_format else None,
                         total_cost=getattr(task, 'total_cost', None)
                     )
+            elif context and context.output is not None:
+                # Fallback for resumption case: call_manager not available but we have output
+                # This happens when resuming from a cancelled/errored run where ModelExecutionStep was skipped
+                from upsonic.utils.printing import call_end
+                from upsonic.utils.llm_usage import llm_usage
+                from upsonic.utils.tool_usage import tool_usage as get_tool_usage
+                
+                # Try to get usage from context.usage (RunUsage) first, then fallback to llm_usage
+                if hasattr(context, 'usage') and context.usage and hasattr(context.usage, 'input_tokens'):
+                    usage = {
+                        "input_tokens": context.usage.input_tokens,
+                        "output_tokens": context.usage.output_tokens
+                    }
+                else:
+                    usage = llm_usage(context)
+                
+                tool_usage_result = get_tool_usage(context, task) if agent.show_tool_calls else None
+                
+                # Get timing from context.usage if available
+                # We want current time minus duration to get start_time, and current time as end_time
+                context_end_time = time.time()
+                context_start_time = context_end_time  # Default: will show 0.0s execution time
+                
+                if hasattr(context, 'usage') and context.usage:
+                    if hasattr(context.usage, 'duration') and context.usage.duration:
+                        # Use duration to calculate start_time
+                        context_start_time = context_end_time - context.usage.duration
+                
+                call_end(
+                    context.output,
+                    model,
+                    task.response_format if hasattr(task, 'response_format') else str,
+                    context_start_time,
+                    context_end_time,
+                    usage,
+                    tool_usage_result,
+                    agent.debug,
+                    getattr(task, 'price_id', None)
+                )
             
             step_result = StepResult(
                 name=self.name,
@@ -1574,7 +1659,6 @@ class TaskManagementStep(Step):
         try:
             if agent and hasattr(agent, 'run_id') and agent.run_id:
                 raise_if_cancelled(agent.run_id)
-            check_and_raise_injected_error(self.name)
             
             task_manager = TaskManager(task, agent)
             
@@ -1624,8 +1708,9 @@ class MemorySaveStep(Step):
     For HITL (errors, cancel, external tools), session saving is handled
     by PipelineManager's exception handlers.
     
-    Message tracking (adding messages to AgentRunOutput) is done in
-    ResponseProcessingStep to ensure CallManagementStep can display tool usage.
+    Message tracking is finalized HERE (not in ResponseProcessingStep) to ensure
+    all steps that may add messages (e.g., AgentPolicyStep feedback loop) have
+    completed before we extract the new messages.
     """
     
     @property
@@ -1647,21 +1732,32 @@ class MemorySaveStep(Step):
         try:
             if agent and hasattr(agent, 'run_id') and agent.run_id:
                 raise_if_cancelled(agent.run_id)
-            check_and_raise_injected_error(self.name)
 
             
             context.tool_call_count = getattr(agent, 'tool_call_count', 0)
             context.tool_limit_reached = getattr(agent, 'tool_limit_reached', False)
             
+            # Finalize run messages BEFORE marking completed
+            # This extracts new messages from chat_history (using _run_boundaries)
+            # and sets them to context.messages
+            context.finalize_run_messages()
+            
+            # Stop usage timer and finalize run-level usage
+            context.stop_usage_timer()
+            
+            # Note: Session-level usage is updated in AgentSessionMemory.asave()
+            # when the session is saved to storage
+            
             # Mark completed BEFORE save so all state is captured (including resolved requirements)
             context.mark_completed()
                 
             # Create step_result FIRST so we can include it in save
+            messages_count = len(context.messages) if context.messages else 0
             step_result = StepResult(
                 name=self.name,
                 step_number=step_number,
                 status=StepStatus.COMPLETED,
-                message="Session saved successfully!",
+                message=f"Session saved ({messages_count} messages)",
                 execution_time=time.time() - start_time,
             )
             
@@ -1798,7 +1894,6 @@ class CultureUpdateStep(Step):
         try:
             if agent and hasattr(agent, 'run_id') and agent.run_id:
                 raise_if_cancelled(agent.run_id)
-            check_and_raise_injected_error(self.name)
             
             if not agent.update_cultural_knowledge or not agent.culture_manager:
                 if context.is_streaming:
@@ -1973,7 +2068,6 @@ class ReliabilityStep(Step):
         try:
             if agent and hasattr(agent, 'run_id') and agent.run_id:
                 raise_if_cancelled(agent.run_id)
-            check_and_raise_injected_error(self.name)
             
             if not agent.reliability_layer:
                 if context.is_streaming:
@@ -2115,7 +2209,6 @@ class AgentPolicyStep(Step):
         try:
             if agent and hasattr(agent, 'run_id') and agent.run_id:
                 raise_if_cancelled(agent.run_id)
-            check_and_raise_injected_error(self.name)
             
             if not agent.agent_policy_manager.has_policies() or not task.response:
                 if context.is_streaming:
@@ -2312,7 +2405,6 @@ class CacheStorageStep(Step):
         try:
             if agent and hasattr(agent, 'run_id') and agent.run_id:
                 raise_if_cancelled(agent.run_id)
-            check_and_raise_injected_error(self.name)
             
             if not (task.enable_cache and task.response):
                 if context.is_streaming:
@@ -2590,14 +2682,9 @@ class StreamModelExecutionStep(Step):
                 output=output,
                 output_type='structured' if not isinstance(output, str) else 'text'
             )
-            context.mark_completed()
-                
-            # Track messages: Add new messages to AgentRunOutput
-            history_length = context.memory_message_count if hasattr(context, 'memory_message_count') else 0
-            new_messages = []
-            if context.chat_history and history_length < len(context.chat_history):
-                new_messages = context.chat_history[history_length:]
-                context.add_messages(new_messages)
+            # Note: Message finalization is deferred to StreamMemoryMessageTrackingStep
+            # This ensures all steps (including AgentPolicyStep feedback loop) 
+            # can add their messages to chat_history before we extract new messages
             
             context.current_step_result = StepResult(
                 status=StepStatus.COMPLETED,
@@ -2657,12 +2744,26 @@ class StreamModelExecutionStep(Step):
                         accumulated_text += agent_event.content
                         if first_token_time is None:
                             first_token_time = time.time()
+                            # Track time to first token in usage
+                            context.set_usage_time_to_first_token()
                     
                     yield agent_event
         
         # Get the final response from the stream
         final_response = stream.get()
         context.response = final_response
+        
+        # Update usage from streaming response
+        if hasattr(final_response, 'usage') and final_response.usage:
+            context.update_usage_from_response(final_response.usage)
+            
+            # Calculate and set cost
+            try:
+                from upsonic.utils.usage import calculate_cost_from_usage
+                cost_value = calculate_cost_from_usage(final_response.usage, model)
+                context.set_usage_cost(cost_value)
+            except Exception:
+                pass  # Silently ignore cost calculation errors
         
         # Note: TextCompleteEvent is already yielded by convert_llm_event_to_agent_event
         # when PartEndEvent with TextPart is received, so we don't yield it again here
@@ -2778,7 +2879,9 @@ class StreamMemoryMessageTrackingStep(Step):
     For HITL (errors, cancel, external tools), session saving is handled
     by PipelineManager's exception handlers.
     
-    Message tracking is done in StreamModelExecutionStep.
+    Message finalization is done HERE (not in StreamModelExecutionStep) to ensure
+    all steps that may add messages (e.g., AgentPolicyStep feedback loop) have
+    completed before we extract the new messages.
     """
     
     @property
@@ -2806,11 +2909,26 @@ class StreamMemoryMessageTrackingStep(Step):
                 execution_time=0.0
             )
         
+        # Finalize run messages BEFORE marking completed and saving
+        # This extracts new messages from chat_history (using _run_boundaries)
+        # and sets them to context.messages
+        context.finalize_run_messages()
+        
+        # Stop usage timer and finalize run-level usage
+        context.stop_usage_timer()
+        
+        # Note: Session-level usage is updated in AgentSessionMemory.asave()
+        # when the session is saved to storage
+        
+        # Mark completed
+        context.mark_completed()
+        
         # Skip if no memory configured
         if not agent.memory:
+            messages_count = len(context.messages) if context.messages else 0
             return StepResult(
                 status=StepStatus.COMPLETED,
-                message="No memory configured",
+                message=f"No memory configured ({messages_count} messages finalized)",
                 execution_time=0.0
             )
         
@@ -2925,7 +3043,6 @@ class FinalizationStep(Step):
         try:
             if agent and hasattr(agent, 'run_id') and agent.run_id:
                 raise_if_cancelled(agent.run_id)
-            check_and_raise_injected_error(self.name)
             
             if context.output is None and task:
                 context.output = task.response

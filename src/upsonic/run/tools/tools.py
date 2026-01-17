@@ -85,15 +85,3 @@ class ToolExecution:
             metrics=metrics,
             created_at=data.get("created_at", int(time())),
         )
-    
-    def serialize(self) -> bytes:
-        """Serialize to bytes for storage."""
-        import cloudpickle
-        return cloudpickle.dumps(self.to_dict())
-    
-    @classmethod
-    def deserialize(cls, data: bytes) -> "ToolExecution":
-        """Deserialize from bytes."""
-        import cloudpickle
-        dict_data = cloudpickle.loads(data)
-        return cls.from_dict(dict_data)

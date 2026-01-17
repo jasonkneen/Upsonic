@@ -219,7 +219,7 @@ class GmailInterface(Interface):
                 await self.agent.do_async(task)
 
                 # Get structured result
-                run_result = self.agent.get_run_result()
+                run_result = self.agent.get_run_output()
                 
                 if run_result and run_result.output:
                     # The output is already an instance of AgentEmailResponse thanks to response_format

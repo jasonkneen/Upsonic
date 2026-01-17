@@ -53,53 +53,8 @@ def get_estimated_cost(input_tokens: int, output_tokens: int, model: Union["Mode
         Formatted cost string (e.g., "~$0.0123")
     """
     try:
-        if input_tokens is None or output_tokens is None:
-            return "~$0.0000"
-        
-        try:
-            input_tokens = max(0, int(input_tokens))
-            output_tokens = max(0, int(output_tokens))
-        except (ValueError, TypeError):
-            return "~$0.0000"
-        
-        try:
-            from genai_prices import calculate_cost
-            from upsonic.usage import RequestUsage
-            
-            usage = RequestUsage(
-                input_tokens=input_tokens,
-                output_tokens=output_tokens
-            )
-            
-            model_name = _get_model_name(model)
-            cost = calculate_cost(usage, model_name)
-            return f"~${cost:.4f}"
-            
-        except ImportError:
-            pass
-        except Exception:
-            pass
-        
-        model_name = _get_model_name(model)
-        pricing_data = _get_model_pricing(model_name)
-        
-        if not pricing_data:
-            pricing_data = {
-                'input_cost_per_1m': 0.50,
-                'output_cost_per_1m': 1.50
-            }
-        
-        input_cost = (input_tokens / 1_000_000) * pricing_data['input_cost_per_1m']
-        output_cost = (output_tokens / 1_000_000) * pricing_data['output_cost_per_1m']
-        total_cost = input_cost + output_cost
-        
-        if total_cost < 0.0001:
-            return f"~${total_cost:.6f}"
-        elif total_cost < 0.01:
-            return f"~${total_cost:.5f}"
-        else:
-            return f"~${total_cost:.4f}"
-        
+        from upsonic.utils.usage import get_estimated_cost as _get_estimated_cost
+        return _get_estimated_cost(input_tokens, output_tokens, model)
     except Exception as e:
         console.print(f"[yellow]Warning: Cost calculation failed: {e}[/yellow]")
         return "~$0.0000"
@@ -107,18 +62,8 @@ def get_estimated_cost(input_tokens: int, output_tokens: int, model: Union["Mode
 
 def _get_model_name(model: Union["Model", str]) -> str:
     """Extract model name from model provider."""
-    if isinstance(model, str):
-        if '/' in model:
-            return model.split('/', 1)[1]
-        return model
-    elif hasattr(model, 'model_name'):
-        model_name = model.model_name
-        # Handle case where model_name might be a coroutine (in tests)
-        if hasattr(model_name, '__await__'):
-            return "test-model"  # Default for async mocks
-        return model_name
-    else:
-        return str(model)
+    from upsonic.utils.usage import get_model_name
+    return get_model_name(model)
 
 
 def _get_terminal_width() -> int:
@@ -976,164 +921,15 @@ def display_tool_results_table(
 
 def _get_model_pricing(model_name: str) -> Optional[Dict[str, float]]:
     """Get comprehensive pricing data for a model."""
-    # Handle case where model_name might be a coroutine (in tests)
-    if hasattr(model_name, '__await__'):
-        model_name = "test-model"
-    
-    # Ensure model_name is a string
-    model_name = str(model_name)
-    
-    pricing_map = {
-        'gpt-4o': {'input_cost_per_1m': 2.50, 'output_cost_per_1m': 10.00},
-        'gpt-4o-2024-05-13': {'input_cost_per_1m': 2.50, 'output_cost_per_1m': 10.00},
-        'gpt-4o-2024-08-06': {'input_cost_per_1m': 2.50, 'output_cost_per_1m': 10.00},
-        'gpt-4o-2024-11-20': {'input_cost_per_1m': 2.50, 'output_cost_per_1m': 10.00},
-        'gpt-4o-mini': {'input_cost_per_1m': 0.15, 'output_cost_per_1m': 0.60},
-        'gpt-4o-mini-2024-07-18': {'input_cost_per_1m': 0.15, 'output_cost_per_1m': 0.60},
-        'gpt-4-turbo': {'input_cost_per_1m': 10.00, 'output_cost_per_1m': 30.00},
-        'gpt-4-turbo-2024-04-09': {'input_cost_per_1m': 10.00, 'output_cost_per_1m': 30.00},
-        'gpt-4': {'input_cost_per_1m': 30.00, 'output_cost_per_1m': 60.00},
-        'gpt-4-0613': {'input_cost_per_1m': 30.00, 'output_cost_per_1m': 60.00},
-        'gpt-4-32k': {'input_cost_per_1m': 60.00, 'output_cost_per_1m': 120.00},
-        'gpt-4-32k-0613': {'input_cost_per_1m': 60.00, 'output_cost_per_1m': 120.00},
-        'gpt-3.5-turbo': {'input_cost_per_1m': 0.50, 'output_cost_per_1m': 1.50},
-        'gpt-3.5-turbo-1106': {'input_cost_per_1m': 0.50, 'output_cost_per_1m': 1.50},
-        'gpt-3.5-turbo-16k': {'input_cost_per_1m': 3.00, 'output_cost_per_1m': 4.00},
-        'gpt-3.5-turbo-16k-0613': {'input_cost_per_1m': 3.00, 'output_cost_per_1m': 4.00},
-        'gpt-5': {'input_cost_per_1m': 5.00, 'output_cost_per_1m': 15.00},
-        'gpt-5-2025-08-07': {'input_cost_per_1m': 5.00, 'output_cost_per_1m': 15.00},
-        'gpt-5-mini': {'input_cost_per_1m': 0.30, 'output_cost_per_1m': 1.20},
-        'gpt-5-mini-2025-08-07': {'input_cost_per_1m': 0.30, 'output_cost_per_1m': 1.20},
-        'gpt-5-nano': {'input_cost_per_1m': 0.10, 'output_cost_per_1m': 0.40},
-        'gpt-5-nano-2025-08-07': {'input_cost_per_1m': 0.10, 'output_cost_per_1m': 0.40},
-        'gpt-4.1': {'input_cost_per_1m': 3.00, 'output_cost_per_1m': 12.00},
-        'gpt-4.1-2025-04-14': {'input_cost_per_1m': 3.00, 'output_cost_per_1m': 12.00},
-        'gpt-4.1-mini': {'input_cost_per_1m': 0.20, 'output_cost_per_1m': 0.80},
-        'gpt-4.1-mini-2025-04-14': {'input_cost_per_1m': 0.20, 'output_cost_per_1m': 0.80},
-        'gpt-4.1-nano': {'input_cost_per_1m': 0.08, 'output_cost_per_1m': 0.32},
-        'gpt-4.1-nano-2025-04-14': {'input_cost_per_1m': 0.08, 'output_cost_per_1m': 0.32},
-        'o1': {'input_cost_per_1m': 15.00, 'output_cost_per_1m': 60.00},
-        'o1-2024-12-17': {'input_cost_per_1m': 15.00, 'output_cost_per_1m': 60.00},
-        'o1-mini': {'input_cost_per_1m': 3.00, 'output_cost_per_1m': 12.00},
-        'o1-mini-2024-09-12': {'input_cost_per_1m': 3.00, 'output_cost_per_1m': 12.00},
-        'o1-preview': {'input_cost_per_1m': 15.00, 'output_cost_per_1m': 60.00},
-        'o1-preview-2024-09-12': {'input_cost_per_1m': 15.00, 'output_cost_per_1m': 60.00},
-        'o1-pro': {'input_cost_per_1m': 60.00, 'output_cost_per_1m': 180.00},
-        'o1-pro-2025-03-19': {'input_cost_per_1m': 60.00, 'output_cost_per_1m': 180.00},
-        'o3': {'input_cost_per_1m': 20.00, 'output_cost_per_1m': 80.00},
-        'o3-2025-04-16': {'input_cost_per_1m': 20.00, 'output_cost_per_1m': 80.00},
-        'o3-mini': {'input_cost_per_1m': 4.00, 'output_cost_per_1m': 16.00},
-        'o3-mini-2025-01-31': {'input_cost_per_1m': 4.00, 'output_cost_per_1m': 16.00},
-        'o3-pro': {'input_cost_per_1m': 80.00, 'output_cost_per_1m': 240.00},
-        'o3-pro-2025-06-10': {'input_cost_per_1m': 80.00, 'output_cost_per_1m': 240.00},
-        'o3-deep-research': {'input_cost_per_1m': 100.00, 'output_cost_per_1m': 300.00},
-        'o3-deep-research-2025-06-26': {'input_cost_per_1m': 100.00, 'output_cost_per_1m': 300.00},
-        'claude-3-5-sonnet-20241022': {'input_cost_per_1m': 3.00, 'output_cost_per_1m': 15.00},
-        'claude-3-5-sonnet-latest': {'input_cost_per_1m': 3.00, 'output_cost_per_1m': 15.00},
-        'claude-3-5-sonnet-20240620': {'input_cost_per_1m': 3.00, 'output_cost_per_1m': 15.00},
-        'claude-3-5-haiku-20241022': {'input_cost_per_1m': 0.80, 'output_cost_per_1m': 4.00},
-        'claude-3-5-haiku-latest': {'input_cost_per_1m': 0.80, 'output_cost_per_1m': 4.00},
-        'claude-3-7-sonnet-20250219': {'input_cost_per_1m': 3.00, 'output_cost_per_1m': 15.00},
-        'claude-3-7-sonnet-latest': {'input_cost_per_1m': 3.00, 'output_cost_per_1m': 15.00},
-        'claude-3-opus-20240229': {'input_cost_per_1m': 15.00, 'output_cost_per_1m': 75.00},
-        'claude-3-opus-latest': {'input_cost_per_1m': 15.00, 'output_cost_per_1m': 75.00},
-        'claude-3-haiku-20240307': {'input_cost_per_1m': 0.25, 'output_cost_per_1m': 1.25},
-        'claude-4-opus-20250514': {'input_cost_per_1m': 20.00, 'output_cost_per_1m': 100.00},
-        'claude-4-sonnet-20250514': {'input_cost_per_1m': 4.00, 'output_cost_per_1m': 20.00},
-        'claude-opus-4-0': {'input_cost_per_1m': 20.00, 'output_cost_per_1m': 100.00},
-        'claude-opus-4-1-20250805': {'input_cost_per_1m': 20.00, 'output_cost_per_1m': 100.00},
-        'claude-opus-4-20250514': {'input_cost_per_1m': 20.00, 'output_cost_per_1m': 100.00},
-        'claude-sonnet-4-0': {'input_cost_per_1m': 4.00, 'output_cost_per_1m': 20.00},
-        'claude-sonnet-4-20250514': {'input_cost_per_1m': 4.00, 'output_cost_per_1m': 20.00},
-        
-        'gemini-2.0-flash': {'input_cost_per_1m': 0.075, 'output_cost_per_1m': 0.30},
-        'gemini-2.0-flash-lite': {'input_cost_per_1m': 0.0375, 'output_cost_per_1m': 0.15},
-        'gemini-2.5-flash': {'input_cost_per_1m': 0.075, 'output_cost_per_1m': 0.30},
-        'gemini-2.5-flash-lite': {'input_cost_per_1m': 0.0375, 'output_cost_per_1m': 0.15},
-        'gemini-2.5-pro': {'input_cost_per_1m': 1.25, 'output_cost_per_1m': 5.00},
-        'gemini-1.5-pro': {'input_cost_per_1m': 1.25, 'output_cost_per_1m': 5.00},
-        'gemini-1.5-flash': {'input_cost_per_1m': 0.075, 'output_cost_per_1m': 0.30},
-        'gemini-1.0-pro': {'input_cost_per_1m': 0.50, 'output_cost_per_1m': 1.50},
-        
-        'llama-3.3-70b-versatile': {'input_cost_per_1m': 0.59, 'output_cost_per_1m': 0.79},
-        'llama-3.1-8b-instant': {'input_cost_per_1m': 0.05, 'output_cost_per_1m': 0.05},
-        'llama3-70b-8192': {'input_cost_per_1m': 0.59, 'output_cost_per_1m': 0.79},
-        'llama3-8b-8192': {'input_cost_per_1m': 0.05, 'output_cost_per_1m': 0.05},
-        'mixtral-8x7b-32768': {'input_cost_per_1m': 0.24, 'output_cost_per_1m': 0.24},
-        'gemma2-9b-it': {'input_cost_per_1m': 0.10, 'output_cost_per_1m': 0.10},
-        
-        'mistral-large-latest': {'input_cost_per_1m': 2.00, 'output_cost_per_1m': 6.00},
-        'mistral-small-latest': {'input_cost_per_1m': 1.00, 'output_cost_per_1m': 3.00},
-        'codestral-latest': {'input_cost_per_1m': 0.20, 'output_cost_per_1m': 0.20},
-        
-        'command': {'input_cost_per_1m': 1.00, 'output_cost_per_1m': 2.00},
-        'command-light': {'input_cost_per_1m': 0.30, 'output_cost_per_1m': 0.30},
-        'command-r': {'input_cost_per_1m': 0.50, 'output_cost_per_1m': 1.50},
-        'command-r-plus': {'input_cost_per_1m': 3.00, 'output_cost_per_1m': 15.00},
-        
-        'deepseek-chat': {'input_cost_per_1m': 0.14, 'output_cost_per_1m': 0.28},
-        'deepseek-reasoner': {'input_cost_per_1m': 0.55, 'output_cost_per_1m': 2.19},
-        
-        'grok-4': {'input_cost_per_1m': 0.01, 'output_cost_per_1m': 0.03},
-        'grok-4-0709': {'input_cost_per_1m': 0.01, 'output_cost_per_1m': 0.03},
-        'grok-3': {'input_cost_per_1m': 0.01, 'output_cost_per_1m': 0.03},
-        'grok-3-mini': {'input_cost_per_1m': 0.01, 'output_cost_per_1m': 0.03},
-        'grok-3-fast': {'input_cost_per_1m': 0.01, 'output_cost_per_1m': 0.03},
-        'grok-3-mini-fast': {'input_cost_per_1m': 0.01, 'output_cost_per_1m': 0.03},
-        
-        'moonshot-v1-8k': {'input_cost_per_1m': 0.012, 'output_cost_per_1m': 0.012},
-        'moonshot-v1-32k': {'input_cost_per_1m': 0.024, 'output_cost_per_1m': 0.024},
-        'moonshot-v1-128k': {'input_cost_per_1m': 0.06, 'output_cost_per_1m': 0.06},
-        'kimi-latest': {'input_cost_per_1m': 0.012, 'output_cost_per_1m': 0.012},
-        'kimi-thinking-preview': {'input_cost_per_1m': 0.012, 'output_cost_per_1m': 0.012},
-        
-        'gpt-oss-120b': {'input_cost_per_1m': 0.10, 'output_cost_per_1m': 0.10},
-        'llama3.1-8b': {'input_cost_per_1m': 0.05, 'output_cost_per_1m': 0.05},
-        'llama-3.3-70b': {'input_cost_per_1m': 0.20, 'output_cost_per_1m': 0.20},
-        'llama-4-scout-17b-16e-instruct': {'input_cost_per_1m': 0.15, 'output_cost_per_1m': 0.15},
-        'llama-4-maverick-17b-128e-instruct': {'input_cost_per_1m': 0.15, 'output_cost_per_1m': 0.15},
-        'qwen-3-235b-a22b-instruct-2507': {'input_cost_per_1m': 0.30, 'output_cost_per_1m': 0.30},
-        'qwen-3-32b': {'input_cost_per_1m': 0.10, 'output_cost_per_1m': 0.10},
-        'qwen-3-coder-480b': {'input_cost_per_1m': 0.50, 'output_cost_per_1m': 0.50},
-        'qwen-3-235b-a22b-thinking-2507': {'input_cost_per_1m': 0.30, 'output_cost_per_1m': 0.30},
-        
-        'Qwen/QwQ-32B': {'input_cost_per_1m': 0.10, 'output_cost_per_1m': 0.10},
-        'Qwen/Qwen2.5-72B-Instruct': {'input_cost_per_1m': 0.20, 'output_cost_per_1m': 0.20},
-        'Qwen/Qwen3-235B-A22B': {'input_cost_per_1m': 0.30, 'output_cost_per_1m': 0.30},
-        'Qwen/Qwen3-32B': {'input_cost_per_1m': 0.10, 'output_cost_per_1m': 0.10},
-        'deepseek-ai/DeepSeek-R1': {'input_cost_per_1m': 0.55, 'output_cost_per_1m': 2.19},
-        'meta-llama/Llama-3.3-70B-Instruct': {'input_cost_per_1m': 0.20, 'output_cost_per_1m': 0.20},
-        'meta-llama/Llama-4-Maverick-17B-128E-Instruct': {'input_cost_per_1m': 0.15, 'output_cost_per_1m': 0.15},
-        'meta-llama/Llama-4-Scout-17B-16E-Instruct': {'input_cost_per_1m': 0.15, 'output_cost_per_1m': 0.15},
-        
-        'test': {'input_cost_per_1m': 0.00, 'output_cost_per_1m': 0.00},
-    }
-    
-    if model_name.startswith('bedrock:'):
-        model_name = model_name.replace('bedrock:', '')
-    
-    provider_prefixes = ['anthropic:', 'google-gla:', 'google-vertex:', 'groq:', 'mistral:', 'cohere:', 'deepseek:', 'grok:', 'moonshotai:', 'cerebras:', 'huggingface:', 'heroku:']
-    for prefix in provider_prefixes:
-        if model_name.startswith(prefix):
-            model_name = model_name.replace(prefix, '')
-            break
-    
-    return pricing_map.get(model_name)
+    from upsonic.utils.usage import get_model_pricing
+    return get_model_pricing(model_name)
 
 
 def get_estimated_cost_from_usage(usage: Union[Dict[str, int], Any], model: Union["Model", str]) -> str:
     """Calculate estimated cost from usage data."""
     try:
-        if isinstance(usage, dict):
-            input_tokens = usage.get('input_tokens', 0)
-            output_tokens = usage.get('output_tokens', 0)
-        else:
-            # RequestUsage objects have input_tokens and output_tokens attributes
-            input_tokens = usage.input_tokens
-            output_tokens = usage.output_tokens
-        
-        return get_estimated_cost(input_tokens, output_tokens, model)
-        
+        from upsonic.utils.usage import get_estimated_cost_from_usage as _get_estimated_cost_from_usage
+        return _get_estimated_cost_from_usage(usage, model)
     except Exception as e:
         console.print(f"[yellow]Warning: Cost calculation from usage failed: {e}[/yellow]")
         return "~$0.0000"
@@ -1142,20 +938,8 @@ def get_estimated_cost_from_usage(usage: Union[Dict[str, int], Any], model: Unio
 def get_estimated_cost_from_agent_run_output(agent_run_output: Any, model: Union["Model", str]) -> str:
     """Calculate estimated cost from an AgentRunOutput object."""
     try:
-        total_input_tokens = 0
-        total_output_tokens = 0
-        
-        if hasattr(agent_run_output, 'all_messages'):
-            messages = agent_run_output.all_messages()
-            for message in messages:
-                # Only ModelResponse objects have usage information
-                if hasattr(message, 'usage') and message.usage and hasattr(message, 'kind') and message.kind == 'response':
-                    usage = message.usage
-                    total_input_tokens += usage.input_tokens
-                    total_output_tokens += usage.output_tokens
-        
-        return get_estimated_cost(total_input_tokens, total_output_tokens, model)
-        
+        from upsonic.utils.usage import get_estimated_cost_from_run_output as _get_estimated_cost_from_run_output
+        return _get_estimated_cost_from_run_output(agent_run_output, model)
     except Exception as e:
         console.print(f"[yellow]Warning: Cost calculation from AgentRunOutput failed: {e}[/yellow]")
         return "~$0.0000"
@@ -1164,14 +948,8 @@ def get_estimated_cost_from_agent_run_output(agent_run_output: Any, model: Union
 def get_estimated_cost_from_agent(agent: Any, run_type: str = "last") -> str:
     """Calculate estimated cost from an Agent's run results."""
     try:
-        # Try to get from run output
-        if hasattr(agent, 'get_run_output'):
-            run_output = agent.get_run_output()
-            if run_output and hasattr(run_output, 'all_messages') and run_output.all_messages():
-                return get_estimated_cost_from_agent_run_output(run_output, agent.model)
-        
-        return "~$0.0000"
-        
+        from upsonic.utils.usage import get_estimated_cost_from_agent as _get_estimated_cost_from_agent
+        return _get_estimated_cost_from_agent(agent)
     except Exception as e:
         console.print(f"[yellow]Warning: Cost calculation from Agent failed: {e}[/yellow]")
         return "~$0.0000"

@@ -1,20 +1,70 @@
+"""Memory module for Upsonic agent framework.
+
+This module provides memory orchestration for session and user memory operations.
+
+Key Components:
+    - Memory: Main orchestrator with runtime session type selection
+    - SessionMemoryFactory: Factory for creating session memory instances
+    - BaseSessionMemory: Abstract base for session memory implementations
+    - AgentSessionMemory: Session memory for AgentSession
+    - BaseUserMemory: Abstract base for user memory implementations
+    - UserMemory: User memory implementation
+    - PreparedSessionInputs: Structured output from session memory get operations
+"""
 from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .memory import Memory
+    from .factory import SessionMemoryFactory
+    from .session.base import BaseSessionMemory, PreparedSessionInputs
+    from .session.agent import AgentSessionMemory
+    from .user.base import BaseUserMemory
+    from .user.user import UserMemory
+
 
 def __getattr__(name: str) -> Any:
-    """Lazy loading of heavy modules and classes."""
+    """Lazy loading of memory classes."""
     if name == "Memory":
         from .memory import Memory
         return Memory
+    
+    if name == "SessionMemoryFactory":
+        from .factory import SessionMemoryFactory
+        return SessionMemoryFactory
+    
+    if name == "BaseSessionMemory":
+        from .session.base import BaseSessionMemory
+        return BaseSessionMemory
+    
+    if name == "PreparedSessionInputs":
+        from .session.base import PreparedSessionInputs
+        return PreparedSessionInputs
+    
+    if name == "AgentSessionMemory":
+        from .session.agent import AgentSessionMemory
+        return AgentSessionMemory
+    
+    if name == "BaseUserMemory":
+        from .user.base import BaseUserMemory
+        return BaseUserMemory
+    
+    if name == "UserMemory":
+        from .user.user import UserMemory
+        return UserMemory
     
     raise AttributeError(
         f"module '{__name__}' has no attribute '{name}'. "
         f"Please import from the appropriate sub-module."
     )
 
+
 __all__ = [
     "Memory",
+    "SessionMemoryFactory",
+    "BaseSessionMemory",
+    "PreparedSessionInputs",
+    "AgentSessionMemory",
+    "BaseUserMemory",
+    "UserMemory",
 ]

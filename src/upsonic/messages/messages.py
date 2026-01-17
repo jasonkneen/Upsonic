@@ -1184,6 +1184,21 @@ ModelMessagesTypeAdapter = pydantic.TypeAdapter(
 )
 """Pydantic [`TypeAdapter`][pydantic.type_adapter.TypeAdapter] for (de)serializing messages."""
 
+MultiModalContentTypeAdapter = pydantic.TypeAdapter(
+    list[MultiModalContent], config=pydantic.ConfigDict(defer_build=True, ser_json_bytes='base64', val_json_bytes='base64')
+)
+"""Pydantic TypeAdapter for (de)serializing MultiModalContent (ImageUrl, AudioUrl, DocumentUrl, VideoUrl, BinaryContent)."""
+
+ModelResponsePartTypeAdapter = pydantic.TypeAdapter(
+    list[ModelResponsePart], config=pydantic.ConfigDict(defer_build=True, ser_json_bytes='base64', val_json_bytes='base64')
+)
+"""Pydantic TypeAdapter for (de)serializing ModelResponsePart (TextPart, ToolCallPart, ThinkingPart, etc.)."""
+
+BinaryContentTypeAdapter = pydantic.TypeAdapter(
+    list[BinaryContent], config=pydantic.ConfigDict(defer_build=True, ser_json_bytes='base64', val_json_bytes='base64')
+)
+"""Pydantic TypeAdapter for (de)serializing BinaryContent."""
+
 
 @dataclass(repr=False)
 class TextPartDelta:

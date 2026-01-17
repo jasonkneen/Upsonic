@@ -11,6 +11,16 @@ if TYPE_CHECKING:
         get_estimated_cost_from_agent_run_output,
         get_estimated_cost_from_agent
     )
+    from .usage import (
+        calculate_cost,
+        calculate_cost_from_usage,
+        calculate_cost_from_run_output,
+        calculate_cost_from_agent,
+        get_model_name,
+        get_model_pricing,
+        format_cost,
+        MODEL_PRICING,
+    )
 
 def _get_utils_classes():
     """Lazy import of utility classes and functions."""
@@ -23,6 +33,16 @@ def _get_utils_classes():
         get_estimated_cost_from_agent_run_output,
         get_estimated_cost_from_agent
     )
+    from .usage import (
+        calculate_cost,
+        calculate_cost_from_usage,
+        calculate_cost_from_run_output,
+        calculate_cost_from_agent,
+        get_model_name,
+        get_model_pricing,
+        format_cost,
+        MODEL_PRICING,
+    )
     
     return {
         'AsyncExecutionMixin': AsyncExecutionMixin,
@@ -32,6 +52,16 @@ def _get_utils_classes():
         'get_estimated_cost_from_usage': get_estimated_cost_from_usage,
         'get_estimated_cost_from_agent_run_output': get_estimated_cost_from_agent_run_output,
         'get_estimated_cost_from_agent': get_estimated_cost_from_agent,
+        # Core cost calculation functions (return float)
+        'calculate_cost': calculate_cost,
+        'calculate_cost_from_usage': calculate_cost_from_usage,
+        'calculate_cost_from_run_output': calculate_cost_from_run_output,
+        'calculate_cost_from_agent': calculate_cost_from_agent,
+        # Helper functions
+        'get_model_name': get_model_name,
+        'get_model_pricing': get_model_pricing,
+        'format_cost': format_cost,
+        'MODEL_PRICING': MODEL_PRICING,
     }
 
 def __getattr__(name: str) -> Any:
@@ -47,10 +77,21 @@ def __getattr__(name: str) -> Any:
 
 __all__ = [
     "AsyncExecutionMixin",
+    # Display functions (return formatted strings)
     "print_price_id_summary",
     "call_end",
     "get_estimated_cost",
     "get_estimated_cost_from_usage",
     "get_estimated_cost_from_agent_run_output",
     "get_estimated_cost_from_agent",
+    # Core cost calculation functions (return float)
+    "calculate_cost",
+    "calculate_cost_from_usage",
+    "calculate_cost_from_run_output",
+    "calculate_cost_from_agent",
+    # Helper functions
+    "get_model_name",
+    "get_model_pricing",
+    "format_cost",
+    "MODEL_PRICING",
 ]

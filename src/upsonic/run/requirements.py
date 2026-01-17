@@ -174,13 +174,3 @@ class RunRequirement:
         requirement.user_input_schema = data.get("user_input_schema")
 
         return requirement
-    
-    def serialize(self) -> bytes:
-        """Serialize to bytes for storage."""
-        return cloudpickle.dumps(self.to_dict())
-    
-    @classmethod
-    def deserialize(cls, data: bytes) -> "RunRequirement":
-        """Deserialize from bytes."""
-        dict_data = cloudpickle.loads(data)
-        return cls.from_dict(dict_data)

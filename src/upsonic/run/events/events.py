@@ -29,25 +29,13 @@ Event Hierarchy:
   │   └── ExecutionCompleteEvent
   └── LLM Stream Events (wrapped from messages module)
   ├── PolicyFeedbackEvent
-
-Usage:
-    ```python
-    async with agent.stream(task) as result:
-        async for event in result.stream_events():
-            if isinstance(event, StepStartEvent):
-                print(f"Starting step: {event.step_name}")
-            elif isinstance(event, ToolCallEvent):
-                print(f"Calling tool: {event.tool_name}({event.tool_args})")
-            elif isinstance(event, TextDeltaEvent):
-                print(event.content, end='', flush=True)
-    ```
 """
 
 from __future__ import annotations
 
 import uuid
 from abc import ABC
-from dataclasses import dataclass, field, asdict, fields
+from dataclasses import dataclass, field, fields
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, TYPE_CHECKING, Annotated
 from enum import Enum
@@ -97,93 +85,65 @@ class AgentEvent(ABC):
         """Return the event type name (class name without 'Event' suffix if present)."""
         return self.__class__.__name__
     
-    def __repr__(self) -> str:
-        return f"{self.__class__.__name__}(event_id={self.event_id!r}, run_id={self.run_id!r})"
-    
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary with proper serialization of all attribute types."""
-        result: Dict[str, Any] = {}
+        """
+        Serialize event to dictionary.
+        
+        Uses dataclass fields() to get all attributes and serialize them.
+        Datetime is converted to ISO format string.
+        """
+        result: Dict[str, Any] = {
+            "__event_class__": self.__class__.__name__,
+        }
         for f in fields(self):
             value = getattr(self, f.name)
-            result[f.name] = self._serialize_value(value)
-        result["__event_class__"] = self.__class__.__name__
-        return result
-    
-    @staticmethod
-    def _serialize_value(value: Any) -> Any:
-        """Serialize a value to a JSON-compatible format."""
-        if value is None:
-            return None
-        elif isinstance(value, datetime):
-            return {"__datetime__": value.isoformat()}
-        elif isinstance(value, (list, tuple)):
-            return [AgentEvent._serialize_value(v) for v in value]
-        elif isinstance(value, dict):
-            return {k: AgentEvent._serialize_value(v) for k, v in value.items()}
-        elif hasattr(value, 'to_dict'):
-            return {"__class__": type(value).__name__, "data": value.to_dict()}
-        elif hasattr(value, '__dataclass_fields__'):
-            # Dataclass without to_dict
-            return {"__dataclass__": type(value).__name__, "data": {
-                f.name: AgentEvent._serialize_value(getattr(value, f.name))
-                for f in fields(value)
-            }}
-        else:
-            return value
-    
-    @staticmethod
-    def _deserialize_value(value: Any) -> Any:
-        """Deserialize a value from JSON-compatible format."""
-        if value is None:
-            return None
-        elif isinstance(value, dict):
-            if "__datetime__" in value:
-                return datetime.fromisoformat(value["__datetime__"])
-            elif "__class__" in value:
-                # Has to_dict, likely reconstructable
-                return value  # Return as-is, will be handled by specific class
-            elif "__dataclass__" in value:
-                return value  # Return as-is
+            if isinstance(value, datetime):
+                result[f.name] = value.isoformat()
+            elif isinstance(value, Enum):
+                result[f.name] = value.value
+            elif hasattr(value, 'to_dict') and callable(getattr(value, 'to_dict')):
+                result[f.name] = value.to_dict()
+            elif isinstance(value, list):
+                result[f.name] = [
+                    item.to_dict() if hasattr(item, 'to_dict') and callable(getattr(item, 'to_dict')) else item
+                    for item in value
+                ]
             else:
-                return {k: AgentEvent._deserialize_value(v) for k, v in value.items()}
-        elif isinstance(value, list):
-            return [AgentEvent._deserialize_value(v) for v in value]
-        else:
-            return value
+                result[f.name] = value
+        return result
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "AgentEvent":
-        """Reconstruct from dictionary with proper deserialization of all attribute types."""
-        data = dict(data)  # Make a copy to avoid mutating the original
-        event_class_name = data.pop("__event_class__", None)
+        """
+        Deserialize event from dictionary.
         
-        # If called on base class, look up the correct subclass
-        if event_class_name and cls == AgentEvent:
-            event_class = _EVENT_CLASS_REGISTRY.get(event_class_name)
-            if event_class:
-                return event_class.from_dict(data)
+        Uses __event_class__ to look up the correct subclass in _EVENT_CLASS_REGISTRY.
+        """
+        if data is None:
+            raise ValueError("AgentEvent.from_dict() requires a non-None dict")
         
-        # Deserialize values
-        deserialized = {}
-        for key, value in data.items():
-            deserialized[key] = cls._deserialize_value(value)
+        # Get the event class name
+        event_class_name = data.get("__event_class__")
+        if not event_class_name:
+            raise ValueError("Missing __event_class__ in event data")
         
-        # Get the fields for this class to filter out unknown keys
-        valid_fields = {f.name for f in fields(cls)} if hasattr(cls, '__dataclass_fields__') else set(data.keys())
-        filtered = {k: v for k, v in deserialized.items() if k in valid_fields}
+        # Look up the class in the registry
+        event_class = _EVENT_CLASS_REGISTRY.get(event_class_name)
+        if not event_class:
+            raise ValueError(f"Unknown event class: {event_class_name}")
         
-        return cls(**filtered)
-    
-    def serialize(self) -> bytes:
-        """Serialize to bytes for storage using cloudpickle."""
-        import cloudpickle
-        return cloudpickle.dumps(self)
-    
-    @classmethod
-    def deserialize(cls, data: bytes) -> "AgentEvent":
-        """Deserialize from bytes using cloudpickle."""
-        import cloudpickle
-        return cloudpickle.loads(data)
+        # Build kwargs for the event
+        kwargs: Dict[str, Any] = {}
+        for f in fields(event_class):
+            if f.name in data:
+                value = data[f.name]
+                # Handle datetime
+                if f.name == "timestamp" and isinstance(value, str):
+                    kwargs[f.name] = datetime.fromisoformat(value)
+                else:
+                    kwargs[f.name] = value
+        
+        return event_class(**kwargs)
 
 
 # =============================================================================

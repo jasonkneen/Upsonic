@@ -3,26 +3,19 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Union, TYPE_CHECKING
 
-from pydantic import BaseModel
-
 from upsonic.messages.messages import ModelMessage
 from upsonic.run.agent.output import AgentRunOutput
 from upsonic.run.base import RunStatus
 from upsonic.utils.logging_config import get_logger
+from upsonic.session.base import SessionType
 
 if TYPE_CHECKING:
     from upsonic.storage.base import Storage
     from upsonic.run.agent.input import AgentRunInput
+    from upsonic.usage import RunUsage
 
 _logger = get_logger("upsonic.session")
 
-
-def log_debug(msg: str):
-    _logger.debug(msg)
-
-
-def log_warning(msg: str):
-    _logger.warning(msg)
 
 
 @dataclass
@@ -33,38 +26,27 @@ class RunData:
     including execution context needed for HITL resumption.
     """
     output: AgentRunOutput
+    deserialize_flag: bool = False
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self, serialize_flag: bool = False) -> Dict[str, Any]:
         """Serialize to dictionary."""
         return {
-            "output": self.output.to_dict() if self.output else None,
+            "output": self.output.to_dict(serialize_flag=serialize_flag) if self.output else None,
         }
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "RunData":
+    def from_dict(cls, data: Dict[str, Any], deserialize_flag: bool = False) -> "RunData":
         """Reconstruct from dictionary."""
         output = None
         
         output_data = data.get("output")
         if output_data:
             if isinstance(output_data, dict):
-                output = AgentRunOutput.from_dict(output_data)
+                output = AgentRunOutput.from_dict(output_data, deserialize_flag=deserialize_flag)
             else:
                 output = output_data
         
-        return cls(output=output)
-    
-    def serialize(self) -> bytes:
-        """Serialize to bytes for storage."""
-        import cloudpickle
-        return cloudpickle.dumps(self.to_dict())
-    
-    @classmethod
-    def deserialize(cls, data: bytes) -> "RunData":
-        """Deserialize from bytes."""
-        import cloudpickle
-        dict_data = cloudpickle.loads(data)
-        return cls.from_dict(dict_data)
+        return cls(output=output, deserialize_flag=deserialize_flag)
 
 
 @dataclass
@@ -73,8 +55,11 @@ class AgentSession:
 
     session_id: str
     agent_id: Optional[str] = None
-    user_id: Optional[str] = None
+    team_id: Optional[str] = None
     workflow_id: Optional[str] = None
+    user_id: Optional[str] = None
+
+    session_type: SessionType = SessionType.AGENT
 
     session_data: Optional[Dict[str, Any]] = None
     metadata: Optional[Dict[str, Any]] = None
@@ -83,48 +68,78 @@ class AgentSession:
     runs: Optional[Dict[str, RunData]] = field(default_factory=dict)
     
     summary: Optional[str] = None
-    messages: Optional[Union[List[ModelMessage], Dict[str, Any]]] = field(default_factory=list)
-    user_profile: Optional[Union[Dict[str, Any], BaseModel]] = None
+    messages: Optional[Union[List[ModelMessage]]] = field(default_factory=list)
+    
+    # Session-level aggregated usage (sum of all run usages)
+    usage: Optional["RunUsage"] = None
 
     created_at: Optional[int] = None
     updated_at: Optional[int] = None
     
-    def flatten_messages_from_runs_all(self) -> List[ModelMessage]:
-        all_msgs = []
-        if self.runs:
-            for run_data in self.runs.values():
-                if run_data.output and run_data.output.messages:
-                    all_msgs.extend(run_data.output.messages)
-        return all_msgs
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary (pure transformation, nested objects call their to_dict())."""
+    def to_dict(self, serialize_flag: bool = False) -> Dict[str, Any]:
+        """
+        Convert to dictionary.
+        
+        Args:
+            serialize_flag: Passed to RunData.to_dict for Task cloudpickle serialization.
+        
+        Uses ModelMessagesTypeAdapter for messages serialization.
+        """
+        from upsonic.messages.messages import ModelMessagesTypeAdapter
+        
         runs_dict = {}
         if self.runs:
             for run_id, run_data in self.runs.items():
-                runs_dict[run_id] = run_data.to_dict()
+                runs_dict[run_id] = run_data.to_dict(serialize_flag=serialize_flag)
+        
+        # Handle messages with ModelMessagesTypeAdapter
+        if self.messages and isinstance(self.messages, list):
+            # Check if it's a list of ModelMessage (not dicts)
+            if self.messages and not isinstance(self.messages[0], dict):
+                messages_data = ModelMessagesTypeAdapter.dump_python(self.messages, mode="json")
+            else:
+                messages_data = self.messages
+        else:
+            messages_data = self.messages
+        
+        # Serialize usage
+        usage_data = None
+        if self.usage is not None:
+            usage_data = self.usage.to_dict()
         
         return {
             "session_id": self.session_id,
             "agent_id": self.agent_id,
             "user_id": self.user_id,
+            "team_id": self.team_id,
             "workflow_id": self.workflow_id,
+            "session_type": self.session_type.to_dict(),
             "session_data": self.session_data,
             "metadata": self.metadata,
             "agent_data": self.agent_data,
             "summary": self.summary,
-            "messages": self.messages,
-            "user_profile": self.user_profile,
+            "messages": messages_data,
+            "usage": usage_data,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "runs": runs_dict,
         }
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> Optional["AgentSession"]:
-        """Reconstruct from dictionary (pure transformation, nested objects reconstructed)."""
+    def from_dict(cls, data: Mapping[str, Any], deserialize_flag: bool = False) -> Optional["AgentSession"]:
+        """
+        Reconstruct from dictionary.
+        
+        Args:
+            data: Dictionary containing AgentSession data
+            deserialize_flag: Passed to RunData.from_dict for Task cloudpickle deserialization.
+        
+        Uses ModelMessagesTypeAdapter for messages deserialization.
+        """
+        from upsonic.messages.messages import ModelMessagesTypeAdapter
+        
         if data is None or data.get("session_id") is None:
-            log_warning("AgentSession is missing session_id")
+            _logger.warning("AgentSession is missing session_id")
             return None
 
         # Handle runs (dict of run_id -> RunData)
@@ -136,22 +151,40 @@ class AgentSession:
                 runs[run_id] = run_data
             elif isinstance(run_data, dict):
                 try:
-                    runs[run_id] = RunData.from_dict(run_data)
+                    runs[run_id] = RunData.from_dict(run_data, deserialize_flag=deserialize_flag)
                 except Exception as e:
-                    log_warning(f"Failed to deserialize run {run_id}: {e}")
+                    _logger.warning(f"Failed to deserialize run {run_id}: {e}")
             else:
-                log_warning(f"Unknown run data type for {run_id}: {type(run_data)}")
+                _logger.warning(f"Unknown run data type for {run_id}: {type(run_data)}")
+        
+        # Handle messages with ModelMessagesTypeAdapter
+        messages_data = data.get("messages")
+        if messages_data and isinstance(messages_data, list):
+            messages = ModelMessagesTypeAdapter.validate_python(messages_data)
+        else:
+            messages = messages_data
+        
+        # Handle usage (dict or RunUsage)
+        from upsonic.usage import RunUsage
+        usage_data = data.get("usage")
+        usage = None
+        if usage_data and isinstance(usage_data, dict):
+            usage = RunUsage.from_dict(usage_data)
+        elif isinstance(usage_data, RunUsage):
+            usage = usage_data
 
         return cls(
             session_id=data.get("session_id"),
             agent_id=data.get("agent_id"),
             user_id=data.get("user_id"),
+            team_id=data.get("team_id"),
             workflow_id=data.get("workflow_id"),
+            session_type=SessionType.from_dict(data.get("session_type")),
             agent_data=data.get("agent_data"),
             session_data=data.get("session_data"),
             metadata=data.get("metadata"),
-            messages=data.get("messages"),
-            user_profile=data.get("user_profile"),
+            messages=messages,
+            usage=usage,
             created_at=data.get("created_at"),
             updated_at=data.get("updated_at"),
             runs=runs if runs else None,
@@ -174,7 +207,7 @@ class AgentSession:
         
         run_id = output.run_id
         if not run_id:
-            log_warning("Cannot upsert run without run_id")
+            _logger.warning("Cannot upsert run without run_id")
             return
         
         # Initialize runs dict if needed
@@ -185,10 +218,10 @@ class AgentSession:
         if run_id in self.runs:
             # Update existing
             self.runs[run_id] = RunData(output=output)
-            log_debug(f"Updated run: {run_id}")
+            _logger.debug(f"Updated run: {run_id}")
         else:
             self.runs[run_id] = RunData(output=output)
-            log_debug(f"Added run (total: {len(self.runs)})")
+            _logger.debug(f"Added run (total: {len(self.runs)})")
     
     def flatten_messages_from_completed_runs(self) -> None:
         """Flatten messages from completed runs."""
@@ -399,7 +432,25 @@ class AgentSession:
         Returns:
             List of AgentSession objects for the user_id
         """
-        return await storage.list_agent_sessions_async(user_id=user_id)
+        from upsonic.session.base import SessionType
+        from upsonic.storage.base import AsyncStorage
+        
+        if isinstance(storage, AsyncStorage):
+            sessions = await storage.aget_sessions(
+                user_id=user_id,
+                session_type=SessionType.AGENT,
+                deserialize=True
+            )
+        else:
+            sessions = storage.get_sessions(
+                user_id=user_id,
+                session_type=SessionType.AGENT,
+                deserialize=True
+            )
+        
+        if isinstance(sessions, list):
+            return sessions
+        return []
     
     @classmethod
     async def _get_session_by_session_id_async(
@@ -417,7 +468,21 @@ class AgentSession:
         Returns:
             AgentSession object or None if not found
         """
-        return await storage.read_async(session_id, cls)
+        from upsonic.session.base import SessionType
+        from upsonic.storage.base import AsyncStorage
+        
+        if isinstance(storage, AsyncStorage):
+            return await storage.aget_session(
+                session_id=session_id,
+                session_type=SessionType.AGENT,
+                deserialize=True
+            )
+        else:
+            return storage.get_session(
+                session_id=session_id,
+                session_type=SessionType.AGENT,
+                deserialize=True
+            )
     
     # ==================== PUBLIC HELPER METHODS ====================
     
@@ -639,7 +704,7 @@ class AgentSession:
                 else:
                     break
 
-        log_debug(f"Retrieved {len(result)} messages")
+        _logger.debug(f"Retrieved {len(result)} messages")
         return result
 
     def get_chat_history(self, last_n_runs: Optional[int] = None) -> List[ModelMessage]:
@@ -670,6 +735,72 @@ class AgentSession:
 
     def get_session_summary(self) -> Optional[str]:
         return self.summary
+    
+    # ==================== USAGE METHODS ====================
+    
+    def get_session_usage(self) -> "RunUsage":
+        """Get the session-level aggregated usage.
+        
+        Returns the stored session usage, or computes it by aggregating
+        usage from all runs if not yet set.
+        
+        Returns:
+            RunUsage with aggregated metrics from all runs in this session.
+        """
+        from upsonic.usage import RunUsage
+        
+        # If we have a stored usage, return it
+        if self.usage is not None:
+            return self.usage
+        
+        # Otherwise, compute from runs
+        return self._compute_usage_from_runs()
+    
+    def _compute_usage_from_runs(self) -> "RunUsage":
+        """Compute aggregated usage from all runs.
+        
+        Returns:
+            RunUsage with aggregated metrics.
+        """
+        from upsonic.usage import RunUsage
+        
+        aggregated = RunUsage()
+        
+        if not self.runs:
+            return aggregated
+        
+        for run_data in self.runs.values():
+            if run_data.output and run_data.output.usage:
+                aggregated = aggregated + run_data.output.usage
+        
+        return aggregated
+    
+    def update_usage_from_run(self, run_output: AgentRunOutput) -> None:
+        """Update session usage by adding run's usage.
+        
+        This method adds the run's usage to the session-level aggregated usage.
+        Should be called after each run completes.
+        
+        Args:
+            run_output: The AgentRunOutput with usage to add.
+        """
+        from upsonic.usage import RunUsage
+        
+        if run_output is None or run_output.usage is None:
+            return
+        
+        if self.usage is None:
+            self.usage = RunUsage()
+        
+        self.usage = self.usage + run_output.usage
+    
+    def reset_usage(self) -> None:
+        """Reset the session usage to zero.
+        
+        Use this to clear accumulated usage, e.g., after billing.
+        """
+        from upsonic.usage import RunUsage
+        self.usage = RunUsage()
 
     def update_metadata(self, key: str, value: Any) -> None:
         if self.metadata is None:
@@ -783,12 +914,16 @@ class AgentSession:
     
     def populate_from_run_output(self, run_output: "AgentRunOutput") -> None:
         """
-        Populate session data from an AgentRunOutput.
+        Populate session metadata from an AgentRunOutput.
         
         Extracts and sets:
         - agent_data: agent_name, model_name
         - session_data: user_prompt, image_identifiers, document_identifiers
-        - messages: Full conversation history from chat_history
+        
+        NOTE: This method does NOT update session.messages. Message updates
+        are handled by append_new_messages_from_run_output() to ensure only
+        NEW messages from the run are appended (avoiding information loss
+        due to memory filtering/limiting).
         
         Args:
             run_output: The AgentRunOutput containing input and agent info
@@ -798,10 +933,43 @@ class AgentSession:
         
         self._populate_agent_data_from_output(run_output)
         self._populate_session_data_from_output(run_output)
+    
+    def append_new_messages_from_run_output(self, run_output: "AgentRunOutput") -> int:
+        """
+        Append only NEW messages from a run to session.messages.
         
-        # Set session messages from output's chat_history (contains all history from all runs)
-        if run_output.chat_history:
-            self.messages = list(run_output.chat_history)
+        This method properly handles message tracking by only appending
+        the new messages generated during this specific run, NOT the
+        full chat_history which may have been filtered/limited by memory settings.
+        
+        Uses run_output.new_messages() which internally tracks:
+        - Where historical messages ended (via init_run_message_tracking)
+        - Which messages are new from this run (via finalize_run_messages)
+        
+        Args:
+            run_output: The AgentRunOutput containing new messages from the run
+            
+        Returns:
+            Number of new messages appended
+        """
+        if run_output is None:
+            return 0
+        
+        # Get only the new messages from this run
+        new_messages = run_output.new_messages()
+        
+        if not new_messages:
+            return 0
+        
+        # Initialize messages list if needed
+        if self.messages is None:
+            self.messages = []
+        
+        # Append new messages to session
+        self.messages.extend(new_messages)
+        
+        _logger.debug(f"Appended {len(new_messages)} new messages to session (total: {len(self.messages)})")
+        return len(new_messages)
     
     def _populate_agent_data_from_output(self, run_output: "AgentRunOutput") -> None:
         """
@@ -874,17 +1042,3 @@ class AgentSession:
             return run_input.user_prompt
         return str(run_input.user_prompt)
     
-    def serialize(self) -> bytes:
-        """Serialize to bytes for storage."""
-        import cloudpickle
-        return cloudpickle.dumps(self.to_dict())
-    
-    @classmethod
-    def deserialize(cls, data: bytes) -> "AgentSession":
-        """Deserialize from bytes."""
-        import cloudpickle
-        dict_data = cloudpickle.loads(data)
-        result = cls.from_dict(dict_data)
-        if result is None:
-            raise ValueError("Failed to deserialize AgentSession")
-        return result

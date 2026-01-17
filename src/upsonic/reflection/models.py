@@ -53,6 +53,16 @@ class ReflectionConfig(BaseModel):
     enable_improvement_suggestions: bool = Field(default=True, description="Enable improvement suggestions")
     
 
+class ReflectionResult(BaseModel):
+    """Result of reflection processing containing input/output for message tracking."""
+    evaluation_prompt: str = Field(description="The evaluation prompt sent to the LLM (FIRST INPUT)")
+    improved_output: Any = Field(description="The improved output from the LLM (LAST OUTPUT)")
+    improvement_made: bool = Field(default=False, description="Whether improvement was made")
+    original_output: Any = Field(default=None, description="The original output before reflection")
+    final_evaluation: Optional[EvaluationResult] = Field(default=None, description="Final evaluation result")
+    termination_reason: Optional[str] = Field(default=None, description="Reason for termination")
+
+
 class ReflectionState(BaseModel):
     """State tracking for reflection process."""
     iteration: int = Field(default=0, description="Current iteration number")

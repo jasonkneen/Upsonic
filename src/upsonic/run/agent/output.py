@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from upsonic.run.events.events import AgentEvent
     from upsonic.run.requirements import RunRequirement
     from upsonic.run.tools.tools import ToolExecution
-    from upsonic.usage import RequestUsage
+    from upsonic.usage import RunUsage, RequestUsage
     from upsonic.profiles import ModelProfile
     from upsonic.agent.pipeline.step import StepResult
     from upsonic.run.pipeline.stats import PipelineExecutionStats
@@ -109,7 +109,7 @@ class AgentRunOutput:
     messages: Optional[List["ModelMessage"]] = None
     # response: Current ModelResponse
     response: Optional["ModelResponse"] = None
-    usage: Optional["RequestUsage"] = None
+    usage: Optional["RunUsage"] = None
     additional_input_message: Optional[List["ModelRequest"]] = None
     
     # Memory tracking
@@ -154,6 +154,8 @@ class AgentRunOutput:
     error_details: Optional[str] = None
     
     # --- Message tracking (internal) ---
+    # _run_boundaries tracks where each run starts in chat_history
+    # This allows extracting new messages from just this run
     _run_boundaries: List[int] = field(default_factory=list)
     
     # --- Timestamps ---
@@ -213,9 +215,33 @@ class AgentRunOutput:
     @property
     def tools_awaiting_external_execution(self) -> List["ToolExecution"]:
         """Get tools awaiting external execution."""
-        if not self.tools:
-            return []
-        return [t for t in self.tools if t.external_execution_required and t.result is None]
+        tools_list: List["ToolExecution"] = []
+        seen_tool_call_ids: set[str] = set()
+        
+        # Check tools directly
+        if self.tools:
+            for t in self.tools:
+                if t.external_execution_required and t.result is None:
+                    if t.tool_call_id and t.tool_call_id not in seen_tool_call_ids:
+                        tools_list.append(t)
+                        seen_tool_call_ids.add(t.tool_call_id)
+                    elif not t.tool_call_id:
+                        # If no tool_call_id, add anyway (shouldn't happen but be safe)
+                        tools_list.append(t)
+        
+        # Also check requirements (external tools are stored here)
+        if self.requirements:
+            for req in self.requirements:
+                if req.needs_external_execution and req.tool_execution:
+                    tool_exec = req.tool_execution
+                    if tool_exec.tool_call_id and tool_exec.tool_call_id not in seen_tool_call_ids:
+                        tools_list.append(tool_exec)
+                        seen_tool_call_ids.add(tool_exec.tool_call_id)
+                    elif not tool_exec.tool_call_id:
+                        # If no tool_call_id, add anyway (shouldn't happen but be safe)
+                        tools_list.append(tool_exec)
+        
+        return tools_list
     
     # ========================================================================
     # Requirement Methods (External Tool Only)
@@ -300,42 +326,108 @@ class AgentRunOutput:
     # Message Tracking Methods
     # ========================================================================
     
+    def start_new_run(self) -> None:
+        """
+        Mark the start of a new run.
+        
+        This records the current length of chat_history in _run_boundaries,
+        allowing us to later extract only the new messages from this run.
+        
+        Should be called at the START of a run (in MessageBuildStep) AFTER
+        loading historical messages into chat_history.
+        """
+        # Record current chat_history length as the run boundary
+        if self.chat_history:
+            self._run_boundaries.append(len(self.chat_history))
+        else:
+            self._run_boundaries.append(0)
+    
+    def finalize_run_messages(self) -> None:
+        """
+        Finalize message tracking for this run.
+        
+        Extracts the NEW messages from chat_history (messages added after start_new_run
+        was called) and stores them in self.messages.
+        
+        Should be called at the END of the run (in MemorySaveStep) AFTER all model
+        interactions are complete (including steps like AgentPolicyStep that may
+        add additional messages).
+        
+        Uses _run_boundaries to determine which messages are new:
+        - chat_history[0:boundary] = historical messages from memory
+        - chat_history[boundary:] = new messages from THIS run
+        """
+        if not self.chat_history:
+            if self.messages is None:
+                self.messages = []
+            return
+        
+        # Get the run start boundary
+        run_start = 0
+        if self._run_boundaries:
+            run_start = self._run_boundaries[-1]
+        
+        # Extract only the new messages added during this run
+        if run_start < len(self.chat_history):
+            new_messages = self.chat_history[run_start:]
+            if self.messages is None:
+                self.messages = []
+            # Clear and set to avoid duplicates on multiple calls
+            self.messages = list(new_messages)
+        elif self.messages is None:
+            self.messages = []
+    
     def all_messages(self) -> List["ModelMessage"]:
-        """Get all messages from the run."""
+        """Get all messages from this run."""
         return (self.messages or []).copy()
     
     def new_messages(self) -> List["ModelMessage"]:
-        """Get messages from the last iteration only."""
-        if not self._run_boundaries or not self.messages:
-            return (self.messages or []).copy()
-        last_start = self._run_boundaries[-1]
-        return self.messages[last_start:].copy()
-    
-    def add_messages(self, messages: List["ModelMessage"]) -> None:
-        """Add messages to the run."""
-        if self.messages is None:
-            self.messages = []
-        self.messages.extend(messages)
+        """
+        Get only the NEW messages from this run.
+        
+        Returns messages that were added during this specific run,
+        excluding any historical messages loaded from memory.
+        
+        For proper tracking:
+        - start_new_run() should be called at run start
+        - finalize_run_messages() should be called at run end
+        
+        Returns:
+            List of ModelMessage added during this run only.
+        """
+        # If messages was set via finalize_run_messages, return it
+        if self.messages:
+            return self.messages.copy()
+        
+        # Fallback: Calculate from _run_boundaries and chat_history
+        if self._run_boundaries and self.chat_history:
+            run_start = self._run_boundaries[-1]
+            if run_start < len(self.chat_history):
+                return self.chat_history[run_start:].copy()
+        
+        # No tracking info available, return empty
+        return []
     
     def add_message(self, message: "ModelMessage") -> None:
-        """Add a single message to the run."""
+        """Add a single message to the run's message list."""
         if self.messages is None:
             self.messages = []
         self.messages.append(message)
     
-    def start_new_run(self) -> None:
-        """Initialize a new run by starting a new iteration."""
-        self.start_new_iteration()
-    
-    def start_new_iteration(self) -> None:
-        """Mark the start of a new tool call iteration."""
-        if self.messages:
-            self._run_boundaries.append(len(self.messages))
-        else:
-            self._run_boundaries.append(0)
+    def add_messages(self, messages: List["ModelMessage"]) -> None:
+        """Add multiple messages to the run's message list.
+        
+        This is a batch version of add_message for convenience.
+        
+        Args:
+            messages: List of ModelMessage objects to add.
+        """
+        if self.messages is None:
+            self.messages = []
+        self.messages.extend(messages)
     
     def get_last_model_response(self) -> Optional["ModelResponse"]:
-        """Get the last ModelResponse from the messages."""
+        """Get the last ModelResponse from the run's messages."""
         from upsonic.messages.messages import ModelResponse
         
         messages = self.new_messages()
@@ -343,6 +435,16 @@ class AgentRunOutput:
             if isinstance(msg, ModelResponse):
                 return msg
         return None
+    
+    def has_new_messages(self) -> bool:
+        """Check if this run has any new messages."""
+        if self.messages:
+            return True
+        # Check via boundaries
+        if self._run_boundaries and self.chat_history:
+            run_start = self._run_boundaries[-1]
+            return run_start < len(self.chat_history)
+        return False
     
     # ========================================================================
     # Status Methods
@@ -387,68 +489,148 @@ class AgentRunOutput:
         self._sync_status_to_task()
     
     # ========================================================================
+    # Usage Tracking Methods
+    # ========================================================================
+    
+    def _ensure_usage(self) -> "RunUsage":
+        """Ensure usage object exists and return it.
+        
+        Handles conversion from dict (from storage deserialization) to RunUsage.
+        """
+        from upsonic.usage import RunUsage
+        
+        if self.usage is None:
+            self.usage = RunUsage()
+        elif isinstance(self.usage, dict):
+            # Convert dict to RunUsage (can happen when loaded from storage improperly)
+            self.usage = RunUsage.from_dict(self.usage)
+        
+        return self.usage
+    
+    def start_usage_timer(self) -> None:
+        """Start the usage timer for this run.
+        
+        Should be called at the beginning of run execution.
+        """
+        usage = self._ensure_usage()
+        usage.start_timer()
+    
+    def stop_usage_timer(self, set_duration: bool = True) -> None:
+        """Stop the usage timer and optionally set duration.
+        
+        Should be called at the end of run execution.
+        
+        Args:
+            set_duration: If True, set duration from timer.elapsed
+        """
+        if self.usage is not None:
+            self.usage.stop_timer(set_duration=set_duration)
+    
+    def set_usage_time_to_first_token(self) -> None:
+        """Record time to first token from the usage timer.
+        
+        Should be called when the first token is generated during streaming.
+        """
+        if self.usage is not None:
+            self.usage.set_time_to_first_token()
+    
+    def update_usage_from_response(self, request_usage: Union["RequestUsage", Dict[str, Any]]) -> None:
+        """Update usage from a model response's RequestUsage.
+        
+        This increments the run's usage with token counts from a model response.
+        Handles both RequestUsage objects and dicts (when loaded from storage).
+        
+        Args:
+            request_usage: The RequestUsage from a model response, or a dict if loaded from storage.
+        """
+        from upsonic.usage import RequestUsage as RequestUsageClass
+        
+        usage = self._ensure_usage()
+        
+        # Handle dict (from storage deserialization) or RequestUsage object
+        if isinstance(request_usage, dict):
+            # Convert dict to RequestUsage
+            request_usage_obj = RequestUsageClass(
+                input_tokens=request_usage.get("input_tokens", 0) or 0,
+                output_tokens=request_usage.get("output_tokens", 0) or 0,
+                cache_write_tokens=request_usage.get("cache_write_tokens", 0) or 0,
+                cache_read_tokens=request_usage.get("cache_read_tokens", 0) or 0,
+                input_audio_tokens=request_usage.get("input_audio_tokens", 0) or 0,
+                cache_audio_read_tokens=request_usage.get("cache_audio_read_tokens", 0) or 0,
+                output_audio_tokens=request_usage.get("output_audio_tokens", 0) or 0,
+                details=request_usage.get("details", {}),
+            )
+            usage.update_from_request_usage(request_usage_obj)
+        else:
+            usage.update_from_request_usage(request_usage)
+    
+    def increment_tool_calls(self, count: int = 1) -> None:
+        """Increment the tool call count in usage.
+        
+        Args:
+            count: Number of tool calls to add.
+        """
+        usage = self._ensure_usage()
+        usage.tool_calls += count
+    
+    def set_usage_cost(self, cost: float) -> None:
+        """Set the cost in usage.
+        
+        Args:
+            cost: The cost value to set.
+        """
+        usage = self._ensure_usage()
+        if usage.cost is None:
+            usage.cost = cost
+        else:
+            usage.cost += cost
+    
+    # ========================================================================
     # Serialization
     # ========================================================================
     
-    def _serialize_message(self, msg: Any) -> Any:
-        """Serialize a message to dict if it has to_dict method."""
-        if msg is None:
-            return None
-        if hasattr(msg, 'to_dict'):
-            return msg.to_dict()
-        return msg
-    
-    def _serialize_item(self, item: Any) -> Any:
-        """Serialize an item to dict if it has to_dict method."""
-        if item is None:
-            return None
-        if hasattr(item, 'to_dict'):
-            return item.to_dict()
-        return item
-    
-    def _serialize_list(self, items: Optional[List[Any]]) -> Optional[List[Any]]:
-        """Serialize a list of items, calling to_dict on each if available."""
-        if items is None:
-            return None
-        return [self._serialize_item(item) for item in items]
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary (pure transformation, nested objects call their to_dict())."""
-        return {
+    def to_dict(self, serialize_flag: bool = False) -> Dict[str, Any]:
+        """
+        Convert to dictionary.
+        
+        Args:
+            serialize_flag: Passed to Task.to_dict for cloudpickle serialization.
+        
+        Uses TypeAdapters for proper serialization:
+        - chat_history/messages/response/additional_input_message: ModelMessagesTypeAdapter
+        - thinking_parts: ModelResponsePartTypeAdapter
+        - images/files: BinaryContentTypeAdapter
+        - usage: dataclasses.asdict
+        - tools: to_dict method
+        - status: to_dict method
+        - requirements: to_dict method
+        - step_results: to_dict method
+        - execution_stats: to_dict method
+        - events: to_dict method
+        - agent_knowledge_base_filter: to_dict method
+        - current_step_result: to_dict method
+        - output_schema: type handling (str or BaseModel class name/module)
+        """
+        from pydantic import BaseModel
+        from upsonic.messages.messages import (
+            BinaryContentTypeAdapter,
+            ModelMessagesTypeAdapter,
+            ModelResponsePartTypeAdapter,
+        )
+        
+        result: Dict[str, Any] = {
+            # Simple/primitive attributes
             "run_id": self.run_id,
             "agent_id": self.agent_id,
             "agent_name": self.agent_name,
             "session_id": self.session_id,
             "parent_run_id": self.parent_run_id,
             "user_id": self.user_id,
-            "task": self.task.to_dict() if self.task and hasattr(self.task, 'to_dict') else None,
-            "status": self.status.value if hasattr(self.status, 'value') else self.status,
-            "created_at": self.created_at,
-            "updated_at": self.updated_at,
-            "input": self.input.to_dict() if self.input else None,
-            "output": self.output,
-            "output_schema": str(self.output_schema) if self.output_schema else None,
-            "thinking_content": self.thinking_content,
-            "thinking_parts": self._serialize_list(self.thinking_parts),
             "model_name": self.model_name,
             "model_provider": self.model_provider,
-            "model_provider_profile": self._serialize_item(self.model_provider_profile),
-            "chat_history": [self._serialize_message(m) for m in self.chat_history] if self.chat_history else [],
-            "messages": self._serialize_list(self.messages),
-            "response": self._serialize_message(self.response),
-            "usage": self._serialize_item(self.usage),
-            "additional_input_message": self._serialize_list(self.additional_input_message),
             "memory_message_count": self.memory_message_count,
-            "tools": [t.to_dict() for t in self.tools] if self.tools else None,
             "tool_call_count": self.tool_call_count,
             "tool_limit_reached": self.tool_limit_reached,
-            "images": self._serialize_list(self.images),
-            "files": self._serialize_list(self.files),
-            "requirements": [r.to_dict() for r in self.requirements] if self.requirements else None,
-            "step_results": [sr.to_dict() for sr in self.step_results] if self.step_results else [],
-            "execution_stats": self.execution_stats.to_dict() if self.execution_stats else None,
-            "events": self._serialize_list(self.events),
-            "agent_knowledge_base_filter": self.agent_knowledge_base_filter,
             "metadata": self.metadata,
             "session_state": self.session_state,
             "is_streaming": self.is_streaming,
@@ -456,28 +638,193 @@ class AgentRunOutput:
             "_run_boundaries": self._run_boundaries,
             "pause_reason": self.pause_reason,
             "error_details": self.error_details,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "output": self.output,
+            "thinking_content": self.thinking_content,
         }
+        
+        # task: use to_dict with serialize_flag
+        if self.task is not None:
+            result["task"] = self.task.to_dict(serialize_flag=serialize_flag)
+        else:
+            result["task"] = None
+        
+        # input: AgentRunInput.to_dict()
+        if self.input is not None:
+            result["input"] = self.input.to_dict()
+        else:
+            result["input"] = None
+        
+        # output_schema: type handling (leave as-is if type)
+        if self.output_schema is None:
+            result["output_schema"] = None
+        elif self.output_schema is str:
+            result["output_schema"] = {"__builtin_type__": True, "name": "str"}
+        elif isinstance(self.output_schema, type):
+            try:
+                if issubclass(self.output_schema, BaseModel):
+                    result["output_schema"] = {
+                        "__pydantic_type__": True,
+                        "name": self.output_schema.__name__,
+                        "module": self.output_schema.__module__,
+                    }
+                else:
+                    result["output_schema"] = {
+                        "__type__": True,
+                        "name": self.output_schema.__name__,
+                        "module": self.output_schema.__module__,
+                    }
+            except TypeError:
+                result["output_schema"] = str(self.output_schema)
+        else:
+            result["output_schema"] = str(self.output_schema)
+        
+        # thinking_parts: ModelResponsePartTypeAdapter
+        if self.thinking_parts:
+            result["thinking_parts"] = ModelResponsePartTypeAdapter.dump_python(
+                self.thinking_parts, mode="json"
+            )
+        else:
+            result["thinking_parts"] = None
+        
+        # model_provider_profile: to_dict
+        if self.model_provider_profile is not None:
+            result["model_provider_profile"] = self.model_provider_profile.to_dict()
+        else:
+            result["model_provider_profile"] = None
+        
+        # chat_history: ModelMessagesTypeAdapter
+        if self.chat_history:
+            result["chat_history"] = ModelMessagesTypeAdapter.dump_python(
+                self.chat_history, mode="json"
+            )
+        else:
+            result["chat_history"] = []
+        
+        # messages: ModelMessagesTypeAdapter
+        if self.messages:
+            result["messages"] = ModelMessagesTypeAdapter.dump_python(
+                self.messages, mode="json"
+            )
+        else:
+            result["messages"] = None
+        
+        # response: ModelMessagesTypeAdapter (single item in list)
+        if self.response is not None:
+            result["response"] = ModelMessagesTypeAdapter.dump_python(
+                [self.response], mode="json"
+            )[0]
+        else:
+            result["response"] = None
+        
+        # usage: RunUsage.to_dict()
+        if self.usage is not None:
+            result["usage"] = self.usage.to_dict()
+        else:
+            result["usage"] = None
+        
+        # additional_input_message: ModelMessagesTypeAdapter
+        if self.additional_input_message:
+            result["additional_input_message"] = ModelMessagesTypeAdapter.dump_python(
+                self.additional_input_message, mode="json"
+            )
+        else:
+            result["additional_input_message"] = None
+        
+        # tools: to_dict
+        if self.tools:
+            result["tools"] = [t.to_dict() for t in self.tools]
+        else:
+            result["tools"] = None
+        
+        # images: BinaryContentTypeAdapter
+        if self.images:
+            result["images"] = BinaryContentTypeAdapter.dump_python(
+                self.images, mode="json"
+            )
+        else:
+            result["images"] = None
+        
+        # files: BinaryContentTypeAdapter
+        if self.files:
+            result["files"] = BinaryContentTypeAdapter.dump_python(
+                self.files, mode="json"
+            )
+        else:
+            result["files"] = None
+        
+        # status: to_dict
+        if self.status is not None:
+            result["status"] = self.status.to_dict()
+        else:
+            result["status"] = None
+        
+        # requirements: to_dict
+        if self.requirements:
+            result["requirements"] = [r.to_dict() for r in self.requirements]
+        else:
+            result["requirements"] = None
+        
+        # step_results: to_dict
+        if self.step_results:
+            result["step_results"] = [sr.to_dict() for sr in self.step_results]
+        else:
+            result["step_results"] = []
+        
+        # execution_stats: to_dict
+        if self.execution_stats is not None:
+            result["execution_stats"] = self.execution_stats.to_dict()
+        else:
+            result["execution_stats"] = None
+        
+        # events: to_dict
+        if self.events:
+            result["events"] = [e.to_dict() for e in self.events]
+        else:
+            result["events"] = None
+        
+        # agent_knowledge_base_filter: to_dict
+        if self.agent_knowledge_base_filter is not None:
+            result["agent_knowledge_base_filter"] = self.agent_knowledge_base_filter.to_dict()
+        else:
+            result["agent_knowledge_base_filter"] = None
+        
+        # current_step_result: to_dict
+        if self.current_step_result is not None:
+            result["current_step_result"] = self.current_step_result.to_dict()
+        else:
+            result["current_step_result"] = None
+        
+        return result
     
-    def to_json(self, indent: Optional[int] = 2) -> str:
+    def to_json(self, indent: Optional[int] = 2, serialize_flag: bool = False) -> str:
         """Serialize to JSON string."""
         import json
-        return json.dumps(self.to_dict(), indent=indent)
+        return json.dumps(self.to_dict(serialize_flag=serialize_flag), indent=indent)
     
     @classmethod
-    def _deserialize_messages(cls, messages_data: List[Any]) -> List[Any]:
-        """Helper to deserialize a list of messages."""
-        messages = []
-        for m in messages_data:
-            if isinstance(m, dict) and 'parts' in m:
-                # It's a serialized ModelRequest/ModelResponse - keep as-is for cloudpickle
-                messages.append(m)
-            else:
-                messages.append(m)
-        return messages
-    
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "AgentRunOutput":
-        """Reconstruct from dictionary (pure transformation, nested objects reconstructed)."""
+    def from_dict(cls, data: Dict[str, Any], deserialize_flag: bool = False) -> "AgentRunOutput":
+        """
+        Reconstruct from dictionary.
+        
+        Args:
+            data: Dictionary containing AgentRunOutput data
+            deserialize_flag: Passed to Task.from_dict for cloudpickle deserialization.
+        
+        Uses TypeAdapters for proper deserialization:
+        - chat_history/messages/response/additional_input_message: ModelMessagesTypeAdapter
+        - thinking_parts: ModelResponsePartTypeAdapter
+        - images/files: BinaryContentTypeAdapter
+        - usage: RequestUsage constructor
+        - output_schema: type handling (str or BaseModel class)
+        """
+        import importlib
+        from upsonic.messages.messages import (
+            BinaryContentTypeAdapter,
+            ModelMessagesTypeAdapter,
+            ModelResponsePartTypeAdapter,
+        )
         from upsonic.run.agent.input import AgentRunInput
         from upsonic.run.requirements import RunRequirement
         from upsonic.run.tools.tools import ToolExecution
@@ -486,7 +833,152 @@ class AgentRunOutput:
         from upsonic.agent.pipeline.step import StepResult
         from upsonic.tasks.tasks import Task
         from upsonic.profiles import ModelProfile
+        from upsonic.usage import RunUsage
+        from upsonic.schemas.kb_filter import KBFilterExpr
 
+        # Handle task (dict or Task object) - with deserialize_flag
+        task = None
+        task_data = data.get("task")
+        if isinstance(task_data, dict):
+            task = Task.from_dict(task_data, deserialize_flag=deserialize_flag)
+        else:
+            task = task_data
+        
+        # Handle input (dict or object)
+        input_data = data.get("input")
+        input_obj = None
+        if isinstance(input_data, dict):
+            input_obj = AgentRunInput.from_dict(input_data)
+        else:
+            input_obj = input_data
+        
+        # Handle output_schema (type handling)
+        output_schema_data = data.get("output_schema")
+        output_schema: Optional[Union[str, Type["BaseModel"]]] = None
+        if output_schema_data is None:
+            output_schema = None
+        elif isinstance(output_schema_data, dict):
+            if output_schema_data.get("__builtin_type__") and output_schema_data.get("name") == "str":
+                output_schema = str
+            elif output_schema_data.get("__pydantic_type__"):
+                module_name = output_schema_data.get("module")
+                class_name = output_schema_data.get("name")
+                if module_name and class_name:
+                    try:
+                        module = importlib.import_module(module_name)
+                        output_schema = getattr(module, class_name)
+                    except (ImportError, AttributeError):
+                        output_schema = None
+            elif output_schema_data.get("__type__"):
+                module_name = output_schema_data.get("module")
+                class_name = output_schema_data.get("name")
+                if module_name and class_name:
+                    try:
+                        module = importlib.import_module(module_name)
+                        output_schema = getattr(module, class_name)
+                    except (ImportError, AttributeError):
+                        output_schema = None
+        elif isinstance(output_schema_data, type):
+            output_schema = output_schema_data
+        else:
+            output_schema = output_schema_data
+        
+        # Handle thinking_parts: ModelResponsePartTypeAdapter
+        thinking_parts_data = data.get("thinking_parts")
+        if thinking_parts_data and isinstance(thinking_parts_data, list):
+            thinking_parts = ModelResponsePartTypeAdapter.validate_python(thinking_parts_data)
+        else:
+            thinking_parts = None
+        
+        # Handle model_provider_profile (dict or ModelProfile)
+        model_provider_profile = None
+        model_provider_profile_data = data.get("model_provider_profile")
+        if isinstance(model_provider_profile_data, dict):
+            model_provider_profile = ModelProfile.from_dict(model_provider_profile_data)
+        else:
+            model_provider_profile = model_provider_profile_data
+        
+        # Handle chat_history: ModelMessagesTypeAdapter
+        chat_history_data = data.get("chat_history", [])
+        if chat_history_data and isinstance(chat_history_data, list):
+            chat_history = ModelMessagesTypeAdapter.validate_python(chat_history_data)
+        else:
+            chat_history = []
+        
+        # Handle messages: ModelMessagesTypeAdapter
+        messages_data = data.get("messages")
+        if messages_data and isinstance(messages_data, list):
+            messages = ModelMessagesTypeAdapter.validate_python(messages_data)
+        else:
+            messages = None
+        
+        # Handle response: ModelMessagesTypeAdapter (single item)
+        response_data = data.get("response")
+        if response_data and isinstance(response_data, dict):
+            response_list = ModelMessagesTypeAdapter.validate_python([response_data])
+            response = response_list[0] if response_list else None
+        else:
+            response = response_data
+        
+        # Handle usage: RunUsage.from_dict()
+        usage_data = data.get("usage")
+        if usage_data and isinstance(usage_data, dict):
+            usage = RunUsage.from_dict(usage_data)
+        else:
+            usage = usage_data
+        
+        # Handle additional_input_message: ModelMessagesTypeAdapter
+        additional_input_message_data = data.get("additional_input_message")
+        if additional_input_message_data and isinstance(additional_input_message_data, list):
+            additional_input_message = ModelMessagesTypeAdapter.validate_python(additional_input_message_data)
+        else:
+            additional_input_message = None
+        
+        # Handle tools (list of dicts or objects)
+        tools = None
+        tools_data = data.get("tools")
+        if tools_data:
+            tools = []
+            for t in tools_data:
+                if isinstance(t, dict):
+                    tools.append(ToolExecution.from_dict(t))
+                else:
+                    tools.append(t)
+        
+        # Handle images: BinaryContentTypeAdapter
+        images_data = data.get("images")
+        if images_data and isinstance(images_data, list):
+            images = BinaryContentTypeAdapter.validate_python(images_data)
+        else:
+            images = None
+        
+        # Handle files: BinaryContentTypeAdapter
+        files_data = data.get("files")
+        if files_data and isinstance(files_data, list):
+            files = BinaryContentTypeAdapter.validate_python(files_data)
+        else:
+            files = None
+        
+        # Handle status: from_dict
+        status_data = data.get("status", RunStatus.running.value)
+        if isinstance(status_data, str):
+            status = RunStatus.from_dict(status_data)
+        elif isinstance(status_data, RunStatus):
+            status = status_data
+        else:
+            status = RunStatus.running
+        
+        # Handle requirements (list of dicts or objects)
+        requirements = None
+        requirements_data = data.get("requirements")
+        if requirements_data:
+            requirements = []
+            for r in requirements_data:
+                if isinstance(r, dict):
+                    requirements.append(RunRequirement.from_dict(r))
+                else:
+                    requirements.append(r)
+        
         # Handle step_results (list of dicts)
         step_results: List[Any] = []
         step_results_data = data.get("step_results", [])
@@ -504,60 +996,6 @@ class AgentRunOutput:
         else:
             execution_stats = execution_stats_data
         
-        # Handle input (dict or object)
-        input_data = data.get("input")
-        input_obj = None
-        if isinstance(input_data, dict):
-            input_obj = AgentRunInput.from_dict(input_data)
-        else:
-            input_obj = input_data
-        
-        # Handle task (dict or Task object)
-        task = None
-        task_data = data.get("task")
-        if isinstance(task_data, dict):
-            if hasattr(Task, 'from_dict'):
-                task = Task.from_dict(task_data)
-            else:
-                task = Task.model_validate(task_data)
-        else:
-            task = task_data
-        
-        # Handle model_provider_profile (dict or ModelProfile)
-        model_provider_profile = None
-        model_provider_profile_data = data.get("model_provider_profile")
-        if isinstance(model_provider_profile_data, dict):
-            model_provider_profile = ModelProfile.from_dict(model_provider_profile_data)
-        else:
-            model_provider_profile = model_provider_profile_data
-        
-        # Handle tools (list of dicts or objects)
-        tools = None
-        tools_data = data.get("tools")
-        if tools_data:
-            tools = []
-            for t in tools_data:
-                if isinstance(t, dict):
-                    tools.append(ToolExecution.from_dict(t))
-                else:
-                    tools.append(t)
-        
-        # Handle requirements (list of dicts or objects)
-        requirements = None
-        requirements_data = data.get("requirements")
-        if requirements_data:
-            requirements = []
-            for r in requirements_data:
-                if isinstance(r, dict):
-                    requirements.append(RunRequirement.from_dict(r))
-                else:
-                    requirements.append(r)
-        
-        # Handle status (str or RunStatus)
-        status = data.get("status", RunStatus.running)
-        if isinstance(status, str):
-            status = RunStatus(status)
-        
         # Handle events (list of dicts or objects)
         events = None
         events_data = data.get("events")
@@ -569,8 +1007,19 @@ class AgentRunOutput:
                 else:
                     events.append(e)
         
-        # Handle chat_history (list of dicts or objects)
-        chat_history = cls._deserialize_messages(data.get("chat_history", []))
+        # Handle agent_knowledge_base_filter: from_dict
+        agent_knowledge_base_filter_data = data.get("agent_knowledge_base_filter")
+        if agent_knowledge_base_filter_data and isinstance(agent_knowledge_base_filter_data, dict):
+            agent_knowledge_base_filter = KBFilterExpr.from_dict(agent_knowledge_base_filter_data)
+        else:
+            agent_knowledge_base_filter = agent_knowledge_base_filter_data
+        
+        # Handle current_step_result: from_dict
+        current_step_result_data = data.get("current_step_result")
+        if current_step_result_data and isinstance(current_step_result_data, dict):
+            current_step_result = StepResult.from_dict(current_step_result_data)
+        else:
+            current_step_result = current_step_result_data
         
         return cls(
             run_id=data.get("run_id"),
@@ -585,32 +1034,33 @@ class AgentRunOutput:
             updated_at=data.get("updated_at"),
             input=input_obj,
             output=data.get("output"),
-            output_schema=data.get("output_schema"),
+            output_schema=output_schema,
             thinking_content=data.get("thinking_content"),
-            thinking_parts=data.get("thinking_parts"),
+            thinking_parts=thinking_parts,
             model_name=data.get("model_name"),
             model_provider=data.get("model_provider"),
             model_provider_profile=model_provider_profile,
             chat_history=chat_history,
-            messages=data.get("messages"),
-            response=data.get("response"),
-            usage=data.get("usage"),
-            additional_input_message=data.get("additional_input_message"),
+            messages=messages,
+            response=response,
+            usage=usage,
+            additional_input_message=additional_input_message,
             memory_message_count=data.get("memory_message_count", 0),
             tools=tools,
             tool_call_count=data.get("tool_call_count", 0),
             tool_limit_reached=data.get("tool_limit_reached", False),
-            images=data.get("images"),
-            files=data.get("files"),
+            images=images,
+            files=files,
             requirements=requirements,
             step_results=step_results,
             execution_stats=execution_stats,
             events=events,
-            agent_knowledge_base_filter=data.get("agent_knowledge_base_filter"),
+            agent_knowledge_base_filter=agent_knowledge_base_filter,
             metadata=data.get("metadata"),
             session_state=data.get("session_state"),
             is_streaming=data.get("is_streaming", False),
             accumulated_text=data.get("accumulated_text", ""),
+            current_step_result=current_step_result,
             _run_boundaries=data.get("_run_boundaries", []),
             pause_reason=data.get("pause_reason"),
             error_details=data.get("error_details"),
@@ -621,15 +1071,3 @@ class AgentRunOutput:
     
     def __repr__(self) -> str:
         return f"AgentRunOutput(run_id={self.run_id!r}, status={self.status.value}, output_length={len(str(self.output or ''))})"
-    
-    def serialize(self) -> bytes:
-        """Serialize to bytes for storage."""
-        import cloudpickle
-        return cloudpickle.dumps(self.to_dict())
-    
-    @classmethod
-    def deserialize(cls, data: bytes) -> "AgentRunOutput":
-        """Deserialize from bytes."""
-        import cloudpickle
-        dict_data = cloudpickle.loads(data)
-        return cls.from_dict(dict_data)

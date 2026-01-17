@@ -1,10 +1,8 @@
 import asyncio
 import copy
 import uuid
-from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Literal, Optional, Union, TYPE_CHECKING
 
-PromptCompressor = None
 
 from upsonic.utils.logging_config import sentry_sdk
 from upsonic.agent.base import BaseAgent
@@ -16,6 +14,9 @@ from upsonic._utils import now_utc
 from upsonic.utils.retry import retryable
 from upsonic.tools.processor import ExternalExecutionPause
 from upsonic.run.cancel import register_run, cleanup_run, raise_if_cancelled, cancel_run as cancel_run_func, is_cancelled
+from upsonic.session.base import SessionType
+# Constants for structured output
+from upsonic.output import DEFAULT_OUTPUT_TOOL_NAME
 
 if TYPE_CHECKING:
     from upsonic.models import Model, ModelRequest, ModelRequestParameters, ModelResponse
@@ -28,7 +29,7 @@ if TYPE_CHECKING:
     from upsonic.reflection import ReflectionConfig
     from upsonic.safety_engine.base import Policy
     from upsonic.tools import ToolDefinition
-    from upsonic.usage import RequestUsage
+    from upsonic.usage import RequestUsage, RunUsage
     from upsonic.agent.context_managers import (
         MemoryManager
     )
@@ -62,8 +63,8 @@ else:
     DatabaseBase = "DatabaseBase"
     RunData = "RunData"
 
-# Constants for structured output
-from upsonic.output import DEFAULT_OUTPUT_TOOL_NAME
+
+PromptCompressor = None
 
 RetryMode = Literal["raise", "return_false"]
 
@@ -136,7 +137,7 @@ class Agent(BaseAgent):
         instructions: Optional[str] = None,
         education: Optional[str] = None,
         work_experience: Optional[str] = None,
-        feed_tool_call_results: bool = False,
+        feed_tool_call_results: Optional[bool] = None,
         show_tool_calls: bool = True,
         tool_call_limit: int = 5,
         enable_thinking_tool: bool = False,
@@ -320,7 +321,7 @@ class Agent(BaseAgent):
         # Initialize agent-level tools
         self.tools = tools if tools is not None else []
             
-        if self.memory:
+        if self.memory and feed_tool_call_results is not None:
             self.memory.feed_tool_call_results = feed_tool_call_results
         
         self.canvas = canvas
@@ -441,7 +442,7 @@ class Agent(BaseAgent):
         
         self._setup_policy_models()
 
-
+        self.session_type = SessionType.AGENT
     
     def _setup_policy_models(self) -> None:
         """Setup model references for safety policies."""
@@ -571,6 +572,65 @@ class Agent(BaseAgent):
             AgentRunOutput: The complete run output, or None if no run has been executed
         """
         return getattr(self, '_agent_run_output', None)
+    
+    def get_session_usage(self) -> "RunUsage":
+        """
+        Get the aggregated usage for the current session.
+        
+        Returns the session-level usage from the AgentSession stored in storage.
+        If no memory is configured, returns an empty RunUsage.
+        
+        Usage:
+            ```python
+            agent = Agent("openai/gpt-4o", memory=memory)
+            result = agent.do(task1)
+            result = agent.do(task2)
+            
+            # Get aggregated usage for all runs in this session
+            session_usage = agent.get_session_usage()
+            print(session_usage.to_dict())
+            ```
+        
+        Returns:
+            RunUsage: Aggregated usage metrics for the session.
+        """
+        from upsonic.usage import RunUsage
+        
+        # Check if we have memory
+        if not self.memory:
+            return RunUsage()
+        
+        # Get session from storage
+        session = self.memory.get_session()
+        if session and hasattr(session, 'get_session_usage'):
+            return session.get_session_usage()
+        
+        # Return empty usage if no session
+        return RunUsage()
+    
+    async def aget_session_usage(self) -> "RunUsage":
+        """
+        Get the aggregated usage for the current session (async version).
+        
+        Returns the session-level usage from the AgentSession stored in storage.
+        If no memory is configured, returns an empty RunUsage.
+        
+        Returns:
+            RunUsage: Aggregated usage metrics for the session.
+        """
+        from upsonic.usage import RunUsage
+        
+        # Check if we have memory
+        if not self.memory:
+            return RunUsage()
+        
+        # Get session from storage asynchronously
+        session = await self.memory.get_session_async()
+        if session and hasattr(session, 'get_session_usage'):
+            return session.get_session_usage()
+        
+        # Return empty usage if no session
+        return RunUsage()
     
     def _create_agent_run_input(self, task: "Task") -> AgentRunInput:
         """
@@ -724,7 +784,7 @@ class Agent(BaseAgent):
             model_provider=self.model.system if self.model else None,
             model_provider_profile=self.model.profile if self.model else None,
             chat_history=[],
-            messages=[],
+            messages=None,  # Will be set by finalize_run_messages()
             response=None,
             usage=None,
             additional_input_message=None,
@@ -1171,7 +1231,6 @@ class Agent(BaseAgent):
         from upsonic.messages import SystemPromptPart, UserPromptPart, ModelRequest
         
         messages = []
-        
         message_history = memory_handler.get_message_history()
         messages.extend(message_history)
         
@@ -2373,23 +2432,7 @@ class Agent(BaseAgent):
             task._response = result.final_output
         
         return task, None
-    
-    @asynccontextmanager
-    async def _managed_storage_connection(self):
-        """Manage storage connection lifecycle."""
-        if not self.memory or not self.memory.storage:
-            yield
-            return
-        
-        storage = self.memory.storage
-        was_connected_before = await storage.is_connected_async()
-        try:
-            if not was_connected_before:
-                await storage.connect_async()
-            yield
-        finally:
-            if not was_connected_before and await storage.is_connected_async():
-                await storage.disconnect_async()
+
     
     
     @retryable()
@@ -2461,65 +2504,64 @@ class Agent(BaseAgent):
             self.user_policy_manager.debug = True
             self.agent_policy_manager.debug = True
         
-        async with self._managed_storage_connection():
-            # For resumption, use existing run_id and output
-            if is_resuming:
-                run_id = _resume_output.run_id
-                self.run_id = run_id
-                self._agent_run_output = _resume_output
-                self._agent_run_output.is_streaming = False
-            else:
-                run_id = str(uuid.uuid4())
-                self.run_id = run_id
-                register_run(run_id)
-            
-            try:
-                if not is_resuming:
-                    # 1. Create AgentRunInput
-                    run_input = self._create_agent_run_input(task)
+        # For resumption, use existing run_id and output
+        if is_resuming:
+            run_id = _resume_output.run_id
+            self.run_id = run_id
+            self._agent_run_output = _resume_output
+            self._agent_run_output.is_streaming = False
+        else:
+            run_id = str(uuid.uuid4())
+            self.run_id = run_id
+            register_run(run_id)
+        
+        try:
+            if not is_resuming:
+                # 1. Create AgentRunInput
+                run_input = self._create_agent_run_input(task)
 
-                    # 2. Create AgentRunOutput using centralized factory method
-                    self._agent_run_output = self._create_agent_run_output(
-                        run_id=run_id,
-                        task=task,
-                        run_input=run_input,
-                        is_streaming=False
-                    )
-                    
-                    # Set run_id on task for cross-process continuation support
-                    if task is not None:
-                        task.run_id = run_id
-                
-                
-                # Apply model override if provided
-                self._apply_model_override(model)
-                
-                # 3. Create pipeline with direct (non-streaming) steps
-                pipeline = PipelineManager(
-                    steps=self._create_direct_pipeline_steps(),
-                    task=self._agent_run_output.task,
-                    agent=self,
-                    model=self.model,
-                    debug=debug or self.debug
+                # 2. Create AgentRunOutput using centralized factory method
+                self._agent_run_output = self._create_agent_run_output(
+                    run_id=run_id,
+                    task=task,
+                    run_input=run_input,
+                    is_streaming=False
                 )
                 
-                # 4. Execute pipeline (with optional start_step_index for resumption)
-                try:
-                    await pipeline.execute(self._agent_run_output, start_step_index=start_step_index)
-                    cleanup_run(run_id)
-                except Exception as pipeline_error:
- 
-                    sentry_sdk.flush()
-                    raise pipeline_error
-                
+                # Set run_id on task for cross-process continuation support
+                if task is not None:
+                    task.run_id = run_id
+            
+            
+            # Apply model override if provided
+            self._apply_model_override(model)
+            
+            # 3. Create pipeline with direct (non-streaming) steps
+            pipeline = PipelineManager(
+                steps=self._create_direct_pipeline_steps(),
+                task=self._agent_run_output.task,
+                agent=self,
+                model=self.model,
+                debug=debug or self.debug
+            )
+            
+            # 4. Execute pipeline (with optional start_step_index for resumption)
+            try:
+                await pipeline.execute(self._agent_run_output, start_step_index=start_step_index)
+                cleanup_run(run_id)
+            except Exception as pipeline_error:
+
                 sentry_sdk.flush()
-                
-                # Return based on return_output parameter
-                if return_output:
-                    return self._agent_run_output
-                return self._agent_run_output.output
-            finally:
-                self.run_id = None
+                raise pipeline_error
+            
+            sentry_sdk.flush()
+            
+            # Return based on return_output parameter
+            if return_output:
+                return self._agent_run_output
+            return self._agent_run_output.output
+        finally:
+            self.run_id = None
     
     def _extract_output(self, task: "Task", response: "ModelResponse") -> Any:
         """Extract the output from a model response."""
@@ -2786,56 +2828,55 @@ class Agent(BaseAgent):
                 )
             return
         
-        async with self._managed_storage_connection():
-            run_id = str(uuid.uuid4())
-            self.run_id = run_id
-            register_run(run_id)
+        run_id = str(uuid.uuid4())
+        self.run_id = run_id
+        register_run(run_id)
+        
+        try:
+            # 1. Create AgentRunInput
+            run_input = self._create_agent_run_input(task)
             
+            # 2. Create AgentRunOutput using centralized factory method
+            self._agent_run_output = self._create_agent_run_output(
+                run_id=run_id,
+                task=task,
+                run_input=run_input,
+                is_streaming=True
+            )
+            
+            # Set run_id on task for cross-process continuation support
+            if task is not None:
+                task.run_id = run_id
+            
+            # Apply model override if provided
+            self._apply_model_override(model)
+            
+            # 3. Create pipeline with streaming steps
+            pipeline = PipelineManager(
+                steps=self._create_streaming_pipeline_steps(),
+                task=self._agent_run_output.task,
+                agent=self,
+                model=self.model,
+                debug=debug or self.debug
+            )
+            
+            # 4. Stream events from pipeline and filter based on events parameter
             try:
-                # 1. Create AgentRunInput
-                run_input = self._create_agent_run_input(task)
-                
-                # 2. Create AgentRunOutput using centralized factory method
-                self._agent_run_output = self._create_agent_run_output(
-                    run_id=run_id,
-                    task=task,
-                    run_input=run_input,
-                    is_streaming=True
-                )
-                
-                # Set run_id on task for cross-process continuation support
-                if task is not None:
-                    task.run_id = run_id
-                
-                # Apply model override if provided
-                self._apply_model_override(model)
-                
-                # 3. Create pipeline with streaming steps
-                pipeline = PipelineManager(
-                    steps=self._create_streaming_pipeline_steps(),
-                    task=self._agent_run_output.task,
-                    agent=self,
-                    model=self.model,
-                    debug=debug or self.debug
-                )
-                
-                # 4. Stream events from pipeline and filter based on events parameter
-                try:
-                    async for pipeline_event in pipeline.execute_stream(context=self._agent_run_output, start_step_index=0):
-                        if events:
-                            yield pipeline_event
-                        else:
-                            text_content = self._extract_text_from_stream_event(pipeline_event)
-                            if text_content:
-                                self._agent_run_output.accumulated_text += text_content
-                                yield text_content
-                except Exception as stream_error:
-                    raise stream_error
-                
-                
-            finally:
-                cleanup_run(run_id)
-                self.run_id = None
+                async for pipeline_event in pipeline.execute_stream(context=self._agent_run_output, start_step_index=0):
+                    if events:
+                        yield pipeline_event
+                    else:
+                        text_content = self._extract_text_from_stream_event(pipeline_event)
+                        if text_content:
+                            self._agent_run_output.accumulated_text += text_content
+                            yield text_content
+            except Exception as stream_error:
+                raise stream_error
+            
+            
+        finally:
+            cleanup_run(run_id)
+            self.run_id = None
     
     def _extract_text_from_stream_event(self, event: Any) -> Optional[str]:
         """Extract text content from a streaming event.
@@ -2872,7 +2913,7 @@ class Agent(BaseAgent):
         if not self.memory:
             raise ValueError("No memory configured. Agent must have memory configured to load paused runs.")
         
-        return await self.memory.load_resumable_run_async(run_id, self.agent_id)
+        return await self.memory.load_resumable_run_async(run_id=run_id, session_type=self.session_type, agent_id=self.agent_id)
     
     async def _check_if_run_is_problematic(
         self,
@@ -2941,7 +2982,7 @@ class Agent(BaseAgent):
             else:
                 # No matching in-memory output - load ANY run from storage (not just resumable)
                 if self.memory:
-                    run_data = await self.memory.load_run_async(run_id, self.agent_id)
+                    run_data = await self.memory.load_run_async(run_id=run_id, session_type=self.session_type, agent_id=self.agent_id)
                     if run_data and run_data.output:
                         return run_data.output.is_complete, run_data.output.status
         
@@ -2986,6 +3027,32 @@ class Agent(BaseAgent):
             FinalizationStep(),            # 17
             MemorySaveStep(),              # 18 <-- LAST: Saves AgentSession to storage
         ]
+    
+    def _get_step_index_by_name(self, step_name: str, is_streaming: bool = False) -> int:
+        """
+        Get the index of a pipeline step by its name.
+        
+        This allows dynamic lookup of step indices instead of hardcoding,
+        which is important for HITL resumption logic that needs to know
+        which steps set _run_boundaries.
+        
+        Args:
+            step_name: The name of the step (e.g., "message_build")
+            is_streaming: Whether to use streaming pipeline (default: direct)
+            
+        Returns:
+            The index of the step in the pipeline
+            
+        Raises:
+            ValueError: If the step is not found
+        """
+        steps = self._create_streaming_pipeline_steps() if is_streaming else self._create_direct_pipeline_steps()
+        
+        for i, step in enumerate(steps):
+            if step.name == step_name:
+                return i
+        
+        raise ValueError(f"Step '{step_name}' not found in {'streaming' if is_streaming else 'direct'} pipeline")
     
     def _create_streaming_pipeline_steps(self) -> List[Any]:
         """
@@ -3046,6 +3113,9 @@ class Agent(BaseAgent):
         The chat_history is already preserved in output. We just need to add the 
         response with tool calls (if there) and then the tool return parts.
         
+        Also adds ToolExecution objects to output.tools for proper tool_usage tracking
+        so that call_end can display the tool calls table.
+        
         Args:
             output: The agent run output (single source of truth)
             requirements: List of RunRequirements with ToolExecution containing results
@@ -3062,16 +3132,22 @@ class Agent(BaseAgent):
             if not output.chat_history or output.chat_history[-1] != output.response:
                 output.chat_history.append(output.response)
         
+        # Initialize output.tools if needed
+        if output.tools is None:
+            output.tools = []
+        
         # Inject tool results for ALL requirements
         tool_return_parts = []
         for requirement in requirements:
             if requirement.tool_execution and requirement.tool_execution.result:
+                te = requirement.tool_execution
                 tool_return_parts.append(ToolReturnPart(
-                    tool_name=requirement.tool_execution.tool_name,
-                    content=requirement.tool_execution.result,
-                    tool_call_id=requirement.tool_execution.tool_call_id,
+                    tool_name=te.tool_name,
+                    content=te.result,
+                    tool_call_id=te.tool_call_id,
                     timestamp=now_utc()
                 ))
+                output.tools.append(te)
         
         # Add all tool returns in a single ModelRequest
         if tool_return_parts:
@@ -3339,6 +3415,19 @@ class Agent(BaseAgent):
         
         resume_step_index = problematic_step.step_number
         
+        # MessageBuildStep sets _run_boundaries when building messages.
+        # Only call start_new_run() if we're resuming AFTER MessageBuildStep.
+        # If we resume AT or BEFORE MessageBuildStep, it will rebuild chat_history and
+        # set the correct boundary itself.
+        message_build_step_index = self._get_step_index_by_name("message_build")
+        if resume_step_index > message_build_step_index:
+            # CRITICAL: Mark the start of this resumed run for message tracking BEFORE any modifications.
+            # When resuming AFTER MessageBuildStep, it's skipped (we resume from a later step),
+            # so we need to record the current chat_history length here.
+            # This ensures finalize_run_messages() includes ALL messages from THIS resumed run,
+            # including injected tool results.
+            output.start_new_run()
+        
         # For paused runs (external tool execution), inject tool results
         if run_status == RunStatus.paused:
             external_tool_reqs = output.get_external_tool_requirements_with_results()
@@ -3421,59 +3510,57 @@ class Agent(BaseAgent):
                 "Use streaming=False (default) for continue_run_async."
             )
         
-        # Ensure storage connection is active for status checks
-        async with self._managed_storage_connection():
-            # Check if task is already completed - cannot continue a completed task
-            is_completed, run_status = await self._check_if_run_is_completed(task, run_id)
-            if is_completed:
-                resolved_run_id = (task.run_id if task else run_id) or "unknown"
-                warning_log(
-                    f"Task is already completed (run_id={resolved_run_id}). Cannot continue a completed task.",
-                    "Agent"
-                )
-                completed_output = AgentRunOutput(
-                    run_id=resolved_run_id,
-                    agent_id=self.agent_id,
-                    agent_name=self.name,
-                    session_id=self.session_id,
-                    user_id=self.user_id,
-                    status=RunStatus.completed,
-                    output=f"Task is already completed (run_id={resolved_run_id}). Cannot continue a completed task.",
-                )
-                if return_output:
-                    return completed_output
-                return completed_output.output
-            
-            # Check if run is problematic (paused, cancelled, error) before preparing continuation
-            is_problematic, run_status = await self._check_if_run_is_problematic(task, run_id)
-            
-            if not is_problematic:
-                # Run is not problematic - log and call do_async for a fresh run
-                status_str = run_status.value if run_status else "unknown"
-                info_log(
-                    f"Run status is '{status_str}' (not paused, cancelled, or error). "
-                    f"Starting fresh run via do_async.",
-                    "Agent"
-                )
-                return await self.do_async(
-                    task=task,
-                    model=model,
-                    debug=debug,
-                    retry=retry,
-                    return_output=return_output,
-                    state=state,
-                    graph_execution_id=graph_execution_id,
-                )
-            
-            # Prepare context and determine resume point for problematic runs
-            output, task, resume_step_index = await self._prepare_continuation_context(
-                task, run_id, model, debug, requirements
+        # Check if task is already completed - cannot continue a completed task
+        is_completed, run_status = await self._check_if_run_is_completed(task, run_id)
+        if is_completed:
+            resolved_run_id = (task.run_id if task else run_id) or "unknown"
+            warning_log(
+                f"Task is already completed (run_id={resolved_run_id}). Cannot continue a completed task.",
+                "Agent"
             )
-            
-            # Execute and handle any subsequent external tool calls automatically
-            return await self._continue_run_direct_impl(
-                task, model, debug, retry, return_output, output, resume_step_index, external_tool_executor
+            completed_output = AgentRunOutput(
+                run_id=resolved_run_id,
+                agent_id=self.agent_id,
+                agent_name=self.name,
+                session_id=self.session_id,
+                user_id=self.user_id,
+                status=RunStatus.completed,
+                output=f"Task is already completed (run_id={resolved_run_id}). Cannot continue a completed task.",
             )
+            if return_output:
+                return completed_output
+            return completed_output.output
+        
+        # Check if run is problematic (paused, cancelled, error) before preparing continuation
+        is_problematic, run_status = await self._check_if_run_is_problematic(task, run_id)
+        
+        if not is_problematic:
+            # Run is not problematic - log and call do_async for a fresh run
+            status_str = run_status.value if run_status else "unknown"
+            info_log(
+                f"Run status is '{status_str}' (not paused, cancelled, or error). "
+                f"Starting fresh run via do_async.",
+                "Agent"
+            )
+            return await self.do_async(
+                task=task,
+                model=model,
+                debug=debug,
+                retry=retry,
+                return_output=return_output,
+                state=state,
+                graph_execution_id=graph_execution_id,
+            )
+        
+        # Prepare context and determine resume point for problematic runs
+        output, task, resume_step_index = await self._prepare_continuation_context(
+            task, run_id, model, debug, requirements
+        )
+        
+        # Execute and handle any subsequent external tool calls automatically
+        return await self._continue_run_direct_impl(
+            task, model, debug, retry, return_output, output, resume_step_index, external_tool_executor
+        )
     
     async def _continue_run_direct_impl(
         self,

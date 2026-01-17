@@ -33,49 +33,6 @@ else:
     AgentEvent = "AgentEvent"
 
 
-# Error injection registry for testing durable execution
-# Maps step_name -> (error_class, error_message, trigger_count)
-# trigger_count: number of times to trigger before stopping (0 = infinite)
-_ERROR_INJECTION_REGISTRY: dict = {}
-_ERROR_INJECTION_COUNTERS: dict = {}
-
-
-def inject_error_into_step(step_name: str, error_class: type = Exception, error_message: str = "Injected test error", trigger_count: int = 1):
-    """
-    Inject an error into a specific step for testing durable execution.
-    
-    Args:
-        step_name: Name of the step to inject error into (e.g., "model_execution")
-        error_class: Exception class to raise
-        error_message: Error message
-        trigger_count: Number of times to trigger the error (1 = once, then step works)
-    """
-    _ERROR_INJECTION_REGISTRY[step_name] = (error_class, error_message, trigger_count)
-    _ERROR_INJECTION_COUNTERS[step_name] = 0
-
-
-def clear_error_injection(step_name: str = None):
-    """Clear error injection for a step or all steps."""
-    if step_name:
-        _ERROR_INJECTION_REGISTRY.pop(step_name, None)
-        _ERROR_INJECTION_COUNTERS.pop(step_name, None)
-    else:
-        _ERROR_INJECTION_REGISTRY.clear()
-        _ERROR_INJECTION_COUNTERS.clear()
-
-
-def check_and_raise_injected_error(step_name: str):
-    """Check if an error should be raised for this step and raise it if so."""
-    if step_name in _ERROR_INJECTION_REGISTRY:
-        error_class, error_message, trigger_count = _ERROR_INJECTION_REGISTRY[step_name]
-        current_count = _ERROR_INJECTION_COUNTERS.get(step_name, 0)
-        
-        # Check if we should still trigger
-        if trigger_count == 0 or current_count < trigger_count:
-            _ERROR_INJECTION_COUNTERS[step_name] = current_count + 1
-            raise error_class(f"[INJECTED ERROR] {step_name}: {error_message}")
-
-
 class StepStatus(str, Enum):
     """Status of step execution - synced with RunStatus."""
     RUNNING = "RUNNING"

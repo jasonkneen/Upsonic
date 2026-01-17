@@ -255,7 +255,7 @@ class SlackInterface(Interface):
             await self.agent.do_async(task)
 
             # Get result
-            run_result = self.agent.get_run_result()
+            run_result = self.agent.get_run_output()
             if not run_result:
                 error_log("No run result from agent")
                 return

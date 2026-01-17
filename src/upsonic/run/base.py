@@ -15,6 +15,28 @@ class RunStatus(str, Enum):
     cancelled = "CANCELLED"
     error = "ERROR"
     
+    def to_dict(self) -> str:
+        """
+        Convert RunStatus to a storable string value.
+        
+        Returns:
+            The string value of the enum
+        """
+        return self.value
+    
+    @classmethod
+    def from_dict(cls, data: str) -> "RunStatus":
+        """
+        Reconstruct RunStatus from a string value.
+        
+        Args:
+            data: The string value (e.g., "RUNNING", "COMPLETED")
+            
+        Returns:
+            The corresponding RunStatus enum member
+        """
+        return cls(data)
+    
     @staticmethod
     def from_step_status(step_status: "StepStatus") -> "RunStatus":
         """

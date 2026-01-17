@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING, Optional, Dict, Any, List
 
 from upsonic.utils.printing import warning_log, error_log
 
-# Heavy imports moved to lazy loading for faster startup
 if TYPE_CHECKING:
     from upsonic.agent.agent import Agent
     from upsonic.graph.graph import State
@@ -17,7 +16,6 @@ if TYPE_CHECKING:
     from upsonic.context.sources import TaskOutputSource
     from upsonic.schemas.data_models import RAGSearchResult
 else:
-    # Use string annotations to avoid importing heavy modules
     Agent = "Agent"
     State = "State"
     MemoryManager = "MemoryManager"

@@ -792,7 +792,7 @@ class Model(Runnable[Any, Any]):
             self._memory = memory
         elif history:
             from upsonic.storage.memory import Memory
-            from upsonic.storage.providers.in_memory import InMemoryStorage
+            from upsonic.storage.in_memory import InMemoryStorage
             import uuid
 
             session_id = str(uuid.uuid4())
@@ -919,7 +919,7 @@ class Model(Runnable[Any, Any]):
             
             run_output = AgentRunOutput(
                 run_id=str(__import__('uuid').uuid4()),
-                content=output,
+                output=output,
                 messages=[]
             )
             call_manager = CallManager(
@@ -940,7 +940,7 @@ class Model(Runnable[Any, Any]):
             
             run_output_tm = AgentRunOutput(
                 run_id=str(__import__('uuid').uuid4()),
-                content=output,
+                output=output,
                 messages=[]
             )
             task_manager = TaskManager(task, None)
@@ -1417,7 +1417,7 @@ class Model(Runnable[Any, Any]):
         async with memory_manager.manage_memory() as memory_handler:
             run_output = AgentRunOutput(
                 run_id=str(__import__('uuid').uuid4()),
-                content=None,
+                output=None,
                 messages=[]
             )
             
@@ -1449,7 +1449,8 @@ class Model(Runnable[Any, Any]):
             run_output.add_message(response)
             memory_debug_log(self._memory_debug, "Saving response:", [response])
             
-            memory_handler.process_response(run_output)
+            # Set the run output for the memory handler to save on context exit
+            memory_handler.set_run_output(run_output)
             memory_debug_log(self._memory_debug, "=== MEMORY SAVE COMPLETE ===")
 
     @property
