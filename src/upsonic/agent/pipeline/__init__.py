@@ -10,7 +10,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from .context import StepContext
     from .step import Step, StepResult, StepStatus
     from .manager import PipelineManager
     from .steps import (
@@ -20,7 +19,6 @@ if TYPE_CHECKING:
         StorageConnectionStep,
         LLMManagerStep,
         ModelSelectionStep,
-        ValidationStep,
         ToolSetupStep,
         MessageBuildStep,
         ModelExecutionStep,
@@ -28,7 +26,8 @@ if TYPE_CHECKING:
         ReflectionStep,
         CallManagementStep,
         TaskManagementStep,
-        MemoryMessageTrackingStep,
+        MemorySaveStep,
+        CultureUpdateStep,
         ReliabilityStep,
         AgentPolicyStep,
         CacheStorageStep,
@@ -40,12 +39,10 @@ if TYPE_CHECKING:
 
 def _get_pipeline_base_classes():
     """Lazy import of base pipeline classes."""
-    from .context import StepContext
     from .step import Step, StepResult, StepStatus
     from .manager import PipelineManager
     
     return {
-        'StepContext': StepContext,
         'Step': Step,
         'StepResult': StepResult,
         'StepStatus': StepStatus,
@@ -61,7 +58,6 @@ def _get_pipeline_step_classes():
         StorageConnectionStep,
         LLMManagerStep,
         ModelSelectionStep,
-        ValidationStep,
         ToolSetupStep,
         MessageBuildStep,
         ModelExecutionStep,
@@ -69,7 +65,8 @@ def _get_pipeline_step_classes():
         ReflectionStep,
         CallManagementStep,
         TaskManagementStep,
-        MemoryMessageTrackingStep,
+        MemorySaveStep,
+        CultureUpdateStep,
         ReliabilityStep,
         AgentPolicyStep,
         CacheStorageStep,
@@ -86,7 +83,6 @@ def _get_pipeline_step_classes():
         'StorageConnectionStep': StorageConnectionStep,
         'LLMManagerStep': LLMManagerStep,
         'ModelSelectionStep': ModelSelectionStep,
-        'ValidationStep': ValidationStep,
         'ToolSetupStep': ToolSetupStep,
         'MessageBuildStep': MessageBuildStep,
         'ModelExecutionStep': ModelExecutionStep,
@@ -94,7 +90,8 @@ def _get_pipeline_step_classes():
         'ReflectionStep': ReflectionStep,
         'CallManagementStep': CallManagementStep,
         'TaskManagementStep': TaskManagementStep,
-        'MemoryMessageTrackingStep': MemoryMessageTrackingStep,
+        'MemorySaveStep': MemorySaveStep,
+        'CultureUpdateStep': CultureUpdateStep,
         'ReliabilityStep': ReliabilityStep,
         'AgentPolicyStep': AgentPolicyStep,
         'CacheStorageStep': CacheStorageStep,
@@ -122,7 +119,6 @@ def __getattr__(name: str) -> Any:
     )
 
 __all__ = [
-    "StepContext",
     "Step",
     "StepResult",
     "StepStatus",
@@ -133,7 +129,6 @@ __all__ = [
     "StorageConnectionStep",
     "LLMManagerStep",
     "ModelSelectionStep",
-    "ValidationStep",
     "ToolSetupStep",
     "MessageBuildStep",
     "ModelExecutionStep",
@@ -141,7 +136,8 @@ __all__ = [
     "ReflectionStep",
     "CallManagementStep",
     "TaskManagementStep",
-    "MemoryMessageTrackingStep",
+    "MemorySaveStep",
+    "CultureUpdateStep",
     "ReliabilityStep",
     "AgentPolicyStep",
     "CacheStorageStep",

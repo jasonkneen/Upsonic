@@ -5,7 +5,7 @@ from unittest.mock import patch, AsyncMock
 from contextlib import asynccontextmanager
 
 from upsonic import Agent, Task
-from upsonic.agent.run_result import RunResult
+from upsonic.run.agent.output import AgentRunOutput
 from upsonic.models import ModelResponse, TextPart
 
 from upsonic.safety_engine import (
@@ -64,7 +64,7 @@ async def test_pii_block_email(mock_infer_model):
     
     email_task = Task(description="Please send the report to john.doe@example.com and jane.smith@company.org.")
     
-    result = agent_with_pii_policy.do(email_task)
+    result = await agent_with_pii_policy.do_async(email_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -108,7 +108,7 @@ async def test_pii_block_address(mock_infer_model):
 
     address_task = Task(description="My home address is 123 Main Street, Anytown, NY 12345. Can you help me with delivery?")
     
-    result = agent_with_pii_policy.do(address_task)
+    result = await agent_with_pii_policy.do_async(address_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -154,7 +154,7 @@ async def test_pii_anonymize_phone(mock_infer_model):
     
     phone_task = Task(description="My phone number is (555) 123-4567. Can you help me with my account?")
     
-    result = agent_with_anonymize_policy.do(phone_task)
+    result = await agent_with_anonymize_policy.do_async(phone_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -198,7 +198,7 @@ async def test_pii_replace_dob(mock_infer_model):
     
     dob_task = Task(description="My date of birth is 01/15/1990. Can you help me verify my age?")
     
-    result = agent_with_replace_policy.do(dob_task)
+    result = await agent_with_replace_policy.do_async(dob_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -243,7 +243,7 @@ async def test_pii_agent_policy_exception(mock_infer_model):
     
     pii_task = Task(description="Please provide the user's contact information.")
     
-    result = agent_with_pii_exception.do(pii_task)
+    result = await agent_with_pii_exception.do_async(pii_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -289,7 +289,7 @@ async def test_pii_llm_policy(mock_infer_model):
     
     complex_pii_task = Task(description="I need help with my personal information. My full name is John Doe, I live at 456 Oak Avenue, and my driver's license number is DL123456789.")
     
-    result = agent_with_llm_policy.do(complex_pii_task)
+    result = await agent_with_llm_policy.do_async(complex_pii_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -329,7 +329,7 @@ async def test_pii_all_clear(mock_infer_model):
     
     safe_task = Task(description="What's the weather like today?")
     
-    result = plain_agent.do(safe_task)
+    result = await plain_agent.do_async(safe_task)
 
     # Final result check
     assert isinstance(result, str)

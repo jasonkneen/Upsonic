@@ -8,6 +8,7 @@ triggering OCR functionality that can cause crashes in the test environment.
 import asyncio
 import tempfile
 import unittest
+import pytest
 from pathlib import Path
 from typing import Dict
 import logging
@@ -473,23 +474,21 @@ class TestPdfPlumberLoaderSafe(unittest.TestCase):
         for pdf_path in pdf_paths:
             self.assertIn(str(pdf_path.resolve()), sources)
     
-    def test_async_loading(self):
+    @pytest.mark.asyncio
+    async def test_async_loading(self):
         """Test asynchronous loading."""
         pdf_path = self.test_pdfs["simple_text"]
         config = PdfPlumberLoaderConfig(extraction_mode="text_only")
         loader = PdfPlumberLoader(config)
         
-        async def test_async():
-            documents = await loader.aload(pdf_path)
-            return documents
-        
-        documents = asyncio.run(test_async())
+        documents = await loader.aload(pdf_path)
         
         self.assertEqual(len(documents), 1)
         doc = documents[0]
         self.assertIn("Simple Text Document", doc.content)
     
-    def test_async_batch_loading(self):
+    @pytest.mark.asyncio
+    async def test_async_batch_loading(self):
         """Test asynchronous batch loading."""
         pdf_paths = [
             self.test_pdfs["simple_text"],
@@ -499,11 +498,7 @@ class TestPdfPlumberLoaderSafe(unittest.TestCase):
         config = PdfPlumberLoaderConfig(extraction_mode="text_only")
         loader = PdfPlumberLoader(config)
         
-        async def test_async_batch():
-            documents = await loader.abatch(pdf_paths)
-            return documents
-        
-        documents = asyncio.run(test_async_batch())
+        documents = await loader.abatch(pdf_paths)
         
         self.assertEqual(len(documents), 2)
     
@@ -777,7 +772,8 @@ class TestPdfPlumberLoaderSafe(unittest.TestCase):
         processing_time = end_time - start_time
         self.assertLess(processing_time, 10)  # Should complete within 10 seconds
     
-    def test_concurrent_loading(self):
+    @pytest.mark.asyncio
+    async def test_concurrent_loading(self):
         """Test concurrent loading of multiple documents."""
         pdf_paths = [
             self.test_pdfs["simple_text"],
@@ -789,13 +785,9 @@ class TestPdfPlumberLoaderSafe(unittest.TestCase):
         config = PdfPlumberLoaderConfig(extraction_mode="text_only")
         loader = PdfPlumberLoader(config)
         
-        async def test_concurrent():
-            # Use public methods instead of private ones
-            tasks = [loader.aload(pdf_path) for pdf_path in pdf_paths]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            return results
-        
-        results = asyncio.run(test_concurrent())
+        # Use public methods instead of private ones
+        tasks = [loader.aload(pdf_path) for pdf_path in pdf_paths]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
         
         # Should process all documents successfully
         self.assertEqual(len(results), 3)

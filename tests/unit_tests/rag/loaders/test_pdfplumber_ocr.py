@@ -8,6 +8,7 @@ that occur with concurrent image processing in the test environment.
 import asyncio
 import tempfile
 import unittest
+import pytest
 from pathlib import Path
 from typing import Dict
 import logging
@@ -263,17 +264,14 @@ class TestPdfPlumberLoaderOCRSafe(unittest.TestCase):
         self.assertEqual(metadata["loader_type"], "pdfplumber")
         print(f"OCR metadata: {metadata}")
     
-    def test_ocr_async_loading(self):
+    @pytest.mark.asyncio
+    async def test_ocr_async_loading(self):
         """Test async OCR loading."""
         pdf_path = self.test_pdfs["simple_ocr"]
         config = PdfPlumberLoaderConfig(extraction_mode="ocr_only")
         loader = PdfPlumberLoader(config)
         
-        async def test_async():
-            documents = await loader.aload(pdf_path)
-            return documents
-        
-        documents = asyncio.run(test_async())
+        documents = await loader.aload(pdf_path)
         
         self.assertEqual(len(documents), 1)
         doc = documents[0]

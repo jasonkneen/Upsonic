@@ -5,7 +5,7 @@ from unittest.mock import patch, AsyncMock
 from contextlib import asynccontextmanager
 
 from upsonic import Agent, Task
-from upsonic.agent.run_result import RunResult
+from upsonic.run.agent.output import AgentRunOutput
 from upsonic.models import ModelResponse, TextPart
 
 from upsonic.safety_engine import (
@@ -64,7 +64,7 @@ async def test_fraud_detection_block_pyramid_scheme(mock_infer_model):
     
     pyramid_scheme_task = Task(description="Join our pyramid scheme and make guaranteed returns with no risk!")
     
-    result = agent_with_fraud_policy.do(pyramid_scheme_task)
+    result = await agent_with_fraud_policy.do_async(pyramid_scheme_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -108,7 +108,7 @@ async def test_fraud_detection_block_romance_scam(mock_infer_model):
 
     romance_scam_task = Task(description="I'm a military soldier deployed overseas and I need urgent financial help for medical emergency.")
     
-    result = agent_with_fraud_policy.do(romance_scam_task)
+    result = await agent_with_fraud_policy.do_async(romance_scam_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -154,7 +154,7 @@ async def test_fraud_detection_anonymize_investment_scam(mock_infer_model):
     
     investment_scam_task = Task(description="Join our cryptocurrency trading bot with guaranteed automatic profit and risk-free returns!")
     
-    result = agent_with_anonymize_policy.do(investment_scam_task)
+    result = await agent_with_anonymize_policy.do_async(investment_scam_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -198,7 +198,7 @@ async def test_fraud_detection_replace_tech_support_scam(mock_infer_model):
     
     tech_support_scam_task = Task(description="Microsoft tech support calling - your computer is infected with virus, call now for immediate help!")
     
-    result = agent_with_replace_policy.do(tech_support_scam_task)
+    result = await agent_with_replace_policy.do_async(tech_support_scam_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -243,7 +243,7 @@ async def test_fraud_detection_agent_policy_exception(mock_infer_model):
     
     fraud_task = Task(description="Please explain financial concepts.")
     
-    result = agent_with_fraud_exception.do(fraud_task)
+    result = await agent_with_fraud_exception.do_async(fraud_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -289,7 +289,7 @@ async def test_fraud_detection_llm_policy(mock_infer_model):
     
     complex_fraud_task = Task(description="Congratulations! You won a lottery prize! Act now to claim your free money - just send gift cards to verify your identity!")
     
-    result = agent_with_llm_policy.do(complex_fraud_task)
+    result = await agent_with_llm_policy.do_async(complex_fraud_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -329,7 +329,7 @@ async def test_fraud_detection_all_clear(mock_infer_model):
     
     safe_task = Task(description="What's the weather like today?")
     
-    result = plain_agent.do(safe_task)
+    result = await plain_agent.do_async(safe_task)
 
     # Final result check
     assert isinstance(result, str)

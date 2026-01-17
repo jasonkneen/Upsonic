@@ -1,83 +1,142 @@
-import asyncio
-from typing import Any, Dict, List, Optional, Type, Literal, Union
-import json
-import copy
+"""Memory orchestrator for Upsonic agent framework.
 
-from upsonic.messages.messages import ModelMessagesTypeAdapter, ModelRequest, ModelResponse, SystemPromptPart, UserPromptPart
-from pydantic import BaseModel, Field, create_model
+This module provides the Memory class which orchestrates session and user memory
+operations with runtime session type selection.
+"""
+from __future__ import annotations
 
-from upsonic.storage.base import Storage
-from upsonic.storage.session.sessions import InteractionSession, UserProfile
-from upsonic.storage.types import SessionId, UserId
-from upsonic.schemas import UserTraits
-from upsonic.models import Model
-from upsonic.utils.printing import info_log
+import uuid
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Type, Union
+
+if TYPE_CHECKING:
+    from pydantic import BaseModel
+    from upsonic.storage.base import Storage
+    from upsonic.session.base import SessionType, Session
+    from upsonic.models import Model
+    from upsonic.storage.memory.session.base import BaseSessionMemory
+    from upsonic.storage.memory.user.base import BaseUserMemory
+    from upsonic.session.agent import RunData
+    from upsonic.run.agent.output import AgentRunOutput
 
 
 class Memory:
+    """Orchestrator for session and user memory with runtime session type selection.
+    
+    This class serves as the central coordinator for memory operations:
+    - Session memory: Chat history, summaries, session metadata
+    - User memory: User profiles and traits extracted from conversations
+    
+    Key Design Principle:
+        Session memory type is selected at RUNTIME, not at init time.
+        The same Memory instance can be shared across Agent, Team, and Workflow.
+        When methods are called (save, get), the caller passes session_type
+        and Memory routes to the correct session memory implementation.
+    
+    Usage:
+        # Create memory with configuration
+        memory = Memory(
+            storage=storage,
+            session_id="session_001",
+            user_id="user_123",
+            full_session_memory=True,
+            summary_memory=True,
+            user_analysis_memory=True,
+            model="openai/gpt-4o"
+        )
+        
+        # Attach to agent
+        agent = Agent("openai/gpt-4o", memory=memory)
+        
+        # Memory is used automatically during agent execution
+        result = agent.do(task)
+    
+    The Memory class caches session memory instances per SessionType for efficiency.
     """
-    A comprehensive, configurable memory orchestrator for an AI agent.
-
-    This class serves as a centralized module for managing different types of
-    memory and respects the specific data formats and logic established in
-    the original application design for handling chat history.
-    """
-
+    
     def __init__(
         self,
-        storage: Storage,
+        storage: "Storage",
         session_id: Optional[str] = None,
         user_id: Optional[str] = None,
         full_session_memory: bool = False,
         summary_memory: bool = False,
         user_analysis_memory: bool = False,
-        user_profile_schema: Optional[Type[BaseModel]] = None,
+        user_profile_schema: Optional[Type["BaseModel"]] = None,
         dynamic_user_profile: bool = False,
         num_last_messages: Optional[int] = None,
-        model: Optional[Union[Model, str]] = None,
+        model: Optional[Union["Model", str]] = None,
         debug: bool = False,
+        debug_level: int = 1,
         feed_tool_call_results: bool = False,
-        user_memory_mode: Literal['update', 'replace'] = 'update'
-    ):
+        user_memory_mode: Literal['update', 'replace'] = 'update',
+    ) -> None:
+        """
+        Initialize the Memory orchestrator.
+        
+        Args:
+            storage: Storage backend for persistence
+            session_id: Unique session identifier (auto-generated if None)
+            user_id: Unique user identifier (auto-generated if None)
+            full_session_memory: Enable chat history persistence
+            summary_memory: Enable session summary generation
+            user_analysis_memory: Enable user profile extraction
+            user_profile_schema: Pydantic model for user profile structure
+            dynamic_user_profile: Generate profile schema dynamically
+            num_last_messages: Limit on message turns to keep in history
+            model: Model for summary/profile generation (required if enabled)
+            debug: Enable debug logging
+            debug_level: Debug verbosity level (1-3)
+            feed_tool_call_results: Include tool call results in history
+            user_memory_mode: How to update user profile ('update' or 'replace')
+        """
+        from upsonic.utils.printing import info_log
         
         self.storage = storage
-        self.num_last_messages = num_last_messages
+        
+        # Store configuration for lazy session memory creation
         self.full_session_memory_enabled = full_session_memory
         self.summary_memory_enabled = summary_memory
         self.user_analysis_memory_enabled = user_analysis_memory
+        self.num_last_messages = num_last_messages
         self.model = model
         self.debug = debug
+        self.debug_level = debug_level if debug else 1
         self.feed_tool_call_results = feed_tool_call_results
-
-        self.profile_schema_model = user_profile_schema or UserTraits
-        self.is_profile_dynamic = dynamic_user_profile
-        self.user_memory_mode = user_memory_mode
-
-        if self.is_profile_dynamic and user_profile_schema:
-            from upsonic.utils.printing import warning_log
-            warning_log("`dynamic_user_profile` is True, so the provided `user_profile_schema` will be ignored.", "MemoryStorage")
-            self.profile_schema_model = None
-        else:
-            self.profile_schema_model = user_profile_schema or UserTraits        
-
-        if self.full_session_memory_enabled or self.summary_memory_enabled:
-            if not session_id:
-                raise ValueError("`session_id` is required when full_session_memory or summary_memory is enabled.")
-            self.session_id: Optional[SessionId] = SessionId(session_id)
-        else:
-            self.session_id = None
-        if self.user_analysis_memory_enabled:
-            if not user_id:
-                raise ValueError("`user_id` is required when user_analysis_memory is enabled.")
-            self.user_id: Optional[UserId] = UserId(user_id)
-        elif user_id:
-            self.user_id: Optional[UserId] = UserId(user_id)
-        else:
-            self.user_id = None
         
-        # Debug logging for initialization
+        # User memory configuration
+        self.user_profile_schema = user_profile_schema
+        self.dynamic_user_profile = dynamic_user_profile
+        self.user_memory_mode = user_memory_mode
+        
+        # For backward compatibility - expose these attributes
+        self.is_profile_dynamic = dynamic_user_profile
+        
+        # Auto-generate session_id if not provided
+        if session_id:
+            self.session_id: str = session_id
+        else:
+            self.session_id = str(uuid.uuid4())
+            if self.debug:
+                info_log(f"Auto-generated session_id: {self.session_id}", "Memory")
+        
+        # Auto-generate user_id if not provided
+        if user_id:
+            self.user_id: str = user_id
+        else:
+            self.user_id = str(uuid.uuid4())
+            if self.debug:
+                info_log(f"Auto-generated user_id: {self.user_id}", "Memory")
+        
+        # Cache of session memory instances (created on demand per SessionType)
+        self._session_memory_cache: Dict["SessionType", "BaseSessionMemory"] = {}
+        
+        # User memory (same for all session types, created once if enabled)
+        self._user_memory: Optional["BaseUserMemory"] = None
+        if user_analysis_memory:
+            self._user_memory: Optional["BaseUserMemory"] = self._create_user_memory()
+        
         if self.debug:
-            info_log(f"Memory initialized with configuration:", "Memory")
+            info_log("Memory initialized with configuration:", "Memory")
             info_log(f"  - Full Session Memory: {self.full_session_memory_enabled}", "Memory")
             info_log(f"  - Summary Memory: {self.summary_memory_enabled}", "Memory")
             info_log(f"  - User Analysis Memory: {self.user_analysis_memory_enabled}", "Memory")
@@ -86,471 +145,494 @@ class Memory:
             info_log(f"  - Max Messages: {self.num_last_messages}", "Memory")
             info_log(f"  - Feed Tool Results: {self.feed_tool_call_results}", "Memory")
             info_log(f"  - User Memory Mode: {self.user_memory_mode}", "Memory")
-            info_log(f"  - Dynamic Profile: {self.is_profile_dynamic}", "Memory")
+            info_log(f"  - Dynamic Profile: {self.dynamic_user_profile}", "Memory")
             info_log(f"  - Model: {self.model}", "Memory")
-
-    async def prepare_inputs_for_task(self) -> Dict[str, Any]:
+    
+    def _create_user_memory(self) -> "BaseUserMemory":
+        """Create user memory instance."""
+        from upsonic.storage.memory.user.user import UserMemory
+        
+        return UserMemory(
+            storage=self.storage,
+            user_id=self.user_id,
+            enabled=True,
+            profile_schema=self.user_profile_schema,
+            dynamic_profile=self.dynamic_user_profile,
+            update_mode=self.user_memory_mode,
+            model=self.model,
+            debug=self.debug,
+            debug_level=self.debug_level,
+        )
+    
+    @property
+    def user_memory(self) -> Optional["BaseUserMemory"]:
+        """Get user memory instance."""
+        return self._user_memory
+    
+    def get_session_memory(self, session_type: "SessionType") -> Optional["BaseSessionMemory"]:
         """
-        Gathers all relevant memory data before a task execution, correctly
-        parsing and limiting the chat history.
+        Get or create session memory for the given session type.
+        
+        This is the RUNTIME selection - called when Agent/Team/Workflow
+        invokes save or get operations.
+        
+        IMPORTANT: Session memory is ALWAYS created if storage is available.
+        This is required for HITL (Human-in-the-Loop) checkpointing to work.
+        Even when full_session_memory and summary_memory are disabled,
+        incomplete runs (paused, error, cancelled) MUST be saved to storage
+        to enable cross-process resumption.
+        
+        Args:
+            session_type: The type of session (AGENT, TEAM, WORKFLOW)
+            
+        Returns:
+            The appropriate session memory instance, or None if no storage available
         """
+        # CRITICAL: Always create session memory if storage is available.
+        # HITL checkpoints (paused, error, cancelled runs) must ALWAYS be saved
+        # to enable cross-process resumption, regardless of memory settings.
+        if self.storage is None:
+            return None
+        
+        # Return cached instance if exists
+        if session_type in self._session_memory_cache:
+            return self._session_memory_cache[session_type]
+        
+        # Create new instance using factory
+        from upsonic.storage.memory.factory import SessionMemoryFactory
+        
+        session_memory = SessionMemoryFactory.create(
+            session_type=session_type,
+            storage=self.storage,
+            session_id=self.session_id,
+            enabled=self.full_session_memory_enabled,
+            summary_enabled=self.summary_memory_enabled,
+            num_last_messages=self.num_last_messages,
+            feed_tool_call_results=self.feed_tool_call_results,
+            model=self.model,
+            debug=self.debug,
+            debug_level=self.debug_level,
+        )
+        
+        # Cache for future use
+        self._session_memory_cache[session_type] = session_memory
+        return session_memory
+    
+    async def prepare_inputs_for_task(
+        self,
+        session_type: Optional["SessionType"] = None,
+        agent_metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Gather all relevant memory data before task execution.
+        
+        This method prepares:
+        - Message history (from session memory)
+        - Context injection (session summary)
+        - System prompt injection (user profile)
+        - Metadata injection (session + agent metadata)
+        
+        Args:
+            session_type: The session type (defaults to AGENT)
+            agent_metadata: Optional metadata from the caller to inject
+            
+        Returns:
+            Dictionary with prepared memory inputs
+        """
+        from upsonic.session.base import SessionType
+        from upsonic.utils.printing import info_log, debug_log_level2
+        
+        if session_type is None:
+            session_type = SessionType.AGENT
+        
         if self.debug:
             info_log("Preparing memory inputs for task...", "Memory")
         
-        prepared_data = {
+        prepared_data: Dict[str, Any] = {
             "message_history": [],
             "context_injection": "",
-            "system_prompt_injection": ""
+            "system_prompt_injection": "",
+            "metadata_injection": ""
         }
-
-        if self.user_analysis_memory_enabled and self.user_id:
-            profile = await self.storage.read_async(self.user_id, UserProfile)
-            if profile and profile.profile_data:
-                profile_str = "\n".join(f"- {key}: {value}" for key, value in profile.profile_data.items())
-                prepared_data["system_prompt_injection"] = f"<UserProfile>\n{profile_str}\n</UserProfile>"
+        
+        # Get session memory inputs
+        session_memory = self.get_session_memory(session_type)
+        if session_memory:
+            try:
+                session_inputs = await session_memory.aget()
+                prepared_data["message_history"] = session_inputs.message_history
+                prepared_data["context_injection"] = session_inputs.context_injection
+                prepared_data["metadata_injection"] = session_inputs.metadata_injection
+            except Exception as e:
+                from upsonic.utils.printing import warning_log
+                warning_log(f"Failed to get session memory inputs: {e}", "Memory")
+        
+        # Get user memory (system prompt injection)
+        if self._user_memory:
+            try:
+                profile_str = await self._user_memory.aget()
+                if profile_str:
+                    prepared_data["system_prompt_injection"] = profile_str
+            except Exception as e:
+                from upsonic.utils.printing import warning_log
+                warning_log(f"Failed to get user memory: {e}", "Memory")
+        
+        # Merge agent metadata
+        if agent_metadata:
+            agent_meta_parts = []
+            for key, value in agent_metadata.items():
+                agent_meta_parts.append(f"  {key}: {value}")
+            if agent_meta_parts:
+                agent_meta_str = "<AgentMetadata>\n" + "\n".join(agent_meta_parts) + "\n</AgentMetadata>"
+                if prepared_data["metadata_injection"]:
+                    prepared_data["metadata_injection"] = agent_meta_str + "\n\n" + prepared_data["metadata_injection"]
+                else:
+                    prepared_data["metadata_injection"] = agent_meta_str
                 if self.debug:
-                    info_log(f"Loaded user profile with {len(profile.profile_data)} traits", "Memory")
-            elif self.debug:
-                info_log("No user profile found in storage", "Memory")
-
-        if self.session_id:
-            session = await self.storage.read_async(self.session_id, InteractionSession)
-            if session:
-                if self.summary_memory_enabled and session.summary:
-                    prepared_data["context_injection"] = f"<SessionSummary>\n{session.summary}\n</SessionSummary>"
-                    if self.debug:
-                        info_log(f"Loaded session summary ({len(session.summary)} chars)", "Memory")
-                if self.full_session_memory_enabled and session.chat_history:
-                    try:
-                        raw_messages = session.chat_history
-                        if not self.feed_tool_call_results:
-                            TOOL_RELATED_TYPES = {'tool_call_request', 'tool_response'}
-                            filtered_messages = [
-                                element for element in raw_messages
-                                if not any(
-                                    part.get('part_kind') in ['tool-call', 'tool-return']
-                                    for part in element.get('parts', [])
-                                )
-                            ]
-                            raw_messages = filtered_messages
-
-                        validated_history = ModelMessagesTypeAdapter.validate_python(raw_messages)
-                        if self.debug:
-                            info_log(f"Loaded {len(validated_history)} messages from session history", "Memory")
-                        limited_history = self._limit_message_history(validated_history)
-                        prepared_data["message_history"] = limited_history
-                        if self.debug:
-                            info_log(f"After limiting: {len(limited_history)} messages in history", "Memory")
-                        
-                    except Exception as e:
-                        from upsonic.utils.printing import warning_log
-                        warning_log(f"Could not validate or process stored chat history. Starting fresh. Error: {e}", "MemoryStorage")
-                        prepared_data["message_history"] = []
-            elif self.debug:
-                info_log("No session found in storage", "Memory")
-        elif self.debug:
-            info_log("No session_id configured, skipping session memory", "Memory")
+                    info_log(f"Added agent metadata with {len(agent_metadata)} keys", "Memory")
         
         if self.debug:
-            info_log(f"Prepared memory inputs: {len(prepared_data['message_history'])} messages, "
-                    f"summary={bool(prepared_data['context_injection'])}, "
-                    f"profile={bool(prepared_data['system_prompt_injection'])}", "Memory")
+            info_log(
+                f"Prepared memory inputs: {len(prepared_data['message_history'])} messages, "
+                f"summary={bool(prepared_data['context_injection'])}, "
+                f"profile={bool(prepared_data['system_prompt_injection'])}, "
+                f"metadata={bool(prepared_data['metadata_injection'])}",
+                "Memory"
+            )
+            
+            if self.debug_level >= 2:
+                message_preview = []
+                for msg in prepared_data['message_history'][-3:]:
+                    if hasattr(msg, 'parts'):
+                        msg_str = str([str(p)[:100] for p in msg.parts[:2]])[:200]
+                        message_preview.append(msg_str)
+                
+                debug_log_level2(
+                    "Memory inputs prepared",
+                    "Memory",
+                    debug=self.debug,
+                    debug_level=self.debug_level,
+                    message_count=len(prepared_data['message_history']),
+                    message_preview=message_preview,
+                    has_summary=bool(prepared_data['context_injection']),
+                    has_profile=bool(prepared_data['system_prompt_injection']),
+                    session_id=self.session_id,
+                    user_id=self.user_id,
+                )
         
         return prepared_data
-
-    async def update_memories_after_task(self, model_response) -> None:
+    
+    async def save_session_async(
+        self,
+        output: "AgentRunOutput",
+        session_type: Optional["SessionType"] = None,
+        agent_id: Optional[str] = None,
+    ) -> None:
         """
-        Updates all relevant memories after a task has been completed, saving
-        the chat history in the correct format.
-        """
-        await asyncio.gather(
-            self._update_interaction_session(model_response),
-            self._update_user_profile(model_response)
-        )
-
-    async def _update_interaction_session(self, model_response):
-        """Helper to handle updating the InteractionSession object."""
-        if not (self.full_session_memory_enabled or self.summary_memory_enabled) or not self.session_id:
-            if self.debug:
-                info_log("Skipping session update (not enabled or no session_id)", "Memory")
-            return
-
-        if self.debug:
-            info_log("Updating interaction session...", "Memory")
+        Save session to storage.
         
-        session = await self.storage.read_async(self.session_id, InteractionSession)
-        if not session:
-            session = InteractionSession(session_id=self.session_id, user_id=self.user_id)
-            if self.debug:
-                info_log(f"Created new session: {self.session_id}", "Memory")
+        This is the centralized method for ALL session saving operations:
         
-        if self.full_session_memory_enabled:
-            # Get only the new messages from this run
-            new_messages_only = model_response.new_messages()
-            # Use ModelMessagesTypeAdapter to properly serialize bytes as base64
-            all_messages_as_dicts = ModelMessagesTypeAdapter.dump_python(new_messages_only, mode='json')
-            session.chat_history.extend(all_messages_as_dicts)  # Store as a list of messages
-            if self.debug:
-                info_log(f"Added {len(all_messages_as_dicts)} new messages to session history (total: {len(session.chat_history)})", "Memory")
-
-        if self.summary_memory_enabled:
-            if not self.model:
-                from upsonic.utils.printing import warning_log
-                warning_log("Summary memory is enabled but no model is configured. Skipping summary generation. Set a model on the Memory object to enable summary generation.", "MemoryStorage")
-            else:
-                try:
-                    if self.debug:
-                        info_log("Generating new session summary...", "Memory")
-                    session.summary = await self._generate_new_summary(session.summary, model_response)
-                    if self.debug:
-                        info_log(f"Summary generated ({len(session.summary) if session.summary else 0} chars)", "Memory")
-                except Exception as e:
-                    from upsonic.utils.printing import warning_log
-                    warning_log(f"Failed to generate session summary: {e}", "MemoryStorage")
+        For INCOMPLETE runs (paused, error, cancelled):
+        - Saves checkpoint state for HITL resumption
+        - Does NOT process memory features (summary, user profile)
         
-        await self.storage.upsert_async(session)
-        if self.debug:
-            info_log("Session saved to storage", "Memory")
-
-    async def _update_user_profile(self, model_response):
-        """Helper to handle updating the UserProfile object."""
-        if not self.user_analysis_memory_enabled or not self.user_id:
-            if self.debug:
-                info_log("Skipping user profile update (not enabled or no user_id)", "Memory")
-            return
+        For COMPLETED runs:
+        - Saves the completed run output
+        - Processes memory features if enabled:
+          - Generates session summary (if summary_memory enabled)
+          - Analyzes user profile (if user_analysis_memory enabled)
         
-        if self.debug:
-            info_log("Updating user profile...", "Memory")
-        
-        profile = await self.storage.read_async(self.user_id, UserProfile)
-
-        if not profile:
-            profile = UserProfile(user_id=self.user_id)
-            if self.debug:
-                info_log(f"Created new user profile: {self.user_id}", "Memory")
-
-        if self.user_analysis_memory_enabled:
-            if not self.model:
-                from upsonic.utils.printing import warning_log
-                warning_log("User analysis memory is enabled but no model is configured. Skipping user profile analysis. Set a model on the Memory object to enable user trait analysis.", "MemoryStorage")
-            else:
-                try:
-                    updated_traits = await self._analyze_interaction_for_traits(profile.profile_data, model_response)
-                    
-                    if self.debug:
-                        info_log(f"Extracted traits: {updated_traits}", "Memory")
-                    
-                    if self.user_memory_mode == 'replace':
-                        profile.profile_data = updated_traits
-                        if self.debug:
-                            info_log(f"Replaced user profile with {len(updated_traits)} traits", "Memory")
-                    elif self.user_memory_mode == 'update':
-                        before_count = len(profile.profile_data)
-                        profile.profile_data.update(updated_traits)
-                        if self.debug:
-                            info_log(f"Updated user profile: {before_count} -> {len(profile.profile_data)} traits", "Memory")
-                    else:
-                        raise ValueError(f"Unexpected update mode: {self.user_memory_mode}")
-                except Exception as e:
-                    from upsonic.utils.printing import warning_log
-                    warning_log(f"Failed to analyze user profile: {e}", "MemoryStorage")
-
-        await self.storage.upsert_async(profile)
-        if self.debug:
-            info_log("User profile saved to storage", "Memory")
-
-
-    def _limit_message_history(self, message_history: List) -> List:
-        """
-        Limits conversation history to the last N runs, creating a new synthetic
-        first request that combines the original system prompt with the user prompt
-        from the beginning of the limited window.
-
         Args:
-            message_history: The full, flat list of ModelRequest and ModelResponse objects.
-
-        Returns:
-            A new, limited message history list.
+            output: The run output (AgentRunOutput, TeamRunOutput, etc.)
+            session_type: The session type (defaults to AGENT)
+            agent_id: Optional agent identifier
         """
-        if not self.num_last_messages or self.num_last_messages <= 0:
-            return message_history
-
-        if not message_history:
-            return []
-
-        all_runs = []
-        for i in range(0, len(message_history) - 1, 2):
-            request = message_history[i]
-            response = message_history[i+1]
-            if isinstance(request, ModelRequest) and isinstance(response, ModelResponse):
-                all_runs.append((request, response))
-
-        if len(all_runs) <= self.num_last_messages:
-            if self.debug:
-                info_log(f"History has {len(all_runs)} runs, within limit of {self.num_last_messages}. No limiting needed.", "Memory")
-            return message_history
-
-        kept_runs = all_runs[-self.num_last_messages:]
+        from upsonic.session.base import SessionType
+        from upsonic.run.base import RunStatus
+        from upsonic.utils.printing import warning_log, info_log
         
-        if self.debug:
-            info_log(f"Limiting history from {len(all_runs)} runs to last {self.num_last_messages} runs", "Memory")
+        if output is None:
+            return
         
-        if not kept_runs:
-            return []
-
-        original_system_prompt = None
-        if message_history:
-            for part in message_history[0].parts:
-                if isinstance(part, SystemPromptPart):
-                    original_system_prompt = part
-                    break
+        if session_type is None:
+            session_type = SessionType.AGENT
         
-        if not original_system_prompt:
-            from upsonic.utils.printing import warning_log
-            warning_log("Could not find original SystemPromptPart. History might be malformed.", "MemoryStorage")
-            if self.debug:
-                info_log("Warning: No system prompt found, returning limited runs without modification", "Memory")
-            return [message for run in kept_runs for message in run]
-
-        first_request_in_window = kept_runs[0][0]
-
-        new_user_prompt = None
-        for part in first_request_in_window.parts:
-            if isinstance(part, UserPromptPart):
-                new_user_prompt = part
-                break
-                
-        if not new_user_prompt:
-            from upsonic.utils.printing import warning_log
-            warning_log("Could not find UserPromptPart in the first message of the limited window.", "MemoryStorage")
-            return [message for run in kept_runs for message in run]
-
-        modified_first_request = copy.deepcopy(first_request_in_window)
-        modified_first_request.parts = [original_system_prompt, new_user_prompt]
+        is_completed = output.status == RunStatus.completed
         
-        final_history = []
-        final_history.append(modified_first_request)
-        final_history.append(kept_runs[0][1])
-        
-        for run in kept_runs[1:]:
-            final_history.extend(run)
-            
-        info_log(f"Original history had {len(all_runs)} runs. "
-                f"Limited to the last {self.num_last_messages}, resulting in {len(final_history)} messages.", 
-                context="Memory")
-
-        return final_history
-        
-
-    async def _generate_new_summary(self, previous_summary: Optional[str], model_response) -> str:
-        from upsonic.agent.agent import Agent
-        from upsonic.tasks.tasks import Task
-
-        if not self.model:
-            raise ValueError("A model must be configured on the Memory object to generate session summaries.")
-
-        if self.debug:
-            info_log("Starting summary generation...", "Memory")
-        
-        # Use ModelMessagesTypeAdapter to properly serialize bytes as base64
-        last_turn = ModelMessagesTypeAdapter.dump_python(model_response.new_messages(), mode='json')
-        session = await self.storage.read_async(self.session_id, InteractionSession)
-        
-        if self.debug:
-            info_log(f"Previous summary length: {len(previous_summary) if previous_summary else 0} chars", "Memory")
-            info_log(f"New turn messages: {len(last_turn)} messages", "Memory")
-            info_log(f"Total session history: {len(session.chat_history) if session and session.chat_history else 0} messages", "Memory")
-        
-        summarizer = Agent(name="Summarizer", model=self.model, debug=self.debug)
-        
-        previous_summary_str = previous_summary if previous_summary is not None else 'None (this is the first interaction)'
-        prompt = f"""Update the conversation summary based on the new interaction.
-
-Previous Summary: {previous_summary_str}
-
-New Conversation Turn:
-{json.dumps(last_turn, indent=2)}
-
-Full Chat History:
-{json.dumps(session.chat_history, indent=2) if session and session.chat_history else 'None'}
-
-YOUR TASK: Create a concise summary that captures the key points of the entire conversation, including the new turn. Focus on important information, user preferences, and topics discussed.
-"""
-        task = Task(description=prompt, response_format=str)
-        
-        summary_response = await summarizer.do_async(task)
-        summary_text = str(summary_response)
-        
-        if self.debug:
-            info_log(f"Summary generation complete: {len(summary_text)} chars", "Memory")
-        
-        return summary_text
-
-    def _extract_user_prompt_content(self, messages: list) -> list[str]:
-        """Extracts the content string from all UserPromptParts in a list of messages."""
-        user_prompts = []
-        if not messages:
-            return user_prompts
-            
-        for message in messages:
-            if isinstance(message, ModelRequest):
-                for part in message.parts:
-                    if isinstance(part, UserPromptPart):
-                        user_prompts.append(part.content)
-        return user_prompts
-
-
-    async def _analyze_interaction_for_traits(self, current_profile: dict, model_response) -> dict:
-        """
-        Analyzes user interaction to extract traits.
-
-        It gathers user prompt content from two independent sources:
-        1. The full session history from storage (if available).
-        2. The new messages from the latest model response (if available).
-
-        It then feeds this combined, clearly demarcated context to the analyzer LLM.
-        """
-        from upsonic.agent.agent import Agent
-        from upsonic.tasks.tasks import Task
-
-        if not self.model:
-            raise ValueError("model must be configured for user trait analysis")
-
-        historical_prompts_content = []
-        new_prompts_content = []
-
-        session = await self.storage.read_async(self.session_id, InteractionSession)
-        if session and session.chat_history:
+        # Get session memory and save
+        session_memory = self.get_session_memory(session_type)
+        if session_memory:
             try:
-                validated_history = ModelMessagesTypeAdapter.validate_python(session.chat_history)
-                historical_prompts_content = self._extract_user_prompt_content(validated_history)
+                await session_memory.asave(output, is_completed)
             except Exception as e:
-                from upsonic.utils.printing import warning_log
-                warning_log(f"Could not validate session history. It will be skipped for analysis. Error: {e}", "MemoryStorage")
-
-        new_messages = model_response.new_messages()
-        if new_messages:
-            new_prompts_content = self._extract_user_prompt_content(new_messages)
-            # Extracted new user prompts from the latest response
-
-        if not historical_prompts_content and not new_prompts_content:
-            from upsonic.utils.printing import warning_log
-            warning_log("No user prompts found in history or new messages. Cannot analyze traits.", "MemoryStorage")
-            if self.debug:
-                info_log("No user prompts available for trait analysis", "Memory")
-            return {}
-
-        prompt_context_parts = []
-        source_log = []
-        if historical_prompts_content:
-            history_str = "\n".join(f"- {p}" for p in historical_prompts_content)
-            prompt_context_parts.append(f"### Historical User Prompts:\n{history_str}")
-            source_log.append("session history")
-            if self.debug:
-                info_log(f"Found {len(historical_prompts_content)} historical user prompts", "Memory")
-            
-        if new_prompts_content:
-            new_str = "\n".join(f"- {p}" for p in new_prompts_content)
-            prompt_context_parts.append(f"### Latest User Prompts:\n{new_str}")
-            source_log.append("new messages")
-            if self.debug:
-                info_log(f"Found {len(new_prompts_content)} new user prompts", "Memory")
-
-        conversation_context_str = "\n\n".join(prompt_context_parts)
-        info_log(f"Analyzing traits using context from: {', '.join(source_log)}.", context="Memory")
+                if self.debug:
+                    warning_log(f"Failed to save session: {e}", "Memory")
+        
+        # Analyze and update user memory only for completed runs
+        if self._user_memory and is_completed:
+            try:
+                # Get agent_id from output for user memory storage
+                agent_id = output.agent_id
+                await self._user_memory.asave(output, agent_id=agent_id)
+            except Exception as e:
+                if self.debug:
+                    warning_log(f"Failed to analyze/update user memory: {e}", "Memory")
         
         if self.debug:
-            info_log(f"Current profile has {len(current_profile)} traits", "Memory")
+            status_str = "completed" if is_completed else output.status.value
+            info_log(f"Session saved for run {output.run_id} (status: {status_str})", "Memory")
+    
+    
+    async def get_session_async(self) -> Optional["Session"]:
+        """Get the current session from storage."""
+        from upsonic.session.base import SessionType
+        from upsonic.storage.base import AsyncStorage
         
-        from upsonic.utils.printing import warning_log
-        
-        analyzer = Agent(name="User Trait Analyzer", model=self.model, debug=self.debug)
-
-        if self.is_profile_dynamic:
-            class FieldDefinition(BaseModel):
-                """A single field definition"""
-                name: str = Field(..., description="Snake_case field name")
-                description: str = Field(..., description="Description of what this field represents")
-            
-            class ProposedSchema(BaseModel):
-                """Schema for defining user trait fields"""
-                fields: List[FieldDefinition] = Field(
-                    ..., 
-                    min_length=2,
-                    description="List of 2-5 field definitions extracted from the conversation"
-                )
-                
-
-            schema_generator_prompt = f"""Analyze this conversation and identify 2-5 specific traits about the user.
-
-=== USER CONVERSATION ===
-{conversation_context_str}
-
-=== YOUR TASK ===
-Create a list of field definitions where each field has:
-- name: snake_case field name (e.g., preferred_name, occupation, expertise_level, primary_interest, hobbies)
-- description: what that field represents
-
-You MUST provide at least 2-3 fields based on what the user explicitly mentioned in the conversation.
-
-Examples:
-- If user says "I'm Alex interested in ML": fields like preferred_name, primary_interest, expertise_level
-- If user says "I work as engineer and love coding": fields like occupation, hobbies, expertise_area
-"""
-            schema_task = Task(description=schema_generator_prompt, response_format=ProposedSchema)
-            
-            try:
-                proposed_schema_response = await analyzer.do_async(schema_task)
-                field_count = len(proposed_schema_response.fields) if proposed_schema_response and hasattr(proposed_schema_response, 'fields') else 0
-                info_log(f"LLM generated schema with {field_count} fields", "Memory")
-                if field_count > 0:
-                    info_log(f"Generated field names: {[f.name for f in proposed_schema_response.fields]}", "Memory")
-            except Exception as e:
-                warning_log(f"Dynamic schema generation failed with error: {e}. No user traits extracted.", "Memory")
-                return {}
-
-            if not proposed_schema_response or not hasattr(proposed_schema_response, 'fields') or not proposed_schema_response.fields:
-                field_count = len(proposed_schema_response.fields) if proposed_schema_response and hasattr(proposed_schema_response, 'fields') else 0
-                info_log(f"Schema generation result: {field_count} fields generated", "Memory")
-                warning_log(f"Dynamic schema generation returned {field_count} fields (expected at least 2). No user traits extracted.", "Memory")
-                return {}
-
-            # Create dynamic model with Optional[str] type for all fields (more compatible with structured output)
-            dynamic_fields = {field_def.name: (Optional[str], Field(None, description=field_def.description)) for field_def in proposed_schema_response.fields}
-            DynamicUserTraitModel = create_model('DynamicUserTraitModel', **dynamic_fields)
-
-            trait_extractor_prompt = f"""Extract user traits from this conversation.
-
-Current Profile Data:
-{json.dumps(current_profile, indent=2)}
-
-User's Conversation:
-{conversation_context_str}
-
-YOUR TASK: Fill in the trait fields based on what the user explicitly stated. Extract concrete, specific information from the conversation. If information is not available for a field, you may leave it as null.
-"""
-            trait_task = Task(description=trait_extractor_prompt, response_format=DynamicUserTraitModel)
-            trait_response = await analyzer.do_async(trait_task)
-            
-            if trait_response and hasattr(trait_response, 'model_dump'):
-                return trait_response.model_dump()
-            return {}
-
+        if isinstance(self.storage, AsyncStorage):
+            return await self.storage.aget_session(
+                session_id=self.session_id,
+                session_type=SessionType.AGENT,
+                deserialize=True
+            )
         else:
-            prompt = f"""Analyze the user's conversation and extract their traits.
-
-Current Profile Data:
-{json.dumps(current_profile, indent=2)}
-
-User's Conversation:
-{conversation_context_str}
-
-YOUR TASK: Fill in trait fields based on what the user explicitly stated in the conversation. Extract concrete, specific information. Update existing traits if new information is provided. Leave fields as None if information is not available.
-"""
-            task = Task(description=prompt, response_format=self.profile_schema_model)
+            return self.storage.get_session(
+                session_id=self.session_id,
+                session_type=SessionType.AGENT,
+                deserialize=True
+            )
+    
+    def get_session(self) -> Optional["Session"]:
+        """Get the current session from storage (sync version)."""
+        from upsonic.session.base import SessionType
+        return self.storage.get_session(
+            session_id=self.session_id,
+            session_type=SessionType.AGENT,
+            deserialize=True
+        )
+    
+    async def get_messages_async(self) -> list:
+        """Get messages from the current session."""
+        session = await self.get_session_async()
+        if session and hasattr(session, 'messages'):
+            return session.messages or []
+        return []
+    
+    def get_messages(self) -> list:
+        """Get messages from the current session (sync version)."""
+        session = self.get_session()
+        if session and hasattr(session, 'messages'):
+            return session.messages or []
+        return []
+    
+    async def set_metadata_async(self, metadata: Dict[str, Any]) -> None:
+        """Set metadata on the current session."""
+        from upsonic.storage.base import AsyncStorage
+        
+        session = await self.get_session_async()
+        if session:
+            if not session.metadata:
+                session.metadata = {}
+            session.metadata.update(metadata)
+            if isinstance(self.storage, AsyncStorage):
+                await self.storage.aupsert_session(session, deserialize=True)
+            else:
+                self.storage.upsert_session(session, deserialize=True)
+    
+    def set_metadata(self, metadata: Dict[str, Any]) -> None:
+        """Set metadata on the current session (sync version)."""
+        session = self.get_session()
+        if session:
+            if not session.metadata:
+                session.metadata = {}
+            session.metadata.update(metadata)
+            self.storage.upsert_session(session, deserialize=True)
+    
+    async def get_metadata_async(self) -> Optional[Dict[str, Any]]:
+        """Get metadata from the current session."""
+        session = await self.get_session_async()
+        if session and hasattr(session, 'metadata'):
+            return session.metadata
+        return None
+    
+    def get_metadata(self) -> Optional[Dict[str, Any]]:
+        """Get metadata from the current session (sync version)."""
+        session = self.get_session()
+        if session and hasattr(session, 'metadata'):
+            return session.metadata
+        return None
+    
+    async def list_sessions_async(self, user_id: Optional[str] = None) -> list:
+        """List sessions, optionally filtered by user_id."""
+        from upsonic.session.base import SessionType
+        from upsonic.storage.base import AsyncStorage
+        
+        if isinstance(self.storage, AsyncStorage):
+            sessions = await self.storage.aget_sessions(
+                user_id=user_id or self.user_id,
+                session_type=SessionType.AGENT,
+                deserialize=True
+            )
+        else:
+            sessions = self.storage.get_sessions(
+                user_id=user_id or self.user_id,
+                session_type=SessionType.AGENT,
+                deserialize=True
+            )
+        if isinstance(sessions, list):
+            return sessions
+        return []
+    
+    def list_sessions(self, user_id: Optional[str] = None) -> list:
+        """List sessions, optionally filtered by user_id (sync version)."""
+        from upsonic.session.base import SessionType
+        
+        sessions = self.storage.get_sessions(
+            user_id=user_id or self.user_id,
+            session_type=SessionType.AGENT,
+            deserialize=True
+        )
+        if isinstance(sessions, list):
+            return sessions
+        return []
+    
+    async def find_session_async(self, session_id: Optional[str] = None) -> Optional["Session"]:
+        """Find a specific session by session_id."""
+        from upsonic.session.base import SessionType
+        from upsonic.storage.base import AsyncStorage
+        
+        if isinstance(self.storage, AsyncStorage):
+            return await self.storage.aget_session(
+                session_id=session_id or self.session_id,
+                session_type=SessionType.AGENT,
+                deserialize=True
+            )
+        else:
+            return self.storage.get_session(
+                session_id=session_id or self.session_id,
+                session_type=SessionType.AGENT,
+                deserialize=True
+            )
+    
+    def find_session(self, session_id: Optional[str] = None) -> Optional["Session"]:
+        """Find a specific session by session_id (sync version)."""
+        from upsonic.session.base import SessionType
+        
+        return self.storage.get_session(
+            session_id=session_id or self.session_id,
+            session_type=SessionType.AGENT,
+            deserialize=True
+        )
+    
+    async def delete_session_async(self, session_id: Optional[str] = None) -> bool:
+        """Delete the current or specified session."""
+        from upsonic.storage.base import AsyncStorage
+        
+        if isinstance(self.storage, AsyncStorage):
+            return await self.storage.adelete_session(session_id or self.session_id)
+        else:
+            return self.storage.delete_session(session_id or self.session_id)
+    
+    def delete_session(self, session_id: Optional[str] = None) -> bool:
+        """Delete the current or specified session (sync version)."""
+        return self.storage.delete_session(session_id or self.session_id)
+    
+    async def load_resumable_run_async(
+        self,
+        run_id: str,
+        session_type: Optional["SessionType"] = None,
+        agent_id: Optional[str] = None,
+    ) -> Optional["RunData"]:
+        """
+        Load a resumable run from storage by run_id.
+        
+        Resumable runs include:
+        - paused: External tool execution pause
+        - error: Durable execution (error recovery)
+        - cancelled: Cancel run resumption
+        
+        Args:
+            run_id: The run ID to search for
+            session_type: The session type (defaults to AGENT)
+            agent_id: Optional agent_id to search across sessions
             
-            trait_response = await analyzer.do_async(task)
-            # trait_response is the output directly (profile_schema_model instance)
-            if trait_response and hasattr(trait_response, 'model_dump'):
-                return trait_response.model_dump()
-            return {}
+        Returns:
+            RunData if found and resumable, None otherwise
+        """
+        from upsonic.session.base import SessionType
+        
+        if session_type is None:
+            session_type = SessionType.AGENT
+        
+        session_memory = self.get_session_memory(session_type)
+        if session_memory:
+            return await session_memory.aload_resumable_run(run_id, agent_id)
+        return None
+    
+    def load_resumable_run(
+        self,
+        run_id: str,
+        session_type: Optional["SessionType"] = None,
+        agent_id: Optional[str] = None,
+    ) -> Optional["RunData"]:
+        """
+        Load a resumable run from storage by run_id (sync version).
+        """
+        from upsonic.session.base import SessionType
+        
+        if session_type is None:
+            session_type = SessionType.AGENT
+        
+        session_memory = self.get_session_memory(session_type)
+        if session_memory:
+            return session_memory.load_resumable_run(run_id, agent_id)
+        return None
+    
+    async def load_run_async(
+        self,
+        run_id: str,
+        session_type: Optional["SessionType"] = None,
+        agent_id: Optional[str] = None,
+    ) -> Optional["RunData"]:
+        """
+        Load a run from storage by run_id (regardless of status).
+        
+        Unlike load_resumable_run_async, this returns any run regardless of status.
+        Used for checking if a run is completed before attempting to continue.
+        
+        Args:
+            run_id: The run ID to search for
+            session_type: The session type (defaults to AGENT)
+            agent_id: Optional agent_id to search across sessions
+            
+        Returns:
+            RunData if found, None otherwise
+        """
+        from upsonic.session.base import SessionType
+        
+        if session_type is None:
+            session_type = SessionType.AGENT
+        
+        session_memory = self.get_session_memory(session_type)
+        if session_memory:
+            return await session_memory.aload_run(run_id, agent_id)
+        return None
+    
+    def load_run(
+        self,
+        run_id: str,
+        session_type: Optional["SessionType"] = None,
+        agent_id: Optional[str] = None,
+    ) -> Optional["RunData"]:
+        """
+        Load a run from storage by run_id (regardless of status) - sync version.
+        """
+        from upsonic.session.base import SessionType
+        
+        if session_type is None:
+            session_type = SessionType.AGENT
+        
+        session_memory = self.get_session_memory(session_type)
+        if session_memory:
+            return session_memory.load_run(run_id, agent_id)
+        return None

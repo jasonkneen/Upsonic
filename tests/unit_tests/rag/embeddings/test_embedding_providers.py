@@ -1,12 +1,19 @@
+import sys
 import pytest
-import asyncio
 import os
 import tempfile
 import shutil
+import time
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Union
-from unittest.mock import Mock, patch, AsyncMock, MagicMock
-import numpy as np
+from unittest.mock import Mock, patch, AsyncMock
+
+# Skip entire module on Python 3.14+ due to pydantic compatibility issues
+if sys.version_info >= (3, 14):
+    pytest.skip(
+        "pydantic 2.12.5 is not compatible with Python 3.14 (typing._eval_type API change)",
+        allow_module_level=True
+    )
 
 from upsonic.embeddings.base import EmbeddingProvider, EmbeddingConfig, EmbeddingMode, EmbeddingMetrics
 from upsonic.embeddings.openai_provider import OpenAIEmbedding, OpenAIEmbeddingConfig
@@ -20,7 +27,7 @@ from upsonic.embeddings.factory import create_embedding_provider, list_available
 
 from upsonic.knowledge_base.knowledge_base import KnowledgeBase
 from upsonic.vectordb.providers.faiss import FaissProvider
-from upsonic.vectordb.config import Config, Mode, DistanceMetric, IndexType
+from upsonic.vectordb.config import DistanceMetric
 from upsonic.schemas.data_models import Chunk, Document
 from upsonic.text_splitter.base import BaseChunker
 from upsonic.loaders.base import BaseLoader
@@ -218,7 +225,7 @@ class TestEmbeddingProviders:
     def mock_fastembed_model(self):
         """Mock FastEmbed model."""
         mock_model = Mock()
-        mock_embeddings = [np.array([0.1] * 384) for _ in range(3)]
+        mock_embeddings = [[0.1] * 384 for _ in range(3)]
         mock_model.embed.return_value = iter(mock_embeddings)
         return mock_model
     
@@ -253,7 +260,7 @@ class TestEmbeddingProviders:
     
     def test_bedrock_embedding_creation(self, mock_bedrock_client):
         """Test AWS Bedrock embedding provider creation."""
-        with patch('upsonic.embeddings.bedrock_provider.boto3.Session') as mock_session:
+        with patch('boto3.Session') as mock_session:
             mock_session.return_value.client.return_value = mock_bedrock_client
             
             config = BedrockEmbeddingConfig(
@@ -269,7 +276,7 @@ class TestEmbeddingProviders:
     
     def test_gemini_embedding_creation(self, mock_gemini_client):
         """Test Google Gemini embedding provider creation."""
-        with patch('upsonic.embeddings.gemini_provider.genai.Client', return_value=mock_gemini_client):
+        with patch('google.genai.Client', return_value=mock_gemini_client):
             with patch.dict(os.environ, {'GOOGLE_API_KEY': 'test-key'}):
                 config = GeminiEmbeddingConfig(
                     model_name="gemini-embedding-001",
@@ -302,8 +309,8 @@ class TestEmbeddingProviders:
         """Test HuggingFace embedding provider creation."""
         mock_model, mock_tokenizer = mock_huggingface_model
         
-        with patch('upsonic.embeddings.huggingface_provider.AutoModel.from_pretrained', return_value=mock_model):
-            with patch('upsonic.embeddings.huggingface_provider.AutoTokenizer.from_pretrained', return_value=mock_tokenizer):
+        with patch('transformers.AutoModel.from_pretrained', return_value=mock_model):
+            with patch('transformers.AutoTokenizer.from_pretrained', return_value=mock_tokenizer):
                 config = HuggingFaceEmbeddingConfig(
                     model_name="sentence-transformers/all-MiniLM-L6-v2",
                     use_local=True,
@@ -329,13 +336,16 @@ class TestEmbeddingProviders:
     async def test_embedding_batch_processing(self):
         """Test batch processing for embeddings."""
         provider = MockEmbeddingProvider()
-        
-        texts = ["Hello world", "Test embedding", "Another test"]
-        embeddings = await provider.embed_texts(texts)
-        
-        assert len(embeddings) == 3
-        assert all(len(emb) == 384 for emb in embeddings)
-        assert all(isinstance(emb, list) for emb in embeddings)
+        try:
+            texts = ["Hello world", "Test embedding", "Another test"]
+            embeddings = await provider.embed_texts(texts)
+            
+            assert len(embeddings) == 3
+            assert all(len(emb) == 384 for emb in embeddings)
+            assert all(isinstance(emb, list) for emb in embeddings)
+        finally:
+            if hasattr(provider, 'close'):
+                await provider.close()
     
     @pytest.mark.asyncio
     async def test_embedding_caching(self):
@@ -345,27 +355,33 @@ class TestEmbeddingProviders:
             model_name="test-model"
         )
         provider = MockEmbeddingProvider(config=config)
-        
-        texts = ["Cached text", "Another cached text"]
-        
-        # First call - should compute embeddings
-        embeddings1 = await provider.embed_texts(texts)
-        
-        # Second call - should use cache
-        embeddings2 = await provider.embed_texts(texts)
-        
-        # Test that caching is enabled and embeddings are returned
-        assert len(embeddings1) == len(embeddings2)
-        assert len(embeddings1) == 2
-        assert provider.get_cache_info()["enabled"] is True
+        try:
+            texts = ["Cached text", "Another cached text"]
+            
+            # First call - should compute embeddings
+            embeddings1 = await provider.embed_texts(texts)
+            
+            # Second call - should use cache
+            embeddings2 = await provider.embed_texts(texts)
+            
+            # Test that caching is enabled and embeddings are returned
+            assert len(embeddings1) == len(embeddings2)
+            assert len(embeddings1) == 2
+            assert provider.get_cache_info()["enabled"] is True
+        finally:
+            if hasattr(provider, 'close'):
+                await provider.close()
     
     @pytest.mark.asyncio
     async def test_embedding_validation(self):
         """Test embedding connection validation."""
         provider = MockEmbeddingProvider()
-        
-        is_valid = await provider.validate_connection()
-        assert is_valid is True
+        try:
+            is_valid = await provider.validate_connection()
+            assert is_valid is True
+        finally:
+            if hasattr(provider, 'close'):
+                await provider.close()
     
     def test_embedding_metrics(self):
         """Test embedding metrics collection."""
@@ -419,7 +435,11 @@ class TestKnowledgeBaseIntegration:
     @pytest.fixture
     def mock_vectordb(self, mock_vectordb_config):
         """Create mock vector database provider."""
-        return FaissProvider(mock_vectordb_config)
+        try:
+            import faiss
+            return FaissProvider(mock_vectordb_config)
+        except ImportError:
+            pytest.skip("faiss-cpu not available")
     
     @pytest.fixture
     def sample_documents(self):
@@ -437,8 +457,7 @@ class TestKnowledgeBaseIntegration:
             )
         ]
     
-    @patch('upsonic.knowledge_base.knowledge_base.KnowledgeBase._update_search_docstring')
-    def test_knowledge_base_creation(self, mock_update_docstring, mock_embedding_provider, mock_vectordb, temp_dir):
+    def test_knowledge_base_creation(self, mock_embedding_provider, mock_vectordb, temp_dir):
         """Test knowledge base creation with embedding provider."""
         chunker = MockChunker(chunk_size=50, chunk_overlap=10)
         loader = MockLoader("Sample content for testing knowledge base.")
@@ -457,8 +476,7 @@ class TestKnowledgeBaseIntegration:
         assert kb.vectordb == mock_vectordb
     
     @pytest.mark.asyncio
-    @patch('upsonic.knowledge_base.knowledge_base.KnowledgeBase._update_search_docstring')
-    async def test_knowledge_base_setup(self, mock_update_docstring, mock_embedding_provider, mock_vectordb, temp_dir):
+    async def test_knowledge_base_setup(self, mock_embedding_provider, mock_vectordb, temp_dir):
         """Test knowledge base setup process."""
         chunker = MockChunker(chunk_size=50, chunk_overlap=10)
         loader = MockLoader("Sample content for testing knowledge base setup.")
@@ -470,16 +488,18 @@ class TestKnowledgeBaseIntegration:
             splitters=chunker,
             loaders=loader
         )
-        
-        # Test setup process
-        await kb.setup_async()
-        
-        # Verify setup completed (check if knowledge base is ready instead of vectordb)
-        assert kb._is_ready is True
+        try:
+            # Test setup process
+            await kb.setup_async()
+            
+            # Verify setup completed (check if knowledge base is ready instead of vectordb)
+            assert kb._is_ready is True
+        finally:
+            if hasattr(kb, 'close'):
+                await kb.close()
     
     @pytest.mark.asyncio
-    @patch('upsonic.knowledge_base.knowledge_base.KnowledgeBase._update_search_docstring')
-    async def test_knowledge_base_query(self, mock_update_docstring, mock_embedding_provider, mock_vectordb, temp_dir):
+    async def test_knowledge_base_query(self, mock_embedding_provider, mock_vectordb, temp_dir):
         """Test knowledge base querying functionality."""
         chunker = MockChunker(chunk_size=50, chunk_overlap=10)
         loader = MockLoader("Sample content for testing knowledge base queries.")
@@ -491,22 +511,24 @@ class TestKnowledgeBaseIntegration:
             splitters=chunker,
             loaders=loader
         )
-        
-        # Setup knowledge base
-        await kb.setup_async()
-        
-        # Test query - handle case where setup might not complete fully
         try:
-            results = await kb.query_async("test query")
-            assert isinstance(results, list)
-        except Exception as e:
-            # If query fails due to setup not completing, that's acceptable for this test
-            # The important thing is that the method can be called without crashing
-            assert "not ready" in str(e).lower() or "index" in str(e).lower()
+            # Setup knowledge base
+            await kb.setup_async()
+            
+            # Test query - handle case where setup might not complete fully
+            try:
+                results = await kb.query_async("test query")
+                assert isinstance(results, list)
+            except Exception as e:
+                # If query fails due to setup not completing, that's acceptable for this test
+                # The important thing is that the method can be called without crashing
+                assert "not ready" in str(e).lower() or "index" in str(e).lower()
+        finally:
+            if hasattr(kb, 'close'):
+                await kb.close()
     
     @pytest.mark.asyncio
-    @patch('upsonic.knowledge_base.knowledge_base.KnowledgeBase._update_search_docstring')
-    async def test_knowledge_base_health_check(self, mock_update_docstring, mock_embedding_provider, mock_vectordb, temp_dir):
+    async def test_knowledge_base_health_check(self, mock_embedding_provider, mock_vectordb, temp_dir):
         """Test knowledge base health check."""
         chunker = MockChunker(chunk_size=50, chunk_overlap=10)
         loader = MockLoader("Sample content for testing health check.")
@@ -518,15 +540,17 @@ class TestKnowledgeBaseIntegration:
             splitters=chunker,
             loaders=loader
         )
-        
-        health_status = await kb.health_check_async()
-        
-        assert isinstance(health_status, dict)
-        assert "healthy" in health_status
-        assert "components" in health_status
+        try:
+            health_status = await kb.health_check_async()
+            
+            assert isinstance(health_status, dict)
+            assert "healthy" in health_status
+            assert "components" in health_status
+        finally:
+            if hasattr(kb, 'close'):
+                await kb.close()
     
-    @patch('upsonic.knowledge_base.knowledge_base.KnowledgeBase._update_search_docstring')
-    def test_knowledge_base_config_summary(self, mock_update_docstring, mock_embedding_provider, mock_vectordb, temp_dir):
+    def test_knowledge_base_config_summary(self, mock_embedding_provider, mock_vectordb, temp_dir):
         """Test knowledge base configuration summary."""
         chunker = MockChunker(chunk_size=50, chunk_overlap=10)
         loader = MockLoader("Sample content for testing config summary.")
@@ -573,8 +597,8 @@ class TestEmbeddingProviderFactory:
     
     def test_create_embedding_provider_huggingface(self):
         """Test creating HuggingFace embedding provider via factory."""
-        with patch('upsonic.embeddings.huggingface_provider.AutoModel.from_pretrained'):
-            with patch('upsonic.embeddings.huggingface_provider.AutoTokenizer.from_pretrained'):
+        with patch('transformers.AutoModel.from_pretrained'):
+            with patch('transformers.AutoTokenizer.from_pretrained'):
                 provider = create_embedding_provider(
                     "huggingface", 
                     model_name="sentence-transformers/all-MiniLM-L6-v2"
@@ -602,7 +626,7 @@ class TestEmbeddingProviderFactory:
     def test_create_embedding_provider_gemini(self):
         """Test creating Gemini embedding provider via factory."""
         with patch.dict(os.environ, {'GOOGLE_API_KEY': 'test-key'}):
-            with patch('upsonic.embeddings.gemini_provider.genai.Client'):
+            with patch('google.genai.Client'):
                 provider = create_embedding_provider("gemini", model_name="gemini-embedding-001")
                 
                 assert isinstance(provider, GeminiEmbedding)
@@ -635,7 +659,7 @@ class TestEmbeddingProviderErrorHandling:
     
     def test_bedrock_missing_credentials(self):
         """Test Bedrock provider with missing credentials."""
-        with patch('upsonic.embeddings.bedrock_provider.boto3.Session') as mock_session:
+        with patch('boto3.Session') as mock_session:
             mock_session.side_effect = Exception("No credentials found")
             
             with pytest.raises(ConfigurationError) as exc_info:
@@ -655,21 +679,27 @@ class TestEmbeddingProviderErrorHandling:
     async def test_embedding_connection_failure(self):
         """Test embedding provider connection failure."""
         provider = MockEmbeddingProvider()
-        
-        # Mock connection failure
-        with patch.object(provider, '_embed_batch', side_effect=ModelConnectionError("Connection failed")):
-            with pytest.raises(ModelConnectionError):
-                await provider.embed_texts(["test"])
+        try:
+            # Mock connection failure
+            with patch.object(provider, '_embed_batch', side_effect=ModelConnectionError("Connection failed")):
+                with pytest.raises(ModelConnectionError):
+                    await provider.embed_texts(["test"])
+        finally:
+            if hasattr(provider, 'close'):
+                await provider.close()
     
     @pytest.mark.asyncio
     async def test_embedding_rate_limit_handling(self):
         """Test embedding provider rate limit handling."""
         provider = MockEmbeddingProvider()
-        
-        # Mock rate limit error
-        with patch.object(provider, '_embed_batch', side_effect=ModelConnectionError("Rate limit exceeded")):
-            with pytest.raises(ModelConnectionError):
-                await provider.embed_texts(["test"])
+        try:
+            # Mock rate limit error
+            with patch.object(provider, '_embed_batch', side_effect=ModelConnectionError("Rate limit exceeded")):
+                with pytest.raises(ModelConnectionError):
+                    await provider.embed_texts(["test"])
+        finally:
+            if hasattr(provider, 'close'):
+                await provider.close()
 
 
 class TestEmbeddingProviderPerformance:
@@ -679,55 +709,65 @@ class TestEmbeddingProviderPerformance:
     async def test_embedding_batch_performance(self):
         """Test embedding batch processing performance."""
         provider = MockEmbeddingProvider()
-        
-        # Test with various batch sizes
-        batch_sizes = [1, 10, 50, 100]
-        
-        for batch_size in batch_sizes:
-            texts = [f"Test text {i}" for i in range(batch_size)]
+        try:
+            # Test with various batch sizes
+            batch_sizes = [1, 10, 50, 100]
             
-            start_time = asyncio.get_event_loop().time()
-            embeddings = await provider.embed_texts(texts)
-            end_time = asyncio.get_event_loop().time()
-            
-            assert len(embeddings) == batch_size
-            assert all(len(emb) == 384 for emb in embeddings)
-            
-            # Performance should be reasonable (less than 1 second for mock)
-            assert (end_time - start_time) < 1.0
+            for batch_size in batch_sizes:
+                texts = [f"Test text {i}" for i in range(batch_size)]
+                
+                start_time = time.time()
+                embeddings = await provider.embed_texts(texts)
+                end_time = time.time()
+                
+                assert len(embeddings) == batch_size
+                assert all(len(emb) == 384 for emb in embeddings)
+                
+                # Performance should be reasonable (less than 1 second for mock)
+                assert (end_time - start_time) < 1.0
+        finally:
+            if hasattr(provider, 'close'):
+                await provider.close()
     
     @pytest.mark.asyncio
     async def test_embedding_memory_usage(self):
         """Test embedding memory usage."""
         provider = MockEmbeddingProvider()
-        
-        # Test with large batch
-        large_texts = [f"Large text content {i}" * 100 for i in range(100)]
-        embeddings = await provider.embed_texts(large_texts)
-        
-        assert len(embeddings) == 100
-        assert all(len(emb) == 384 for emb in embeddings)
-        
-        # Check that memory usage is reasonable
-        import sys
-        memory_usage = sys.getsizeof(embeddings)
-        assert memory_usage < 10 * 1024 * 1024  # Less than 10MB
+        try:
+            # Test with large batch
+            large_texts = [f"Large text content {i}" * 100 for i in range(100)]
+            embeddings = await provider.embed_texts(large_texts)
+            
+            assert len(embeddings) == 100
+            assert all(len(emb) == 384 for emb in embeddings)
+            
+            # Check that memory usage is reasonable
+            import sys
+            memory_usage = sys.getsizeof(embeddings)
+            assert memory_usage < 10 * 1024 * 1024  # Less than 10MB
+        finally:
+            if hasattr(provider, 'close'):
+                await provider.close()
     
-    def test_embedding_metrics_collection(self):
+    @pytest.mark.asyncio
+    async def test_embedding_metrics_collection(self):
         """Test embedding metrics collection."""
         provider = MockEmbeddingProvider()
-        
-        # Initial metrics
-        initial_metrics = provider.get_metrics()
-        assert initial_metrics.total_chunks == 0
-        assert initial_metrics.embedding_time_ms == 0
-        
-        # After embedding operation
-        asyncio.run(provider.embed_texts(["test1", "test2", "test3"]))
-        
-        final_metrics = provider.get_metrics()
-        assert final_metrics.total_chunks == 3
-        assert final_metrics.embedding_time_ms > 0
+        try:
+            # Initial metrics
+            initial_metrics = provider.get_metrics()
+            assert initial_metrics.total_chunks == 0
+            assert initial_metrics.embedding_time_ms == 0
+            
+            # After embedding operation
+            await provider.embed_texts(["test1", "test2", "test3"])
+            
+            final_metrics = provider.get_metrics()
+            assert final_metrics.total_chunks == 3
+            assert final_metrics.embedding_time_ms > 0
+        finally:
+            if hasattr(provider, 'close'):
+                await provider.close()
 
 
 class TestEmbeddingProviderIntegration:
@@ -741,47 +781,58 @@ class TestEmbeddingProviderIntegration:
             MockEmbeddingProvider(config=EmbeddingConfig(model_name="provider2")),
             MockEmbeddingProvider(config=EmbeddingConfig(model_name="provider3"))
         ]
-        
-        texts = ["Test text 1", "Test text 2", "Test text 3"]
-        
-        for provider in providers:
-            embeddings = await provider.embed_texts(texts)
-            assert len(embeddings) == 3
-            assert all(len(emb) == 384 for emb in embeddings)
+        try:
+            texts = ["Test text 1", "Test text 2", "Test text 3"]
+            
+            for provider in providers:
+                embeddings = await provider.embed_texts(texts)
+                assert len(embeddings) == 3
+                assert all(len(emb) == 384 for emb in embeddings)
+        finally:
+            for provider in providers:
+                if hasattr(provider, 'close'):
+                    await provider.close()
     
     @pytest.mark.asyncio
     async def test_embedding_provider_switching(self):
         """Test switching between embedding providers."""
         provider1 = MockEmbeddingProvider(config=EmbeddingConfig(model_name="provider1"))
         provider2 = MockEmbeddingProvider(config=EmbeddingConfig(model_name="provider2"))
-        
-        texts = ["Test text for switching"]
-        
-        # Use first provider
-        embeddings1 = await provider1.embed_texts(texts)
-        
-        # Switch to second provider
-        embeddings2 = await provider2.embed_texts(texts)
-        
-        assert len(embeddings1) == len(embeddings2)
-        assert len(embeddings1[0]) == len(embeddings2[0])
+        try:
+            texts = ["Test text for switching"]
+            
+            # Use first provider
+            embeddings1 = await provider1.embed_texts(texts)
+            
+            # Switch to second provider
+            embeddings2 = await provider2.embed_texts(texts)
+            
+            assert len(embeddings1) == len(embeddings2)
+            assert len(embeddings1[0]) == len(embeddings2[0])
+        finally:
+            for provider in [provider1, provider2]:
+                if hasattr(provider, 'close'):
+                    await provider.close()
     
     @pytest.mark.asyncio
     async def test_embedding_provider_with_different_modes(self):
         """Test embedding providers with different modes."""
         provider = MockEmbeddingProvider()
-        
-        texts = ["Test document", "Test query"]
-        
-        # Test different embedding modes
-        document_embeddings = await provider.embed_texts(texts, mode=EmbeddingMode.DOCUMENT)
-        query_embeddings = await provider.embed_texts(texts, mode=EmbeddingMode.QUERY)
-        symmetric_embeddings = await provider.embed_texts(texts, mode=EmbeddingMode.SYMMETRIC)
-        
-        assert len(document_embeddings) == len(query_embeddings) == len(symmetric_embeddings)
-        assert all(len(emb) == 384 for emb in document_embeddings)
-        assert all(len(emb) == 384 for emb in query_embeddings)
-        assert all(len(emb) == 384 for emb in symmetric_embeddings)
+        try:
+            texts = ["Test document", "Test query"]
+            
+            # Test different embedding modes
+            document_embeddings = await provider.embed_texts(texts, mode=EmbeddingMode.DOCUMENT)
+            query_embeddings = await provider.embed_texts(texts, mode=EmbeddingMode.QUERY)
+            symmetric_embeddings = await provider.embed_texts(texts, mode=EmbeddingMode.SYMMETRIC)
+            
+            assert len(document_embeddings) == len(query_embeddings) == len(symmetric_embeddings)
+            assert all(len(emb) == 384 for emb in document_embeddings)
+            assert all(len(emb) == 384 for emb in query_embeddings)
+            assert all(len(emb) == 384 for emb in symmetric_embeddings)
+        finally:
+            if hasattr(provider, 'close'):
+                await provider.close()
 
 
 if __name__ == "__main__":

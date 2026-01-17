@@ -1,4 +1,5 @@
 import unittest
+import pytest
 import uuid
 import os
 import pytest
@@ -142,41 +143,35 @@ Reinforcement learning algorithms learn through interaction with an environment.
         self.assertIn("Artificial Intelligence", all_text)
         self.assertIn("Machine Learning", all_text)
 
-    def test_async_chunking(self):
+    @pytest.mark.asyncio
+    async def test_async_chunking(self):
         """Test async chunking functionality."""
-        async def _test():
-            config = SemanticChunkingConfig(
-                embedding_provider=self.embedding_provider,
-                chunk_size=200
-            )
-            chunker = SemanticChunker(config)
-            
-            chunks = await chunker._achunk_document(self.simple_doc)
-            
-            self.assertGreater(len(chunks), 0)
-            self.assertTrue(all(isinstance(chunk, Chunk) for chunk in chunks))
+        config = SemanticChunkingConfig(
+            embedding_provider=self.embedding_provider,
+            chunk_size=200
+        )
+        chunker = SemanticChunker(config)
         
-        import asyncio
-        asyncio.run(_test())
+        chunks = await chunker._achunk_document(self.simple_doc)
+        
+        self.assertGreater(len(chunks), 0)
+        self.assertTrue(all(isinstance(chunk, Chunk) for chunk in chunks))
 
-    def test_async_batch_processing(self):
+    @pytest.mark.asyncio
+    async def test_async_batch_processing(self):
         """Test async batch processing."""
-        async def _test():
-            documents = [self.simple_doc, self.single_topic_doc]
-            
-            config = SemanticChunkingConfig(
-                embedding_provider=self.embedding_provider,
-                chunk_size=150
-            )
-            chunker = SemanticChunker(config)
-            
-            batch_results = await chunker.abatch(documents)
-            
-            self.assertGreater(len(batch_results), 0)
-            self.assertTrue(all(isinstance(chunk, Chunk) for chunk in batch_results))
+        documents = [self.simple_doc, self.single_topic_doc]
         
-        import asyncio
-        asyncio.run(_test())
+        config = SemanticChunkingConfig(
+            embedding_provider=self.embedding_provider,
+            chunk_size=150
+        )
+        chunker = SemanticChunker(config)
+        
+        batch_results = await chunker.abatch(documents)
+        
+        self.assertGreater(len(batch_results), 0)
+        self.assertTrue(all(isinstance(chunk, Chunk) for chunk in batch_results))
 
 
 if __name__ == "__main__":

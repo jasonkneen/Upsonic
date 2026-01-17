@@ -2,12 +2,11 @@
 Reflection processor for implementing self-evaluation logic.
 """
 
-import asyncio
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 from .models import (
     ReflectionConfig, ReflectionState, EvaluationResult, 
-    ReflectionAction, ReflectionPrompts
+    ReflectionAction, ReflectionPrompts, ReflectionResult
 )
 
 if TYPE_CHECKING:
@@ -26,7 +25,7 @@ class ReflectionProcessor:
         agent: "Agent", 
         task: "Task", 
         initial_response: Any
-    ) -> Any:
+    ) -> ReflectionResult:
         """
         Process a task response through reflection and improvement cycles.
         
@@ -36,13 +35,15 @@ class ReflectionProcessor:
             initial_response: The initial response to evaluate and improve
             
         Returns:
-            The final improved response
+            ReflectionResult containing evaluation_prompt (FIRST INPUT), improved_output (LAST OUTPUT),
+            and other metadata for message tracking
         """
         # Initialize reflection state
         state = ReflectionState()
         
         # Convert response to string for evaluation
         current_response = self._extract_response_text(initial_response)
+        original_response_text = current_response
         
         # Log reflection start
         from upsonic.utils.printing import reflection_started
@@ -50,6 +51,14 @@ class ReflectionProcessor:
         
         # Create evaluator agent
         evaluator_agent = self._create_evaluator_agent(agent)
+        
+        # Build the evaluation context for the FIRST evaluation prompt
+        evaluation_context = self._build_evaluation_context(task, state)
+        first_evaluation_prompt = ReflectionPrompts.EVALUATION_PROMPT.format(
+            task_description=task.description,
+            response=current_response,
+            context=evaluation_context
+        )
         
         while state.should_continue(self.config):
             # Evaluate current response
@@ -126,7 +135,20 @@ class ReflectionProcessor:
         )
         
         # Convert back to original response format
-        return self._convert_to_response_format(state.final_response, initial_response, task)
+        final_output = self._convert_to_response_format(state.final_response, initial_response, task)
+        
+        # Check if improvement was made
+        improvement_made = str(original_response_text) != str(state.final_response)
+        
+        # Return ReflectionResult with all info for message tracking
+        return ReflectionResult(
+            evaluation_prompt=first_evaluation_prompt,
+            improved_output=final_output,
+            improvement_made=improvement_made,
+            original_output=initial_response,
+            final_evaluation=state.evaluations[-1] if state.evaluations else None,
+            termination_reason=state.terminated_reason
+        )
     
     def _create_evaluator_agent(self, main_agent: "Agent") -> "Agent":
         """Create an evaluator agent for reflection."""

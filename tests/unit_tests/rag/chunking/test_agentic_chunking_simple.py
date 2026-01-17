@@ -98,136 +98,124 @@ Global average temperatures have risen by approximately 1.1 degrees Celsius sinc
             document_id="climate_doc_001"
         )
 
-    def test_basic_agentic_chunking(self):
+    @pytest.mark.asyncio
+    async def test_basic_agentic_chunking(self):
         """Test basic agentic chunking functionality."""
-        async def _test():
-            config = AgenticChunkingConfig()
-            mock_agent = MockDirect()
-            chunker = AgenticChunker(mock_agent, config)
-            
-            chunks = await chunker._achunk_document(self.ai_doc)
-            
-            self.assertGreater(len(chunks), 0)
-            self.assertTrue(all(isinstance(chunk, Chunk) for chunk in chunks))
-            self.assertTrue(all(chunk.text_content for chunk in chunks))
-            
-            # Verify content preservation
-            all_content = " ".join(chunk.text_content for chunk in chunks)
-            self.assertIn("Artificial Intelligence", all_content)
-            self.assertIn("Machine learning", all_content)
+        config = AgenticChunkingConfig()
+        mock_agent = MockDirect()
+        chunker = AgenticChunker(mock_agent, config)
         
-        asyncio.run(_test())
+        chunks = await chunker._achunk_document(self.ai_doc)
+        
+        self.assertGreater(len(chunks), 0)
+        self.assertTrue(all(isinstance(chunk, Chunk) for chunk in chunks))
+        self.assertTrue(all(chunk.text_content for chunk in chunks))
+        
+        # Verify content preservation
+        all_content = " ".join(chunk.text_content for chunk in chunks)
+        self.assertIn("Artificial Intelligence", all_content)
+        self.assertIn("Machine learning", all_content)
 
-    def test_proposition_extraction(self):
+    @pytest.mark.asyncio
+    async def test_proposition_extraction(self):
         """Test proposition extraction functionality."""
-        async def _test():
-            config = AgenticChunkingConfig(enable_proposition_validation=True)
-            mock_agent = MockDirect()
-            chunker = AgenticChunker(mock_agent, config)
-            
-            chunks = await chunker._achunk_document(self.ai_doc)
-            
-            self.assertGreater(len(chunks), 0)
-            
-            # Verify that propositions are meaningful
-            for chunk in chunks:
-                self.assertGreater(len(chunk.text_content), 0)
-                
-            # Should have generated propositions
-            self.assertGreater(mock_agent.call_count, 0)
+        config = AgenticChunkingConfig(enable_proposition_validation=True)
+        mock_agent = MockDirect()
+        chunker = AgenticChunker(mock_agent, config)
         
-        asyncio.run(_test())
+        chunks = await chunker._achunk_document(self.ai_doc)
+        
+        self.assertGreater(len(chunks), 0)
+        
+        # Verify that propositions are meaningful
+        for chunk in chunks:
+            self.assertGreater(len(chunk.text_content), 0)
+            
+        # Should have generated propositions
+        self.assertGreater(mock_agent.call_count, 0)
 
-    def test_topic_assignment_and_refinement(self):
+    @pytest.mark.asyncio
+    async def test_topic_assignment_and_refinement(self):
         """Test topic assignment and refinement functionality."""
-        async def _test():
-            config = AgenticChunkingConfig(
-                enable_topic_optimization=True,
-                include_topic_scores=True
-            )
-            mock_agent = MockDirect()
-            chunker = AgenticChunker(mock_agent, config)
-            
-            chunks = await chunker._achunk_document(self.climate_doc)
-            
-            self.assertGreater(len(chunks), 0)
-            
-            # Check that topics were assigned (multiple agent calls)
-            self.assertGreater(mock_agent.call_count, 1)
-            
-            # Verify chunk coherence
-            for chunk in chunks:
-                self.assertIsInstance(chunk.metadata, dict)
+        config = AgenticChunkingConfig(
+            enable_topic_optimization=True,
+            include_topic_scores=True
+        )
+        mock_agent = MockDirect()
+        chunker = AgenticChunker(mock_agent, config)
         
-        asyncio.run(_test())
+        chunks = await chunker._achunk_document(self.climate_doc)
+        
+        self.assertGreater(len(chunks), 0)
+        
+        # Check that topics were assigned (multiple agent calls)
+        self.assertGreater(mock_agent.call_count, 1)
+        
+        # Verify chunk coherence
+        for chunk in chunks:
+            self.assertIsInstance(chunk.metadata, dict)
 
-    def test_error_handling_and_fallback(self):
+    @pytest.mark.asyncio
+    async def test_error_handling_and_fallback(self):
         """Test error handling and fallback functionality."""
-        async def _test():
-            config = AgenticChunkingConfig(
-                fallback_to_recursive=True,
-                max_agent_retries=2
-            )
-            mock_agent = MockDirect()
-            mock_agent.fail_after = 1  # Fail after first call
-            
-            chunker = AgenticChunker(mock_agent, config)
-            
-            # Should fallback gracefully
-            chunks = await chunker._achunk_document(self.ai_doc)
-            
-            self.assertGreater(len(chunks), 0)
-            # Should fallback to recursive chunking
-            for chunk in chunks:
-                self.assertIsInstance(chunk, Chunk)
-                self.assertTrue(chunk.text_content)
+        config = AgenticChunkingConfig(
+            fallback_to_recursive=True,
+            max_agent_retries=2
+        )
+        mock_agent = MockDirect()
+        mock_agent.fail_after = 1  # Fail after first call
         
-        asyncio.run(_test())
+        chunker = AgenticChunker(mock_agent, config)
+        
+        # Should fallback gracefully
+        chunks = await chunker._achunk_document(self.ai_doc)
+        
+        self.assertGreater(len(chunks), 0)
+        # Should fallback to recursive chunking
+        for chunk in chunks:
+            self.assertIsInstance(chunk, Chunk)
+            self.assertTrue(chunk.text_content)
 
-    def test_empty_content_handling(self):
+    @pytest.mark.asyncio
+    async def test_empty_content_handling(self):
         """Test handling of empty content."""
-        async def _test():
-            config = AgenticChunkingConfig()
-            mock_agent = MockDirect()
-            chunker = AgenticChunker(mock_agent, config)
-            
-            empty_doc = Document(
-                content="",
-                metadata={'source': 'empty.txt', 'type': 'empty'},
-                document_id="empty_doc_001"
-            )
-            
-            chunks = await chunker._achunk_document(empty_doc)
-            
-            # Should handle empty content gracefully
-            self.assertEqual(len(chunks), 0)
+        config = AgenticChunkingConfig()
+        mock_agent = MockDirect()
+        chunker = AgenticChunker(mock_agent, config)
         
-        asyncio.run(_test())
+        empty_doc = Document(
+            content="",
+            metadata={'source': 'empty.txt', 'type': 'empty'},
+            document_id="empty_doc_001"
+        )
+        
+        chunks = await chunker._achunk_document(empty_doc)
+        
+        # Should handle empty content gracefully
+        self.assertEqual(len(chunks), 0)
 
-    def test_batch_processing(self):
+    @pytest.mark.asyncio
+    async def test_batch_processing(self):
         """Test batch processing of multiple documents."""
-        async def _test():
-            documents = [
-                self.ai_doc,
-                self.climate_doc
-            ]
-            
-            config = AgenticChunkingConfig()
-            mock_agent = MockDirect()
-            chunker = AgenticChunker(mock_agent, config)
-            
-            batch_results = await chunker.abatch(documents)
-            
-            # abatch returns a flat list of all chunks from all documents
-            self.assertGreater(len(batch_results), 0)
-            self.assertTrue(all(isinstance(chunk, Chunk) for chunk in batch_results))
-            
-            # Should have processed both documents
-            all_text = " ".join(chunk.text_content for chunk in batch_results)
-            self.assertIn("Artificial Intelligence", all_text)
-            self.assertIn("Climate Change", all_text)
+        documents = [
+            self.ai_doc,
+            self.climate_doc
+        ]
         
-        asyncio.run(_test())
+        config = AgenticChunkingConfig()
+        mock_agent = MockDirect()
+        chunker = AgenticChunker(mock_agent, config)
+        
+        batch_results = await chunker.abatch(documents)
+        
+        # abatch returns a flat list of all chunks from all documents
+        self.assertGreater(len(batch_results), 0)
+        self.assertTrue(all(isinstance(chunk, Chunk) for chunk in batch_results))
+        
+        # Should have processed both documents
+        all_text = " ".join(chunk.text_content for chunk in batch_results)
+        self.assertIn("Artificial Intelligence", all_text)
+        self.assertIn("Climate Change", all_text)
 
 
 if __name__ == "__main__":

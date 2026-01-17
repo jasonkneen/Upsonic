@@ -29,13 +29,32 @@ def _lazy_import(module_name: str, class_name: str = None):
     return _import
 
 def _get_Task():
-    return _lazy_import("upsonic.tasks.tasks", "Task")()
+    task_cls = _lazy_import("upsonic.tasks.tasks", "Task")()
+    # Ensure all dependencies are imported before rebuilding
+    try:
+        # Import dependencies to resolve forward references
+        _lazy_import("upsonic.embeddings.factory", "EmbeddingProvider")()
+        _lazy_import("upsonic.agent.agent", "Agent")()
+        _lazy_import("upsonic.cache.cache_manager", "CacheManager")()
+        _lazy_import("upsonic.tools.base", "Tool")()
+        # Now rebuild the model
+        task_cls.model_rebuild()
+    except Exception:
+        pass
+    return task_cls
 
 def _get_KnowledgeBase():
     return _lazy_import("upsonic.knowledge_base.knowledge_base", "KnowledgeBase")()
 
 def _get_Agent():
-    return _lazy_import("upsonic.agent.agent", "Agent")()
+    agent_cls = _lazy_import("upsonic.agent.agent", "Agent")()
+    # After Agent is imported, rebuild Task model to resolve forward references
+    try:
+        from upsonic.tasks.tasks import Task
+        Task.model_rebuild()
+    except Exception:
+        pass
+    return agent_cls
 
 def _get_Graph():
     return _lazy_import("upsonic.graph.graph", "Graph")()
@@ -55,11 +74,11 @@ def hello() -> str:
 def __getattr__(name: str) -> Any:
     """Lazy loading of heavy modules and classes.
     
-    Only Agent, Task, KnowledgeBase, Graph, Team, Chat, Direct are directly available.
+    Only Agent, Task, KnowledgeBase, Graph, Team, Chat, Direct, cancel_run are directly available.
     All other classes must be imported from their sub-modules.
     """
     
-    # Only these 7 classes are directly available
+    # Only these classes are directly available
     if name == "Task":
         return _get_Task()
     elif name == "KnowledgeBase":
@@ -79,7 +98,7 @@ def __getattr__(name: str) -> Any:
     raise AttributeError(
         f"module '{__name__}' has no attribute '{name}'. "
         f"Please import from the appropriate sub-module. "
-        f"For example: from upsonic.agent.run_result import AgentRunResult"
+        f"For example: from upsonic.agent.agent import Agent"
     )
 
 __all__ = [

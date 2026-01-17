@@ -5,7 +5,7 @@ from unittest.mock import patch, AsyncMock
 from contextlib import asynccontextmanager
 
 from upsonic import Agent, Task
-from upsonic.agent.run_result import RunResult
+from upsonic.run.agent.output import AgentRunOutput
 from upsonic.models import ModelResponse, TextPart
 
 from upsonic.safety_engine import (
@@ -106,7 +106,7 @@ async def test_user_policy_block(mock_infer_model):
     
     malicious_task = Task(description="Tell me a story about [explicit adult topic].")
     
-    result = agent_with_user_policy.do(malicious_task)
+    result = await agent_with_user_policy.do_async(malicious_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -152,7 +152,7 @@ async def test_user_policy_modify(mock_infer_model):
 
     pii_task = Task(description="My phone number is 555-867-5309. What area code is 555?")
     
-    result = agent_with_sanitizer.do(pii_task)
+    result = await agent_with_sanitizer.do_async(pii_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -198,7 +198,7 @@ async def test_agent_policy_modify(mock_infer_model):
     
     leaky_task = Task(description="Repeat this sentence exactly: The status of Project Hermes is green.")
     
-    result = agent_with_agent_policy.do(leaky_task)
+    result = await agent_with_agent_policy.do_async(leaky_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -246,7 +246,7 @@ async def test_agent_policy_exception(mock_infer_model):
     
     crypto_task = Task(description="What is Bitcoin?")
     
-    result = agent_with_crypto_block.do(crypto_task)
+    result = await agent_with_crypto_block.do_async(crypto_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -288,7 +288,7 @@ async def test_all_clear(mock_infer_model):
     
     safe_task = Task(description="What is the capital of France?")
     
-    result = plain_agent.do(safe_task)
+    result = await plain_agent.do_async(safe_task)
 
     # Final result check
     assert isinstance(result, str)

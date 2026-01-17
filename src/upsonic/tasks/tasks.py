@@ -1,34 +1,30 @@
+from __future__ import annotations
+
 import base64
 import time
 from pydantic import BaseModel
 from typing import Any, List, Dict, Optional, Type, Union, Callable, Literal, TYPE_CHECKING
 from upsonic.exceptions import FileNotFoundError
+from upsonic.run.base import RunStatus
 
 if TYPE_CHECKING:
-    from upsonic.utils.printing import get_price_id_total_cost
-    from upsonic.messages.messages import BinaryContent
-    from upsonic.schemas.data_models import RAGSearchResult
-    from upsonic.tools import ExternalToolCall
-    from upsonic.embeddings.factory import auto_detect_best_embedding
-else:
-    # Use string annotations to avoid importing heavy modules
-    get_price_id_total_cost = "get_price_id_total_cost"
-    BinaryContent = "BinaryContent"
-    RAGSearchResult = "RAGSearchResult"
-    ExternalToolCall = "ExternalToolCall"
-    auto_detect_best_embedding = "auto_detect_best_embedding"
+    from upsonic.agent.deepagent.tools.planning_toolkit import TodoList
 
 
 CacheMethod = Literal["vector_search", "llm_call"]
 CacheEntry = Dict[str, Any]
 
 class Task(BaseModel):
+    model_config = {
+        "arbitrary_types_allowed": True
+    }
+    
     description: str
     attachments: Optional[List[str]] = None
     tools: list[Any] = None
     response_format: Union[Type[BaseModel], type[str], None] = str
     response_lang: Optional[str] = "en"
-    _response: Any = None
+    _response: Optional[Union[str, bytes]] = None
     context: Any = None
     _context_formatted: Optional[str] = None
     price_id_: Optional[str] = None
@@ -43,30 +39,24 @@ class Task(BaseModel):
     guardrail: Optional[Callable] = None
     guardrail_retries: Optional[int] = None
     is_paused: bool = False
-    _tools_awaiting_external_execution: List["ExternalToolCall"] = []
-    
+    status: Optional[RunStatus] = None
     enable_cache: bool = False
     cache_method: Literal["vector_search", "llm_call"] = "vector_search"
     cache_threshold: float = 0.7
     cache_embedding_provider: Optional[Any] = None
     cache_duration_minutes: int = 60
-    _cache_manager: Optional[Any] = None  # Will be set by Agent
+    _cache_manager: Optional[Any] = None
     _cache_hit: bool = False
     _original_input: Optional[str] = None
     _last_cache_entry: Optional[Dict[str, Any]] = None
     
-    # Durable execution support
-    durable_execution: Optional[Any] = None  # DurableExecution instance
-    durable_checkpoint_enabled: bool = False
+    _run_id: Optional[str] = None
 
-    # DeepAgent planning support
-    _task_todos: Optional[List[Any]] = None  # List of Todo objects for task planning
+    _task_todos: Optional[Any] = None
     
-    # Task-specific tool tracking (similar to Agent's registered_agent_tools)
-    registered_task_tools: Dict[str, Any] = {}  # Maps tool names to wrapped Tool objects
+    registered_task_tools: Dict[str, Any] = {}
     task_builtin_tools: List[Any] = []
         
-    # Vector search parameters (override config defaults when provided)
     vector_search_top_k: Optional[int] = None
     vector_search_alpha: Optional[float] = None
     vector_search_fusion_method: Optional[Literal['rrf', 'weighted']] = None
@@ -279,7 +269,7 @@ class Task(BaseModel):
         attachments: Optional[List[str]] = None,
         tools: list[Any] = None,
         response_format: Union[Type[BaseModel], type[str], None] = str,
-        response: Any = None,
+        response: Optional[Union[str, bytes]] = None,
         context: Any = None,
         _context_formatted: Optional[str] = None,
         price_id_: Optional[str] = None,
@@ -294,14 +284,12 @@ class Task(BaseModel):
         guardrail: Optional[Callable] = None,
         guardrail_retries: Optional[int] = None,
         is_paused: bool = False,
-        _tools_awaiting_external_execution: List["ExternalToolCall"] = None,
         enable_cache: bool = False,
         cache_method: Literal["vector_search", "llm_call"] = "vector_search",
         cache_threshold: float = 0.7,
         cache_embedding_provider: Optional[Any] = None,
         cache_duration_minutes: int = 60,
-        durable_execution: Optional[Any] = None,
-        _task_todos: Optional[List[Any]] = None,
+        _task_todos: Optional[TodoList] = None,
         vector_search_top_k: Optional[int] = None,
         vector_search_alpha: Optional[float] = None,
         vector_search_fusion_method: Optional[Literal['rrf', 'weighted']] = None,
@@ -330,9 +318,6 @@ class Task(BaseModel):
         if context is None:
             context = []
 
-        if _tools_awaiting_external_execution is None:
-            _tools_awaiting_external_execution = []
-        
         try:
             context, extracted_files = self._extract_files_from_context(context)
         except FileNotFoundError as e:
@@ -365,7 +350,6 @@ class Task(BaseModel):
             "guardrail_retries": guardrail_retries,
             "_tool_calls": [],
             "is_paused": is_paused,
-            "_tools_awaiting_external_execution": _tools_awaiting_external_execution,
             "enable_cache": enable_cache,
             "cache_method": cache_method,
             "cache_threshold": cache_threshold,
@@ -375,8 +359,6 @@ class Task(BaseModel):
             "_cache_hit": False,
             "_original_input": description,
             "_last_cache_entry": None,
-            "durable_execution": durable_execution,
-            "durable_checkpoint_enabled": durable_execution is not None,
             "_task_todos": _task_todos or [],
             "registered_task_tools": {},  # Initialize empty tool registry
             "vector_search_top_k": vector_search_top_k,
@@ -393,6 +375,34 @@ class Task(BaseModel):
         if self.start_time is None or self.end_time is None:
             return None
         return self.end_time - self.start_time
+
+    @property
+    def id(self) -> str:
+        """Get the task ID. Auto-generates one if not set."""
+        return self.task_id
+
+    
+    @property
+    def is_problematic(self) -> bool:
+        """
+        Check if the task's run is problematic (paused, cancelled, or error).
+        
+        A problematic run requires continue_run_async() to be called instead of do_async().
+        """
+        if self.status is None:
+            return False
+        return self.status in (RunStatus.paused, RunStatus.cancelled, RunStatus.error)
+    
+    @property
+    def is_completed(self) -> bool:
+        """
+        Check if the task's run is already completed.
+        
+        A completed task cannot be re-run or continued.
+        """
+        if self.status is None:
+            return False
+        return self.status == RunStatus.completed
 
     def validate_tools(self):
         """
@@ -513,26 +523,25 @@ class Task(BaseModel):
         """
         return self._context_formatted
 
-    @property
-    def tools_awaiting_external_execution(self) -> List["ExternalToolCall"]:
-        """
-        Get the list of tool calls awaiting external execution.
-        When the task is paused, this list should be iterated over,
-        the tools executed, and the 'result' attribute of each item set.
-        """
-        return self._tools_awaiting_external_execution
+    
     
     @property
-    def durable_execution_id(self) -> Optional[str]:
+    def run_id(self) -> Optional[str]:
         """
-        Get the durable execution ID for this task.
+        Get the run ID associated with this task.
+        
+        This is set when the task is executed and allows the task to be
+        used for continuation even with a new agent instance.
         
         Returns:
-            The execution ID if durable execution is enabled, None otherwise
+            The run_id if set, None otherwise
         """
-        if self.durable_execution:
-            return self.durable_execution.execution_id
-        return None
+        return self._run_id
+    
+    @run_id.setter
+    def run_id(self, value: Optional[str]) -> None:
+        """Set the run ID for this task."""
+        self._run_id = value
     
     @context_formatted.setter
     def context_formatted(self, value: Optional[str]):
@@ -778,42 +787,6 @@ class Task(BaseModel):
 
 
 
-    def build_agent_input(self):
-        """
-        Builds the input for the agent, using and then clearing the formatted context.
-        """
-        # Lazy import for heavy modules
-        from upsonic.messages.messages import BinaryContent
-        
-        final_description = self.description
-        if self.context_formatted and isinstance(self.context_formatted, str):
-            final_description += "\n" + self.context_formatted
-
-        self.context_formatted = None
-
-        if not self.attachments:
-            return final_description
-
-        input_list = [final_description]
-        
-        for attachment_path in self.attachments:
-            try:
-                with open(attachment_path, "rb") as attachment_file:
-                    attachment_data  = attachment_file.read()
-                
-                # Using mimetypes is more robust than just checking extensions
-                import mimetypes
-                media_type, _ = mimetypes.guess_type(attachment_path)
-                if media_type is None:
-                    media_type = "application/octet-stream" # Fallback
-                    
-                input_list.append(BinaryContent(data=attachment_data, media_type=media_type))
-                
-            except Exception as e:
-                from upsonic.utils.printing import warning_log
-                warning_log(f"Could not load attachment {attachment_path}: {e}", "TaskProcessor")
-
-        return input_list
 
     
     def set_cache_manager(self, cache_manager: Any):
@@ -896,3 +869,353 @@ class Task(BaseModel):
         if self._cache_manager:
             self._cache_manager.clear_cache()
         self._cache_hit = False
+    
+    @staticmethod
+    def _pickle(obj: Any) -> Optional[Dict[str, str]]:
+        """
+        Serialize an object using cloudpickle.
+        
+        Args:
+            obj: The object to pickle
+            
+        Returns:
+            Dict with pickled data or None
+        """
+        if obj is None:
+            return None
+        try:
+            import cloudpickle
+            import base64
+            pickled = cloudpickle.dumps(obj)
+            return {"__pickled__": base64.b64encode(pickled).decode('utf-8')}
+        except Exception:
+            return None
+    
+    @staticmethod
+    def _unpickle(obj: Any) -> Any:
+        """
+        Deserialize an object using cloudpickle.
+        
+        Args:
+            obj: Dict with pickled data or the object itself
+            
+        Returns:
+            Unpickled object or None
+        """
+        if obj is None:
+            return None
+        if isinstance(obj, dict) and "__pickled__" in obj:
+            try:
+                import cloudpickle
+                import base64
+                pickled_bytes = base64.b64decode(obj["__pickled__"].encode('utf-8'))
+                return cloudpickle.loads(pickled_bytes)
+            except Exception:
+                return None
+        # Already unpickled or not a pickled dict
+        return obj
+    
+    
+    def to_dict(self, serialize_flag: bool = False) -> Dict[str, Any]:
+        """
+        Convert to dictionary.
+        
+        Args:
+            serialize_flag: If True, use cloudpickle for tools, guardrail, 
+                           registered_task_tools (values), task_builtin_tools,
+                           and response_format.
+                           If False (default), return these as-is.
+        
+        Returns:
+            Dictionary representation of the Task
+        """
+        result: Dict[str, Any] = {
+            # Simple/primitive attributes
+            "description": self.description,
+            "attachments": self.attachments,
+            "response_lang": self.response_lang,
+            "price_id_": self.price_id_,
+            "task_id_": self.task_id_,
+            "not_main_task": self.not_main_task,
+            "start_time": self.start_time,
+            "end_time": self.end_time,
+            "enable_thinking_tool": self.enable_thinking_tool,
+            "enable_reasoning_tool": self.enable_reasoning_tool,
+            "guardrail_retries": self.guardrail_retries,
+            "is_paused": self.is_paused,
+            "enable_cache": self.enable_cache,
+            "cache_method": self.cache_method,
+            "cache_threshold": self.cache_threshold,
+            "cache_duration_minutes": self.cache_duration_minutes,
+            "vector_search_top_k": self.vector_search_top_k,
+            "vector_search_alpha": self.vector_search_alpha,
+            "vector_search_fusion_method": self.vector_search_fusion_method,
+            "vector_search_similarity_threshold": self.vector_search_similarity_threshold,
+            "vector_search_filter": self.vector_search_filter,
+            "context": self.context,
+            "_response": self._response,
+            "_context_formatted": self._context_formatted,
+            "_tool_calls": self._tool_calls,
+            "_cache_hit": self._cache_hit,
+            "_original_input": self._original_input,
+            "_run_id": self._run_id,
+            "_last_cache_entry": self._last_cache_entry,
+        }
+        
+        # Handle status (RunStatus enum)
+        if self.status is not None:
+            result["status"] = self.status.value
+        else:
+            result["status"] = None
+        
+        # Handle _task_todos (list of Todo pydantic models) - use model_dump
+        if self._task_todos is not None and self._task_todos:
+            if isinstance(self._task_todos, list):
+                result["_task_todos"] = [todo.model_dump() if isinstance(todo, BaseModel) else todo for todo in self._task_todos]
+            elif isinstance(self._task_todos, BaseModel):
+                result["_task_todos"] = self._task_todos.model_dump()
+            else:
+                result["_task_todos"] = self._task_todos
+        else:
+            result["_task_todos"] = None
+        
+        # These attributes use cloudpickle ONLY when serialize_flag is True:
+        # tools, guardrail, registered_task_tools (values), task_builtin_tools, response_format
+        if serialize_flag:
+            result["response_format"] = Task._pickle(self.response_format)
+            result["tools"] = [Task._pickle(t) for t in self.tools] if self.tools else []
+            result["registered_task_tools"] = {
+                k: Task._pickle(v) for k, v in self.registered_task_tools.items()
+            } if self.registered_task_tools else {}
+            result["task_builtin_tools"] = [Task._pickle(t) for t in self.task_builtin_tools] if self.task_builtin_tools else []
+            result["guardrail"] = Task._pickle(self.guardrail)
+        else:
+            # Convert types to JSON-serializable format when not using cloudpickle
+            # response_format handling (type to dict)
+            if self.response_format is None:
+                result["response_format"] = None
+            elif self.response_format is str:
+                result["response_format"] = {"__builtin_type__": True, "name": "str"}
+            elif isinstance(self.response_format, type):
+                try:
+                    if issubclass(self.response_format, BaseModel):
+                        result["response_format"] = {
+                            "__pydantic_type__": True,
+                            "name": self.response_format.__name__,
+                            "module": self.response_format.__module__,
+                        }
+                    else:
+                        result["response_format"] = {
+                            "__type__": True,
+                            "name": self.response_format.__name__,
+                            "module": self.response_format.__module__,
+                        }
+                except TypeError:
+                    result["response_format"] = str(self.response_format)
+            else:
+                result["response_format"] = str(self.response_format)
+            
+            # Other non-serializable fields - exclude from JSON output
+            result["tools"] = None
+            result["registered_task_tools"] = None
+            result["task_builtin_tools"] = None
+            result["guardrail"] = None
+        
+        # Handle agent, cache_embedding_provider, _cache_manager
+        # These should NOT be serialized - include as-is when not serializing
+        if serialize_flag:
+            result["agent"] = None
+            result["cache_embedding_provider"] = None
+            result["_cache_manager"] = None
+        else:
+            result["agent"] = self.agent
+            result["cache_embedding_provider"] = self.cache_embedding_provider
+            result["_cache_manager"] = self._cache_manager
+        
+        return result
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any], deserialize_flag: bool = False) -> "Task":
+        """
+        Reconstruct from dictionary.
+        
+        Args:
+            data: Dictionary containing Task data
+            deserialize_flag: If True, use cloudpickle to deserialize tools, guardrail,
+                             registered_task_tools (values), task_builtin_tools,
+                             and response_format.
+                             If False (default), use objects as-is.
+        
+        Returns:
+            Reconstructed Task instance
+        """
+        # Handle response_format - cloudpickle if deserialize_flag, or convert from dict
+        response_format_data = data.get("response_format")
+        if deserialize_flag and response_format_data is not None:
+            response_format = Task._unpickle(response_format_data)
+        elif isinstance(response_format_data, dict):
+            # Handle JSON-serialized type format
+            if response_format_data.get("__builtin_type__") and response_format_data.get("name") == "str":
+                response_format = str
+            elif response_format_data.get("__pydantic_type__"):
+                import importlib
+                module_name = response_format_data.get("module")
+                class_name = response_format_data.get("name")
+                if module_name and class_name:
+                    try:
+                        module = importlib.import_module(module_name)
+                        response_format = getattr(module, class_name)
+                    except (ImportError, AttributeError):
+                        response_format = None
+                else:
+                    response_format = None
+            elif response_format_data.get("__type__"):
+                import importlib
+                module_name = response_format_data.get("module")
+                class_name = response_format_data.get("name")
+                if module_name and class_name:
+                    try:
+                        module = importlib.import_module(module_name)
+                        response_format = getattr(module, class_name)
+                    except (ImportError, AttributeError):
+                        response_format = None
+                else:
+                    response_format = None
+            else:
+                response_format = response_format_data
+        else:
+            response_format = response_format_data
+        
+        # Handle tools - cloudpickle if deserialize_flag
+        tools_data = data.get("tools")
+        if deserialize_flag and tools_data is not None:
+            tools = [Task._unpickle(t) for t in tools_data]
+        else:
+            tools = tools_data
+        
+        # Handle guardrail - cloudpickle if deserialize_flag
+        guardrail_data = data.get("guardrail")
+        if deserialize_flag and guardrail_data is not None:
+            guardrail = Task._unpickle(guardrail_data)
+        else:
+            guardrail = guardrail_data
+        
+        # Check if guardrail/response_format is still pickled - don't pass to constructor
+        guardrail_is_pickled = isinstance(guardrail, dict) and "__pickled__" in guardrail
+        response_format_is_pickled = isinstance(response_format, dict) and "__pickled__" in response_format
+        
+        # Check if tools contain pickled items
+        tools_are_pickled = (
+            tools is not None and 
+            isinstance(tools, list) and 
+            any(isinstance(t, dict) and "__pickled__" in t for t in tools)
+        )
+        
+        # Filter to only fields that Task accepts in constructor
+        valid_fields = {
+            "description", "attachments", "response_lang", "context",
+            "price_id_", "task_id_", "not_main_task", "start_time", "end_time",
+            "enable_thinking_tool", "enable_reasoning_tool",
+            "guardrail_retries", "is_paused", "enable_cache", "cache_method",
+            "cache_threshold", "cache_duration_minutes", "vector_search_top_k",
+            "vector_search_alpha", "vector_search_fusion_method",
+            "vector_search_similarity_threshold", "vector_search_filter"
+        }
+        filtered_data = {k: v for k, v in data.items() if k in valid_fields}
+        
+        # Convert float timestamps to int (required by Pydantic validation)
+        if "start_time" in filtered_data and filtered_data["start_time"] is not None:
+            filtered_data["start_time"] = int(filtered_data["start_time"])
+        if "end_time" in filtered_data and filtered_data["end_time"] is not None:
+            filtered_data["end_time"] = int(filtered_data["end_time"])
+        
+        # Add deserialized fields - skip if still pickled
+        filtered_data["tools"] = tools if not tools_are_pickled else []
+        
+        # Only pass response_format to constructor if not pickled
+        if not response_format_is_pickled:
+            filtered_data["response_format"] = response_format
+        
+        # Only pass guardrail to constructor if not pickled
+        if not guardrail_is_pickled:
+            filtered_data["guardrail"] = guardrail
+        
+        task = cls(**filtered_data)
+        
+        # Set pickled fields directly (bypasses validation)
+        if guardrail_is_pickled:
+            task.guardrail = guardrail
+        if response_format_is_pickled:
+            task.response_format = response_format
+        if tools_are_pickled:
+            task.tools = tools
+        
+        # Restore status (RunStatus enum)
+        status_value = data.get("status")
+        if status_value is not None:
+            task.status = RunStatus(status_value)
+        
+        # Restore _task_todos (list of Todo pydantic models) - use model_validate
+        task_todos_data = data.get("_task_todos")
+        if task_todos_data is not None:
+            if isinstance(task_todos_data, list) and task_todos_data:
+                from upsonic.agent.deepagent.tools.planning_toolkit import Todo
+                task._task_todos = [Todo.model_validate(todo_data) for todo_data in task_todos_data]
+            elif isinstance(task_todos_data, dict):
+                from upsonic.agent.deepagent.tools.planning_toolkit import TodoList
+                task._task_todos = TodoList.model_validate(task_todos_data)
+            else:
+                task._task_todos = task_todos_data
+        
+        # Handle registered_task_tools - cloudpickle values if deserialize_flag
+        registered_task_tools = data.get("registered_task_tools")
+        if registered_task_tools and isinstance(registered_task_tools, dict):
+            if deserialize_flag:
+                task.registered_task_tools = {
+                    k: Task._unpickle(v) for k, v in registered_task_tools.items()
+                }
+            else:
+                task.registered_task_tools = registered_task_tools
+        
+        # Handle task_builtin_tools - cloudpickle if deserialize_flag
+        task_builtin_tools = data.get("task_builtin_tools")
+        if task_builtin_tools:
+            if deserialize_flag:
+                task.task_builtin_tools = [Task._unpickle(t) for t in task_builtin_tools]
+            else:
+                task.task_builtin_tools = task_builtin_tools
+        
+        # Restore simple private fields
+        if data.get("_response") is not None:
+            task._response = data["_response"]
+        if data.get("_context_formatted") is not None:
+            task._context_formatted = data["_context_formatted"]
+        if data.get("_tool_calls") is not None:
+            task._tool_calls = data["_tool_calls"]
+        if data.get("_cache_hit") is not None:
+            task._cache_hit = data["_cache_hit"]
+        if data.get("_original_input") is not None:
+            task._original_input = data["_original_input"]
+        if data.get("_run_id") is not None:
+            task._run_id = data["_run_id"]
+        if data.get("_last_cache_entry") is not None:
+            task._last_cache_entry = data["_last_cache_entry"]
+        
+        # Restore agent, cache_embedding_provider, _cache_manager if present
+        if data.get("agent") is not None:
+            task.agent = data["agent"]
+        if data.get("cache_embedding_provider") is not None:
+            task.cache_embedding_provider = data["cache_embedding_provider"]
+        if data.get("_cache_manager") is not None:
+            task._cache_manager = data["_cache_manager"]
+        
+        return task
+
+
+def _rebuild_task_model():
+    """Rebuild Task model after all dependencies are imported."""
+    try:
+        Task.model_rebuild()
+    except Exception:
+        pass
+_rebuild_task_model()

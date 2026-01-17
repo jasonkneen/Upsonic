@@ -78,13 +78,9 @@ class MemoryBackend:
         self._cache: Dict[str, FilesystemEntry] = {}  # In-memory cache
     
     async def _init(self) -> None:
-        """Lazy initialization - ensure storage is connected."""
+        """Lazy initialization - create root directory if needed."""
         if self._initialized:
             return
-        
-        # Ensure storage is connected
-        if not await self.storage.is_connected_async():
-            await self.storage.connect_async()
         
         # Create root directory if it doesn't exist
         root_path = "/"
@@ -177,11 +173,16 @@ class MemoryBackend:
         if path in self._cache:
             return self._cache[path]
         
-        # Read from storage
+        # Read from storage using generic model methods
         key = self._get_storage_key(path)
         
         try:
-            entry = await self.storage.read_async(key, FilesystemEntry)
+            # Check if storage is async or sync
+            from upsonic.storage.base import AsyncStorage
+            if isinstance(self.storage, AsyncStorage):
+                entry = await self.storage.aget_model(key, FilesystemEntry, self.COLLECTION_NAME)
+            else:
+                entry = self.storage.get_model(key, FilesystemEntry, self.COLLECTION_NAME)
             
             # Update cache
             if entry:
@@ -208,8 +209,13 @@ class MemoryBackend:
         else:
             entry.size = 0
         
-        # Write to storage using upsert
-        await self.storage.upsert_async(entry)
+        # Write to storage using generic model methods
+        key = self._get_storage_key(entry.path)
+        from upsonic.storage.base import AsyncStorage
+        if isinstance(self.storage, AsyncStorage):
+            await self.storage.aupsert_model(key, entry, self.COLLECTION_NAME)
+        else:
+            self.storage.upsert_model(key, entry, self.COLLECTION_NAME)
         
         # Update cache
         self._cache[entry.path] = entry
@@ -223,8 +229,12 @@ class MemoryBackend:
         """
         key = self._get_storage_key(path)
         
-        # Delete from storage
-        await self.storage.delete_async(key, FilesystemEntry)
+        # Delete from storage using generic model methods
+        from upsonic.storage.base import AsyncStorage
+        if isinstance(self.storage, AsyncStorage):
+            await self.storage.adelete_model(key, self.COLLECTION_NAME)
+        else:
+            self.storage.delete_model(key, self.COLLECTION_NAME)
         
         # Remove from cache
         if path in self._cache:
@@ -265,22 +275,26 @@ class MemoryBackend:
         """
         List all entries in the filesystem from storage.
         
-        Uses the Storage.list_all_async() method to query all FilesystemEntry objects.
-        Results are cached for performance.
+        Uses the Storage.list_models() or alist_models() method based on storage type
+        to query all FilesystemEntry objects. Results are cached for performance.
         
         Returns:
             List of all filesystem entries from storage
         """
         try:
             # Query all FilesystemEntry objects from storage
-            entries = await self.storage.list_all_async(FilesystemEntry)
+            from upsonic.storage.base import AsyncStorage
+            if isinstance(self.storage, AsyncStorage):
+                entries = await self.storage.alist_models(FilesystemEntry, self.COLLECTION_NAME)
+            else:
+                entries = self.storage.list_models(FilesystemEntry, self.COLLECTION_NAME)
             
             # Update cache with queried entries
             for entry in entries:
                 self._cache[entry.path] = entry
             
             return entries
-        except Exception as e:
+        except Exception:
             # Fallback to cache if query fails
             # This maintains backward compatibility
             return list(self._cache.values())

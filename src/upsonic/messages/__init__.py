@@ -1,3 +1,5 @@
 from .messages import *
 
-__all__ = ['messages']
+__all__ = [
+    'messages',
+]

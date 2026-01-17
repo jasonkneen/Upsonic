@@ -5,7 +5,7 @@ from unittest.mock import patch, AsyncMock
 from contextlib import asynccontextmanager
 
 from upsonic import Agent, Task
-from upsonic.agent.run_result import RunResult
+from upsonic.run.agent.output import AgentRunOutput
 from upsonic.models import ModelResponse, TextPart
 
 from upsonic.safety_engine import (
@@ -64,7 +64,7 @@ async def test_legal_info_block_confidential(mock_infer_model):
     
     confidential_task = Task(description="This document contains confidential information and attorney-client privilege. Please review it.")
     
-    result = agent_with_legal_policy.do(confidential_task)
+    result = await agent_with_legal_policy.do_async(confidential_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -108,7 +108,7 @@ async def test_legal_info_block_trade_secret(mock_infer_model):
 
     trade_secret_task = Task(description="Our proprietary formula and trade secret process involves patent number US1234567890.")
     
-    result = agent_with_legal_policy.do(trade_secret_task)
+    result = await agent_with_legal_policy.do_async(trade_secret_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -154,7 +154,7 @@ async def test_legal_info_anonymize_legal_document(mock_infer_model):
     
     legal_doc_task = Task(description="Case number ABC123456 is pending in court. Can you help me understand the status?")
     
-    result = agent_with_anonymize_policy.do(legal_doc_task)
+    result = await agent_with_anonymize_policy.do_async(legal_doc_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -198,7 +198,7 @@ async def test_legal_info_replace_business_sensitive(mock_infer_model):
     
     business_sensitive_task = Task(description="Our business plan includes revenue data and customer list information. Can you review it?")
     
-    result = agent_with_replace_policy.do(business_sensitive_task)
+    result = await agent_with_replace_policy.do_async(business_sensitive_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -242,7 +242,7 @@ async def test_legal_info_agent_policy_exception(mock_infer_model):
     
     legal_task = Task(description="Please provide an update on our legal proceedings.")
     
-    result = agent_with_legal_exception.do(legal_task)
+    result = await agent_with_legal_exception.do_async(legal_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -288,7 +288,7 @@ async def test_legal_info_llm_policy(mock_infer_model):
     
     complex_legal_task = Task(description="I need help with our internal investigation and regulatory compliance matter. This involves confidential attorney-client communications.")
     
-    result = agent_with_llm_policy.do(complex_legal_task)
+    result = await agent_with_llm_policy.do_async(complex_legal_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -328,7 +328,7 @@ async def test_legal_info_all_clear(mock_infer_model):
     
     safe_task = Task(description="What's the weather like today?")
     
-    result = plain_agent.do(safe_task)
+    result = await plain_agent.do_async(safe_task)
 
     # Final result check
     assert isinstance(result, str)

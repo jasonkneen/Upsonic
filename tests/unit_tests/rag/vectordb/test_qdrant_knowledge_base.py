@@ -60,15 +60,14 @@ class TestQdrantKnowledgeBaseIntegration:
     @pytest.fixture
     def knowledge_base(self, qdrant_provider, mock_embedding_provider, mock_chunker, mock_loader):
         """Create a Knowledge Base with QdrantProvider."""
-        with patch('upsonic.knowledge_base.knowledge_base.KnowledgeBase._update_search_docstring'):
-            return KnowledgeBase(
-                sources=["test_source.txt"],
-                embedding_provider=mock_embedding_provider,
-                vectordb=qdrant_provider,
-                splitters=mock_chunker,
-                loaders=mock_loader,
-                name="test_kb"
-            )
+        return KnowledgeBase(
+            sources=["test_source.txt"],
+            embedding_provider=mock_embedding_provider,
+            vectordb=qdrant_provider,
+            splitters=mock_chunker,
+            loaders=mock_loader,
+            name="test_kb"
+        )
     
     def test_qdrant_provider_initialization(self, qdrant_provider, qdrant_config):
         """Test QdrantProvider initialization."""
@@ -79,10 +78,14 @@ class TestQdrantKnowledgeBaseIntegration:
     @pytest.mark.asyncio
     async def test_qdrant_provider_connection(self, qdrant_provider):
         """Test QdrantProvider connection."""
-        await qdrant_provider.connect()
-        assert qdrant_provider._is_connected
-        assert qdrant_provider._client is not None
-        assert await qdrant_provider.is_ready()
+        try:
+            await qdrant_provider.connect()
+            assert qdrant_provider._is_connected
+            assert qdrant_provider._client is not None
+            assert await qdrant_provider.is_ready()
+        finally:
+            if qdrant_provider._is_connected:
+                await qdrant_provider.disconnect()
     
     @pytest.mark.asyncio
     async def test_qdrant_provider_disconnection(self, qdrant_provider):
@@ -97,194 +100,232 @@ class TestQdrantKnowledgeBaseIntegration:
     @pytest.mark.asyncio
     async def test_qdrant_collection_creation(self, qdrant_provider):
         """Test QdrantProvider collection creation."""
-        await qdrant_provider.connect()
-        assert not await qdrant_provider.collection_exists()
-        
-        await qdrant_provider.create_collection()
-        assert await qdrant_provider.collection_exists()
+        try:
+            await qdrant_provider.connect()
+            assert not await qdrant_provider.collection_exists()
+            
+            await qdrant_provider.create_collection()
+            assert await qdrant_provider.collection_exists()
+        finally:
+            if qdrant_provider._is_connected:
+                await qdrant_provider.disconnect()
     
     @pytest.mark.asyncio
     async def test_qdrant_collection_deletion(self, qdrant_provider):
         """Test QdrantProvider collection deletion."""
-        await qdrant_provider.connect()
-        await qdrant_provider.create_collection()
-        assert await qdrant_provider.collection_exists()
-        
-        await qdrant_provider.delete_collection()
-        assert not await qdrant_provider.collection_exists()
+        try:
+            await qdrant_provider.connect()
+            await qdrant_provider.create_collection()
+            assert await qdrant_provider.collection_exists()
+            
+            await qdrant_provider.delete_collection()
+            assert not await qdrant_provider.collection_exists()
+        finally:
+            if qdrant_provider._is_connected:
+                await qdrant_provider.disconnect()
     
     @pytest.mark.asyncio
     async def test_qdrant_upsert_operations(self, qdrant_provider):
         """Test QdrantProvider upsert operations."""
-        await qdrant_provider.connect()
-        await qdrant_provider.create_collection()
-        
-        # Test data
-        vectors = [[0.1] * 384, [0.2] * 384]
-        payloads = [{"source": "test1"}, {"source": "test2"}]
-        ids = ["550e8400-e29b-41d4-a716-446655440001", "550e8400-e29b-41d4-a716-446655440002"]
-        chunks = ["chunk1", "chunk2"]
-        
-        # Upsert data
-        await qdrant_provider.upsert(vectors, payloads, ids, chunks)
-        
-        # Verify data was stored
-        results = await qdrant_provider.fetch(ids)
-        assert len(results) == 2
-        assert results[0].id == "550e8400-e29b-41d4-a716-446655440001"
-        assert results[1].id == "550e8400-e29b-41d4-a716-446655440002"
+        try:
+            await qdrant_provider.connect()
+            await qdrant_provider.create_collection()
+            
+            # Test data
+            vectors = [[0.1] * 384, [0.2] * 384]
+            payloads = [{"source": "test1"}, {"source": "test2"}]
+            ids = ["550e8400-e29b-41d4-a716-446655440001", "550e8400-e29b-41d4-a716-446655440002"]
+            chunks = ["chunk1", "chunk2"]
+            
+            # Upsert data
+            await qdrant_provider.upsert(vectors, payloads, ids, chunks)
+            
+            # Verify data was stored
+            results = await qdrant_provider.fetch(ids)
+            assert len(results) == 2
+            assert results[0].id == "550e8400-e29b-41d4-a716-446655440001"
+            assert results[1].id == "550e8400-e29b-41d4-a716-446655440002"
+        finally:
+            if qdrant_provider._is_connected:
+                await qdrant_provider.disconnect()
     
     @pytest.mark.asyncio
     async def test_qdrant_search_operations(self, qdrant_provider):
         """Test QdrantProvider search operations."""
-        await qdrant_provider.connect()
-        await qdrant_provider.create_collection()
-        
-        # Insert test data
-        vectors = [[0.1] * 384, [0.2] * 384, [0.3] * 384]
-        payloads = [{"source": "test1"}, {"source": "test2"}, {"source": "test3"}]
-        ids = ["550e8400-e29b-41d4-a716-446655440001", "550e8400-e29b-41d4-a716-446655440002", "550e8400-e29b-41d4-a716-446655440003"]
-        chunks = ["chunk1", "chunk2", "chunk3"]
-        
-        await qdrant_provider.upsert(vectors, payloads, ids, chunks)
-        
-        # Test dense search
-        query_vector = [0.15] * 384
-        results = await qdrant_provider.dense_search(query_vector, top_k=2)
-        assert len(results) <= 2
-        assert all(isinstance(result, VectorSearchResult) for result in results)
+        try:
+            await qdrant_provider.connect()
+            await qdrant_provider.create_collection()
+            
+            # Insert test data
+            vectors = [[0.1] * 384, [0.2] * 384, [0.3] * 384]
+            payloads = [{"source": "test1"}, {"source": "test2"}, {"source": "test3"}]
+            ids = ["550e8400-e29b-41d4-a716-446655440001", "550e8400-e29b-41d4-a716-446655440002", "550e8400-e29b-41d4-a716-446655440003"]
+            chunks = ["chunk1", "chunk2", "chunk3"]
+            
+            await qdrant_provider.upsert(vectors, payloads, ids, chunks)
+            
+            # Test dense search
+            query_vector = [0.15] * 384
+            results = await qdrant_provider.dense_search(query_vector, top_k=2)
+            assert len(results) <= 2
+            assert all(isinstance(result, VectorSearchResult) for result in results)
+        finally:
+            if qdrant_provider._is_connected:
+                await qdrant_provider.disconnect()
     
     @pytest.mark.asyncio
     async def test_qdrant_delete_operations(self, qdrant_provider):
         """Test QdrantProvider delete operations."""
-        await qdrant_provider.connect()
-        await qdrant_provider.create_collection()
-        
-        # Insert test data
-        vectors = [[0.1] * 384, [0.2] * 384]
-        payloads = [{"source": "test1"}, {"source": "test2"}]
-        ids = ["550e8400-e29b-41d4-a716-446655440001", "550e8400-e29b-41d4-a716-446655440002"]
-        chunks = ["chunk1", "chunk2"]
-        
-        await qdrant_provider.upsert(vectors, payloads, ids, chunks)
-        
-        # Verify data exists
-        results = await qdrant_provider.fetch(ids)
-        assert len(results) == 2
-        
-        # Delete one item
-        await qdrant_provider.delete(["550e8400-e29b-41d4-a716-446655440001"])
-        
-        # Verify deletion
-        results = await qdrant_provider.fetch(ids)
-        assert len(results) == 1
-        assert results[0].id == "550e8400-e29b-41d4-a716-446655440002"
+        try:
+            await qdrant_provider.connect()
+            await qdrant_provider.create_collection()
+            
+            # Insert test data
+            vectors = [[0.1] * 384, [0.2] * 384]
+            payloads = [{"source": "test1"}, {"source": "test2"}]
+            ids = ["550e8400-e29b-41d4-a716-446655440001", "550e8400-e29b-41d4-a716-446655440002"]
+            chunks = ["chunk1", "chunk2"]
+            
+            await qdrant_provider.upsert(vectors, payloads, ids, chunks)
+            
+            # Verify data exists
+            results = await qdrant_provider.fetch(ids)
+            assert len(results) == 2
+            
+            # Delete one item
+            await qdrant_provider.delete(["550e8400-e29b-41d4-a716-446655440001"])
+            
+            # Verify deletion
+            results = await qdrant_provider.fetch(ids)
+            assert len(results) == 1
+            assert results[0].id == "550e8400-e29b-41d4-a716-446655440002"
+        finally:
+            if qdrant_provider._is_connected:
+                await qdrant_provider.disconnect()
     
     @pytest.mark.asyncio
     async def test_knowledge_base_setup_with_qdrant(self, knowledge_base):
         """Test Knowledge Base setup with QdrantProvider."""
-        # Mock the vectordb methods
-        knowledge_base.vectordb.connect = AsyncMock()
-        knowledge_base.vectordb.create_collection = AsyncMock()
-        knowledge_base.vectordb.upsert = AsyncMock()
-        knowledge_base.vectordb.collection_exists = AsyncMock(return_value=False)
-        knowledge_base.vectordb.is_ready = AsyncMock(return_value=True)
-        
-        # Mock the embedding provider - return 1 vector per chunk
-        async def mock_embed_documents(chunks):
-            return [[0.1] * 384] * len(chunks)
-        knowledge_base.embedding_provider.embed_documents = AsyncMock(side_effect=mock_embed_documents)
-        
-        # Setup the knowledge base
-        await knowledge_base.setup_async()
-        
-        # Verify setup was called
-        knowledge_base.vectordb.connect.assert_called_once()
-        knowledge_base.vectordb.create_collection.assert_called_once()
-        knowledge_base.vectordb.upsert.assert_called_once()
+        try:
+            # Mock the vectordb methods
+            knowledge_base.vectordb.connect = AsyncMock()
+            knowledge_base.vectordb.create_collection = AsyncMock()
+            knowledge_base.vectordb.upsert = AsyncMock()
+            knowledge_base.vectordb.collection_exists = AsyncMock(return_value=False)
+            knowledge_base.vectordb.is_ready = AsyncMock(return_value=True)
+            knowledge_base.vectordb.disconnect = AsyncMock()
+            
+            # Mock the embedding provider - return 1 vector per chunk
+            async def mock_embed_documents(chunks):
+                return [[0.1] * 384] * len(chunks)
+            knowledge_base.embedding_provider.embed_documents = AsyncMock(side_effect=mock_embed_documents)
+            
+            # Setup the knowledge base
+            await knowledge_base.setup_async()
+            
+            # Verify setup was called
+            knowledge_base.vectordb.connect.assert_called_once()
+            knowledge_base.vectordb.create_collection.assert_called_once()
+            knowledge_base.vectordb.upsert.assert_called_once()
+        finally:
+            if hasattr(knowledge_base.vectordb, 'disconnect') and knowledge_base.vectordb._is_connected:
+                await knowledge_base.vectordb.disconnect()
     
     @pytest.mark.asyncio
     async def test_knowledge_base_query_with_qdrant(self, knowledge_base):
         """Test Knowledge Base query with QdrantProvider."""
-        # Mock the vectordb methods
-        knowledge_base.vectordb.connect = AsyncMock()
-        knowledge_base.vectordb.create_collection = AsyncMock()
-        knowledge_base.vectordb.upsert = AsyncMock()
-        knowledge_base.vectordb.collection_exists = AsyncMock(return_value=False)
-        knowledge_base.vectordb.is_ready = AsyncMock(return_value=True)
-        knowledge_base.vectordb.search = AsyncMock(return_value=[
-            create_mock_vector_search_result("id1", 0.9, "Test result 1"),
-            create_mock_vector_search_result("id2", 0.8, "Test result 2")
-        ])
-        
-        # Mock the embedding provider - return 1 vector per chunk
-        async def mock_embed_documents(chunks):
-            return [[0.1] * 384] * len(chunks)
-        knowledge_base.embedding_provider.embed_documents = AsyncMock(side_effect=mock_embed_documents)
-        knowledge_base.embedding_provider.embed_query = AsyncMock(return_value=[0.15] * 384)
-        
-        # Setup the knowledge base
-        await knowledge_base.setup_async()
-        
-        # Query the knowledge base
-        results = await knowledge_base.query_async("test query")
-        
-        # Verify results
-        assert len(results) == 2
-        assert all(isinstance(result, RAGSearchResult) for result in results)
-        assert results[0].text == "Test result 1"
-        assert results[1].text == "Test result 2"
+        try:
+            # Mock the vectordb methods
+            knowledge_base.vectordb.connect = AsyncMock()
+            knowledge_base.vectordb.create_collection = AsyncMock()
+            knowledge_base.vectordb.upsert = AsyncMock()
+            knowledge_base.vectordb.collection_exists = AsyncMock(return_value=False)
+            knowledge_base.vectordb.is_ready = AsyncMock(return_value=True)
+            knowledge_base.vectordb.disconnect = AsyncMock()
+            knowledge_base.vectordb.search = AsyncMock(return_value=[
+                create_mock_vector_search_result("id1", 0.9, "Test result 1"),
+                create_mock_vector_search_result("id2", 0.8, "Test result 2")
+            ])
+            
+            # Mock the embedding provider - return 1 vector per chunk
+            async def mock_embed_documents(chunks):
+                return [[0.1] * 384] * len(chunks)
+            knowledge_base.embedding_provider.embed_documents = AsyncMock(side_effect=mock_embed_documents)
+            knowledge_base.embedding_provider.embed_query = AsyncMock(return_value=[0.15] * 384)
+            
+            # Setup the knowledge base
+            await knowledge_base.setup_async()
+            
+            # Query the knowledge base
+            results = await knowledge_base.query_async("test query")
+            
+            # Verify results
+            assert len(results) == 2
+            assert all(isinstance(result, RAGSearchResult) for result in results)
+            assert results[0].text == "Test result 1"
+            assert results[1].text == "Test result 2"
+        finally:
+            if hasattr(knowledge_base.vectordb, 'disconnect') and knowledge_base.vectordb._is_connected:
+                await knowledge_base.vectordb.disconnect()
     
     @pytest.mark.asyncio
     async def test_qdrant_hybrid_search(self, qdrant_provider):
         """Test QdrantProvider hybrid search functionality."""
-        await qdrant_provider.connect()
-        await qdrant_provider.create_collection()
-        
-        # Insert test data
-        vectors = [[0.1] * 384, [0.2] * 384]
-        payloads = [{"source": "test1"}, {"source": "test2"}]
-        ids = ["550e8400-e29b-41d4-a716-446655440001", "550e8400-e29b-41d4-a716-446655440002"]
-        chunks = ["chunk1", "chunk2"]
-        
-        await qdrant_provider.upsert(vectors, payloads, ids, chunks)
-        
-        # Test hybrid search
-        query_vector = [0.15] * 384
-        query_text = "test query"
-        
-        # Mock the individual search methods
-        qdrant_provider.dense_search = AsyncMock(return_value=[
-            create_mock_vector_search_result("id1", 0.9, "Test result 1")
-        ])
-        qdrant_provider.full_text_search = AsyncMock(return_value=[
-            create_mock_vector_search_result("id2", 0.8, "Test result 2")
-        ])
-        
-        results = await qdrant_provider.hybrid_search(query_vector, query_text, top_k=2)
-        
-        # Verify hybrid search was called
-        qdrant_provider.dense_search.assert_called_once()
-        qdrant_provider.full_text_search.assert_called_once()
+        try:
+            await qdrant_provider.connect()
+            await qdrant_provider.create_collection()
+            
+            # Insert test data
+            vectors = [[0.1] * 384, [0.2] * 384]
+            payloads = [{"source": "test1"}, {"source": "test2"}]
+            ids = ["550e8400-e29b-41d4-a716-446655440001", "550e8400-e29b-41d4-a716-446655440002"]
+            chunks = ["chunk1", "chunk2"]
+            
+            await qdrant_provider.upsert(vectors, payloads, ids, chunks)
+            
+            # Test hybrid search
+            query_vector = [0.15] * 384
+            query_text = "test query"
+            
+            # Mock the individual search methods
+            qdrant_provider.dense_search = AsyncMock(return_value=[
+                create_mock_vector_search_result("id1", 0.9, "Test result 1")
+            ])
+            qdrant_provider.full_text_search = AsyncMock(return_value=[
+                create_mock_vector_search_result("id2", 0.8, "Test result 2")
+            ])
+            
+            results = await qdrant_provider.hybrid_search(query_vector, query_text, top_k=2)
+            
+            # Verify hybrid search was called
+            qdrant_provider.dense_search.assert_called_once()
+            qdrant_provider.full_text_search.assert_called_once()
+        finally:
+            if qdrant_provider._is_connected:
+                await qdrant_provider.disconnect()
     
     @pytest.mark.asyncio
     async def test_qdrant_full_text_search(self, qdrant_provider):
         """Test QdrantProvider full-text search."""
-        await qdrant_provider.connect()
-        await qdrant_provider.create_collection()
-        
-        # Insert test data
-        vectors = [[0.1] * 384, [0.2] * 384]
-        payloads = [{"source": "test1"}, {"source": "test2"}]
-        ids = ["550e8400-e29b-41d4-a716-446655440001", "550e8400-e29b-41d4-a716-446655440002"]
-        chunks = ["chunk1", "chunk2"]
-        
-        await qdrant_provider.upsert(vectors, payloads, ids, chunks)
-        
-        # Test full-text search
-        results = await qdrant_provider.full_text_search("chunk", top_k=2)
-        assert len(results) <= 2
-        assert all(isinstance(result, VectorSearchResult) for result in results)
+        try:
+            await qdrant_provider.connect()
+            await qdrant_provider.create_collection()
+            
+            # Insert test data
+            vectors = [[0.1] * 384, [0.2] * 384]
+            payloads = [{"source": "test1"}, {"source": "test2"}]
+            ids = ["550e8400-e29b-41d4-a716-446655440001", "550e8400-e29b-41d4-a716-446655440002"]
+            chunks = ["chunk1", "chunk2"]
+            
+            await qdrant_provider.upsert(vectors, payloads, ids, chunks)
+            
+            # Test full-text search
+            results = await qdrant_provider.full_text_search("chunk", top_k=2)
+            assert len(results) <= 2
+            assert all(isinstance(result, VectorSearchResult) for result in results)
+        finally:
+            if qdrant_provider._is_connected:
+                await qdrant_provider.disconnect()
     
     def test_qdrant_filter_operations(self, qdrant_provider):
         """Test QdrantProvider filter operations (mocked)."""
@@ -362,14 +403,18 @@ class TestQdrantKnowledgeBaseIntegration:
     @pytest.mark.asyncio
     async def test_qdrant_collection_recreation(self, qdrant_provider):
         """Test QdrantProvider collection recreation."""
-        await qdrant_provider.connect()
-        
-        # Create collection
-        await qdrant_provider.create_collection()
-        assert await qdrant_provider.collection_exists()
-        
-        # Test that collection exists
-        assert await qdrant_provider.collection_exists()
+        try:
+            await qdrant_provider.connect()
+            
+            # Create collection
+            await qdrant_provider.create_collection()
+            assert await qdrant_provider.collection_exists()
+            
+            # Test that collection exists
+            assert await qdrant_provider.collection_exists()
+        finally:
+            if qdrant_provider._is_connected:
+                await qdrant_provider.disconnect()
     
     def test_qdrant_distance_metrics(self, qdrant_provider):
         """Test QdrantProvider with different distance metrics."""

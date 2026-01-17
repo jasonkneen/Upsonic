@@ -39,37 +39,80 @@ class CallManager:
         self.model_response = model_response
         return self.model_response
     
+    async def aprepare(self) -> None:
+        """Prepare the call by recording start time."""
+        self.start_time = time.time()
+    
+    async def afinalize(self) -> None:
+        """Finalize the call by setting end time."""
+        # Only set end_time if not already set (may be set from context.model_end_time)
+        if self.end_time is None:
+            self.end_time = time.time()
+        
+        # Ensure start_time is set (fallback to end_time if not set)
+        if self.start_time is None:
+            self.start_time = self.end_time
+    
+    async def alog_completion(self, context) -> None:
+        """Log the completion with usage tracking and call_end.
+        
+        Args:
+            context: AgentRunOutput object containing messages and output.
+        """
+        # Only call call_end if we have a context
+        if context is not None:
+            # Lazy import for heavy modules
+            from upsonic.utils.llm_usage import llm_usage
+            from upsonic.utils.tool_usage import tool_usage
+            from upsonic.utils.printing import call_end
+            
+            # Calculate usage and tool usage from context (AgentRunOutput)
+            usage = llm_usage(context)
+            if self.show_tool_calls:
+                tool_usage_result = tool_usage(context, self.task)
+            else:
+                tool_usage_result = None
+            # Call the end logging
+            call_end(
+                context.output,
+                self.model,
+                self.task.response_format,
+                self.start_time,
+                self.end_time,
+                usage,
+                tool_usage_result,
+                self.debug,
+                self.task.price_id
+            )
+    
+    def prepare(self) -> None:
+        """Synchronous version of aprepare."""
+        import asyncio
+        asyncio.get_event_loop().run_until_complete(self.aprepare())
+    
+    def finalize(self) -> None:
+        """Synchronous version of afinalize."""
+        import asyncio
+        asyncio.get_event_loop().run_until_complete(self.afinalize())
+    
+    def log_completion(self, context) -> None:
+        """Synchronous version of alog_completion."""
+        import asyncio
+        asyncio.get_event_loop().run_until_complete(self.alog_completion(context))
+    
     @asynccontextmanager
     async def manage_call(self):
-        self.start_time = time.time()
+        """
+        Async context manager for call lifecycle.
+        
+        Note: This context manager is kept for backward compatibility.
+        For step-based architecture, use aprepare() and afinalize() directly.
+        """
+        await self.aprepare()
         
         try:
             yield self
         finally:
-            self.end_time = time.time()
-            
-            # Only call call_end if we have a model response
-            if self.model_response is not None:
-                # Lazy import for heavy modules
-                from upsonic.utils.llm_usage import llm_usage
-                from upsonic.utils.tool_usage import tool_usage
-                from upsonic.utils.printing import call_end
-                
-                # Calculate usage and tool usage
-                usage = llm_usage(self.model_response)
-                if self.show_tool_calls:
-                    tool_usage_result = tool_usage(self.model_response, self.task)
-                else:
-                    tool_usage_result = None
-                # Call the end logging
-                call_end(
-                    self.model_response.output,
-                    self.model,
-                    self.task.response_format,
-                    self.start_time,
-                    self.end_time,
-                    usage,
-                    tool_usage_result,
-                    self.debug,
-                    self.task.price_id
-                )
+            await self.afinalize()
+            # Note: alog_completion requires context, so it's not called here
+            # It should be called explicitly from the step that has access to context

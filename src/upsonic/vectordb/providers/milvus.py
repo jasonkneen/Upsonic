@@ -9,6 +9,7 @@ A comprehensive, high-level implementation supporting:
 - Compatible with Milvus 2.6+ API
 """
 
+import asyncio
 import json
 import uuid
 from hashlib import md5
@@ -208,15 +209,32 @@ class MilvusProvider(BaseVectorDBProvider):
 
     async def disconnect(self) -> None:
         """Disconnect from Milvus."""
+        if not self._is_connected:
+            return
+        
         try:
             # Close clients if they exist
             if self._async_client:
-                await self._async_client.close()
-                self._async_client = None
+                try:
+                    # Use timeout to prevent hanging
+                    await asyncio.wait_for(self._async_client.close(), timeout=2.0)
+                except asyncio.TimeoutError:
+                    error_log("Timeout closing async client, forcing cleanup", context="MilvusProvider")
+                except Exception as e:
+                    error_log(f"Error closing async client: {e}", context="MilvusProvider")
+                finally:
+                    self._async_client = None
             
             if self._sync_client:
-                self._sync_client.close()
-                self._sync_client = None
+                try:
+                    self._sync_client.close()
+                except Exception as e:
+                    error_log(f"Error closing sync client: {e}", context="MilvusProvider")
+                finally:
+                    self._sync_client = None
+            
+            # Small delay to allow embedded server to clean up
+            await asyncio.sleep(0.1)
             
             self._is_connected = False
             info_log("Disconnected from Milvus", context="MilvusProvider")
@@ -227,15 +245,13 @@ class MilvusProvider(BaseVectorDBProvider):
         """Check if Milvus is ready and responsive."""
         try:
             # Try to list collections as a health check
-            collections = await self._aclient.list_collections()
+            _ = await self._aclient.list_collections()
             return True
         except Exception as e:
             logger.debug(f"Milvus health check failed: {e}")
             return False
 
-    # ============================================================================
-    # Collection Management (Async-First)
-    # ============================================================================
+
 
     async def collection_exists(self) -> bool:
         """Check if collection exists."""

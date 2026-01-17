@@ -5,7 +5,7 @@ from unittest.mock import patch, AsyncMock
 from contextlib import asynccontextmanager
 
 from upsonic import Agent, Task
-from upsonic.agent.run_result import RunResult
+from upsonic.run.agent.output import AgentRunOutput
 from upsonic.models import ModelResponse, TextPart
 
 from upsonic.safety_engine import (
@@ -56,6 +56,8 @@ async def test_data_privacy_block_gdpr_violation(mock_infer_model):
         def __init__(self):
             self.settings = {}
             self.model_name = "test-model"
+            self.system = None
+            self.profile = None
         
         async def request(self, *args, **kwargs):
             return mock_response
@@ -74,7 +76,7 @@ async def test_data_privacy_block_gdpr_violation(mock_infer_model):
     
     gdpr_task = Task(description="I want to collect personal data without consent and share it with third parties.")
     
-    result = agent_with_data_privacy_policy.do(gdpr_task)
+    result = await agent_with_data_privacy_policy.do_async(gdpr_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -110,6 +112,8 @@ async def test_data_privacy_block_data_breach(mock_infer_model):
         def __init__(self):
             self.settings = {}
             self.model_name = "test-model"
+            self.system = None
+            self.profile = None
         
         async def request(self, *args, **kwargs):
             return mock_response
@@ -128,7 +132,7 @@ async def test_data_privacy_block_data_breach(mock_infer_model):
 
     breach_task = Task(description="Our database was hacked and personal information was exposed to unauthorized parties.")
     
-    result = agent_with_data_privacy_policy.do(breach_task)
+    result = await agent_with_data_privacy_policy.do_async(breach_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -166,6 +170,8 @@ async def test_data_privacy_anonymize_consent_violation(mock_infer_model):
         def __init__(self):
             self.settings = {}
             self.model_name = "test-model"
+            self.system = None
+            self.profile = None
         
         async def request(self, *args, **kwargs):
             return mock_response
@@ -184,7 +190,7 @@ async def test_data_privacy_anonymize_consent_violation(mock_infer_model):
     
     consent_task = Task(description="We process personal data without proper consent and use pre-ticked boxes for agreement.")
     
-    result = agent_with_anonymize_policy.do(consent_task)
+    result = await agent_with_anonymize_policy.do_async(consent_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -220,6 +226,8 @@ async def test_data_privacy_replace_children_data(mock_infer_model):
         def __init__(self):
             self.settings = {}
             self.model_name = "test-model"
+            self.system = None
+            self.profile = None
         
         async def request(self, *args, **kwargs):
             return mock_response
@@ -238,7 +246,7 @@ async def test_data_privacy_replace_children_data(mock_infer_model):
     
     children_data_task = Task(description="We collect personal data from children under 16 without parental consent.")
     
-    result = agent_with_replace_policy.do(children_data_task)
+    result = await agent_with_replace_policy.do_async(children_data_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -275,6 +283,8 @@ async def test_data_privacy_agent_policy_exception(mock_infer_model):
         def __init__(self):
             self.settings = {}
             self.model_name = "test-model"
+            self.system = None
+            self.profile = None
         
         async def request(self, *args, **kwargs):
             return mock_response
@@ -293,7 +303,7 @@ async def test_data_privacy_agent_policy_exception(mock_infer_model):
     
     data_privacy_task = Task(description="Please explain data protection concepts.")
     
-    result = agent_with_data_privacy_exception.do(data_privacy_task)
+    result = await agent_with_data_privacy_exception.do_async(data_privacy_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -331,6 +341,8 @@ async def test_data_privacy_llm_policy(mock_infer_model):
         def __init__(self):
             self.settings = {}
             self.model_name = "test-model"
+            self.system = None
+            self.profile = None
         
         async def request(self, *args, **kwargs):
             return mock_response
@@ -349,7 +361,7 @@ async def test_data_privacy_llm_policy(mock_infer_model):
     
     complex_data_privacy_task = Task(description="We need to transfer personal data to third countries without adequacy decisions and use automated decision making without human oversight.")
     
-    result = agent_with_llm_policy.do(complex_data_privacy_task)
+    result = await agent_with_llm_policy.do_async(complex_data_privacy_task)
     
     # Final result check
     assert isinstance(result, str)
@@ -385,6 +397,8 @@ async def test_data_privacy_all_clear(mock_infer_model):
         def __init__(self):
             self.settings = {}
             self.model_name = "test-model"
+            self.system = None
+            self.profile = None
         
         async def request(self, *args, **kwargs):
             return mock_response
@@ -399,7 +413,7 @@ async def test_data_privacy_all_clear(mock_infer_model):
     
     safe_task = Task(description="What's the weather like today?")
     
-    result = plain_agent.do(safe_task)
+    result = await plain_agent.do_async(safe_task)
 
     # Final result check
     assert isinstance(result, str)
