@@ -9,13 +9,14 @@ from upsonic.agent.agent import Agent
 from upsonic.run.agent.output import AgentRunOutput
 from upsonic.tasks.tasks import Task
 from upsonic.storage.memory.memory import Memory
-from upsonic.storage.providers.in_memory import InMemoryStorage
+from upsonic.storage.in_memory import InMemoryStorage
 from upsonic.models import Model
 from upsonic.messages.messages import (
     ModelRequest, ModelResponse, TextPart, PartStartEvent, 
     PartDeltaEvent, FinalResultEvent, UserPromptPart, SystemPromptPart,
     TextPartDelta
 )
+from upsonic.usage import RequestUsage
 
 
 class MockModel(Model):
@@ -44,7 +45,7 @@ class MockModel(Model):
             parts=[TextPart(content="Hello world!")],
             model_name=self._model_name,
             timestamp=time.time(),
-            usage=Mock(),
+            usage=RequestUsage(input_tokens=10, output_tokens=5, details={}),
             provider_name="test-provider",
             provider_response_id="test-id",
             provider_details={},
@@ -81,7 +82,7 @@ class MockModel(Model):
             parts=[TextPart(content="Hello world!")],
             model_name=self._model_name,
             timestamp=time.time(),
-            usage=Mock(),
+            usage=RequestUsage(input_tokens=10, output_tokens=5, details={}),
             provider_name="test-provider",
             provider_response_id="test-id",
             provider_details={},

@@ -143,7 +143,9 @@ EXPECTED = {
     },
 }
 
+import pytest
 
+@pytest.mark.parametrize("mode", MODES)
 def test_mode_scenarios(mode: str, debug: bool = False):
     """Test all scenarios for a given mode."""
     header(f"MODE = '{mode}'")

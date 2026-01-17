@@ -16,7 +16,7 @@ import shutil
 from upsonic import Agent, Task
 from upsonic.agent.deepagent import DeepAgent
 from upsonic.agent.deepagent.backends import StateBackend, MemoryBackend, CompositeBackend
-from upsonic.storage.providers import InMemoryStorage, SqliteStorage
+from upsonic.storage import InMemoryStorage, AsyncSqliteStorage
 from io import StringIO
 from contextlib import redirect_stdout
 
@@ -159,15 +159,14 @@ async def test_deepagent_with_subagents():
 async def test_deepagent_with_memory_backend_sqlite(sqlite_db_file):
     """Test DeepAgent with MemoryBackend using SqliteStorage."""
     # Create storage and backend
-    storage = SqliteStorage(
+    storage = AsyncSqliteStorage(
         db_file=sqlite_db_file,
-        agent_sessions_table_name="sessions",
-        cultural_knowledge_table_name="profiles"
+        session_table="sessions",
+        user_memory_table="profiles"
     )
-    await storage.connect_async()
-    await storage.create_async()
     
     backend = MemoryBackend(storage)
+    
     agent = DeepAgent(
         model="openai/gpt-4o",
         name="Test DeepAgent",
@@ -206,7 +205,7 @@ async def test_deepagent_with_memory_backend_sqlite(sqlite_db_file):
     assert "write_file" in output.lower() or "file" in output.lower(), f"Should see file operation logs. Output: {output[:500]}"
     
     # Cleanup
-    await storage.disconnect_async()
+    await storage.close()
 
 
 @pytest.mark.asyncio
@@ -214,9 +213,6 @@ async def test_deepagent_with_composite_backend():
     """Test DeepAgent with CompositeBackend."""
     # Create multiple backends
     memory_storage = InMemoryStorage()
-    await memory_storage.connect_async()
-    await memory_storage.create_async()
-    
     memory_backend = MemoryBackend(memory_storage)
     state_backend = StateBackend()
     
@@ -271,9 +267,6 @@ async def test_deepagent_with_composite_backend():
     
     # Verify logs show composite backend usage
     assert "write_file" in output.lower() or "file" in output.lower(), f"Should see file operation logs. Output: {output[:500]}"
-    
-    # Cleanup
-    await memory_storage.disconnect_async()
 
 
 @pytest.mark.asyncio

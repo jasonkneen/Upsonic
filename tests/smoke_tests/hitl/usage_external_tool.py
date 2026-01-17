@@ -38,7 +38,8 @@ def send_email(to: str, subject: str, body: str) -> str:
     Returns:
         Confirmation message
     """
-    pass
+    # In a real implementation, this would call an email service
+    return f"Email sent successfully to {to} with subject '{subject}'"
 
 
 @tool(external_execution=True)
@@ -52,7 +53,8 @@ def execute_database_query(query: str) -> str:
     Returns:
         Query results
     """
-    pass
+    # In a real implementation, this would execute the query
+    return f"Query executed: {query} | Results: 10 rows returned"
 
 
 @tool(external_execution=True)
@@ -67,7 +69,8 @@ def call_external_api(endpoint: str, payload: dict = None) -> dict:
     Returns:
         API response
     """
-    pass
+    # In a real implementation, this would call the API
+    return {"status": "success", "data": {"message": f"API called at {endpoint}"}}
 
 
 # ============================================================================
@@ -85,18 +88,14 @@ def execute_tool_externally(requirement) -> str:
     tool_args = tool_exec.tool_args
     
     if tool_name == "send_email":
-        return f"Email sent successfully to {tool_args.get('to', 'unknown')}"
-    
+        return send_email(**tool_args)
     elif tool_name == "execute_database_query":
-        query = tool_args.get("query", "")
-        return f"Query executed: {query} | Results: 10 rows returned"
-    
+        return execute_database_query(**tool_args)
     elif tool_name == "call_external_api":
-        endpoint = tool_args.get("endpoint", "https://api.example.com")
-        return str({"status": "success", "data": {"message": f"API called at {endpoint}"}})
-    
+        result = call_external_api(**tool_args)
+        return str(result) if isinstance(result, dict) else result
     else:
-        return f"Executed external tool: {tool_name}"
+        raise ValueError(f"Unknown tool: {tool_name}")
 
 
 # ============================================================================

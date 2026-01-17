@@ -12,7 +12,7 @@ import pytest
 
 from upsonic import Agent, Task
 from upsonic.agent.deepagent import DeepAgent, Todo
-from upsonic.storage.providers.in_memory import InMemoryStorage
+from upsonic.storage.in_memory import InMemoryStorage
 from upsonic.storage.memory.memory import Memory
 
 
@@ -125,9 +125,9 @@ class TestDeepAgentDoMethods(unittest.TestCase):
         self.assertEqual(result, "Test response")
         mock_base_do_async.assert_called_once()
 
+    @pytest.mark.asyncio
     @patch("upsonic.models.infer_model")
     @patch("upsonic.agent.agent.Agent.do_async")
-    @pytest.mark.asyncio
     async def test_deep_agent_do_async(self, mock_base_do_async, mock_infer_model):
         """Test async execution."""
         mock_infer_model.return_value = self.mock_model
@@ -191,7 +191,6 @@ class TestDeepAgentFileOperations(unittest.TestCase):
     @pytest.mark.asyncio
     async def test_deep_agent_add_file(self):
         """Test adding files to virtual filesystem."""
-        import asyncio
         await self.agent.filesystem_backend.write("/app/main.py", "def hello(): pass")
 
         content = await self.agent.filesystem_backend.read("/app/main.py")
@@ -460,9 +459,9 @@ class TestDeepAgentSubagentSpawning(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.agent.add_subagent(subagent)
 
+    @pytest.mark.asyncio
     @patch("upsonic.models.infer_model")
     @patch("upsonic.agent.agent.Agent.do_async")
-    @pytest.mark.asyncio
     async def test_deep_agent_execute_subagent_general_purpose(
         self, mock_do_async, mock_infer_model
     ):
@@ -476,9 +475,9 @@ class TestDeepAgentSubagentSpawning(unittest.TestCase):
 
         self.assertEqual(result, "Subagent result")
 
+    @pytest.mark.asyncio
     @patch("upsonic.models.infer_model")
     @patch("upsonic.agent.agent.Agent.do_async")
-    @pytest.mark.asyncio
     async def test_deep_agent_execute_subagent_named(
         self, mock_do_async, mock_infer_model
     ):

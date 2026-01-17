@@ -62,6 +62,7 @@ async def cancel_direct_call_with_run_id_same_agent():
     if output.status == RunStatus.cancelled:
         print(f"  Run was cancelled, resuming...")
         result = await agent.continue_run_async(run_id=output.run_id, return_output=True)
+        print(f"  Result: {result}")
         return result
     
     return output

@@ -40,7 +40,7 @@ async def main():
     from upsonic.session.agent import AgentSession
     import json
     
-    session = await chat._memory.storage.read_async(chat.session_id, AgentSession)
+    session = chat._memory.storage.get_session(session_id=chat.session_id)
     if session and session.user_profile:
         print("=" * 60)
         print("Extracted Profile Data:")

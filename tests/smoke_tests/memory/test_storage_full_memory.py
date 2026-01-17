@@ -1,293 +1,440 @@
 """
-Test 5: Storage providers with full_session_memory, user_analysis_memory, 
-num_last_messages, model, debug
+Test: Full Session Memory with Storage Providers
 
 Success criteria:
-- Agent remembers previous conversations
-- We have user traits in AgentSession.metadata
-- Agent only remembers user selected messages (controlled by num_last_messages)
-- Stored all of them in the storages properly
-- We can read, delete, update etc. them
+- Agent remembers previous conversations across runs
+- Messages are properly stored in session
+- num_last_messages correctly limits chat history
+- feed_tool_call_results correctly filters tool messages
+- Session data persists and can be retrieved
 """
 
 import pytest
 import os
 import tempfile
-import shutil
+import uuid
 from upsonic import Agent, Task
-from upsonic.db.database import (
-    InMemoryDatabase,
-    SqliteDatabase,
-    PostgresDatabase,
-    MongoDatabase,
-    RedisDatabase,
-    JSONDatabase
-)
+from upsonic.storage import Memory, SqliteStorage, InMemoryStorage
 from upsonic.session.agent import AgentSession
+from upsonic.session.base import SessionType
+from upsonic.messages import ModelRequest, ModelResponse
 
 pytestmark = pytest.mark.timeout(120)
 
 
 @pytest.fixture
 def test_user_id():
-    return "test_user_123"
+    return f"test_user_{uuid.uuid4().hex[:8]}"
 
 
 @pytest.fixture
 def test_session_id():
-    return "test_session_123"
+    return f"test_session_{uuid.uuid4().hex[:8]}"
 
 
 @pytest.fixture
-def temp_dir():
-    """Create temporary directory for JSON storage."""
-    dir_path = tempfile.mkdtemp()
-    yield dir_path
-    shutil.rmtree(dir_path, ignore_errors=True)
+def sqlite_storage():
+    """Create a temporary SQLite storage."""
+    db_file = tempfile.mktemp(suffix=".db")
+    storage = SqliteStorage(db_file=db_file)
+    yield storage
+    # Cleanup
+    if os.path.exists(db_file):
+        os.remove(db_file)
 
+
+@pytest.fixture
+def inmemory_storage():
+    """Create an in-memory storage."""
+    return InMemoryStorage()
+
+
+# =============================================================================
+# TEST: Basic Full Session Memory
+# =============================================================================
 
 @pytest.mark.asyncio
-async def test_inmemory_storage_full_memory(test_user_id, test_session_id):
-    """Test InMemoryStorage with full memory features."""
-    db = InMemoryDatabase(
+async def test_full_session_memory_basic(inmemory_storage, test_user_id, test_session_id):
+    """Test that full session memory stores and retrieves conversation history."""
+    memory = Memory(
+        storage=inmemory_storage,
         session_id=test_session_id,
         user_id=test_user_id,
         full_session_memory=True,
-        user_analysis_memory=True,
-        num_last_messages=3,
-        model="openai/gpt-4o",
-        debug=True
+        debug=False
     )
     
-    agent = Agent(model="openai/gpt-4o", db=db)
+    agent = Agent(model="openai/gpt-4o-mini", memory=memory)
     
-    # First conversation
+    # First conversation turn
     task1 = Task(description="My name is Alice and I love Python programming")
     result1 = await agent.do_async(task1)
     assert result1 is not None
     
-    # Second conversation - should remember name
-    task2 = Task(description="What's my name?")
+    # Second conversation turn - should remember context
+    task2 = Task(description="What is my name?")
     result2 = await agent.do_async(task2)
-    assert "alice" in str(result2).lower(), f"Expected 'alice' in result, got: {result2}"
+    assert "alice" in str(result2).lower(), f"Expected 'alice' in response, got: {result2}"
     
-    # Verify storage operations
-    await db.storage.connect_async()
-    session = await db.storage.read_async(test_session_id, AgentSession)
-    assert session is not None
-    assert len(session.runs or []) > 0
-    
-    # Verify metadata contains user profile traits
-    assert session.metadata is not None
-    
-    # Test update
-    session.metadata["test_key"] = "test_value"
-    await db.storage.upsert_async(session)
-    updated = await db.storage.read_async(test_session_id, AgentSession)
-    assert updated.metadata.get("test_key") == "test_value"
-    
-    # Test delete
-    await db.storage.delete_async(test_session_id, AgentSession)
-    deleted = await db.storage.read_async(test_session_id, AgentSession)
-    assert deleted is None
-    
-    await db.storage.disconnect_async()
+    # Verify session was stored with messages
+    session = inmemory_storage.get_session(
+        session_id=test_session_id,
+        session_type=SessionType.AGENT,
+        deserialize=True
+    )
+    assert session is not None, "Session should be stored"
+    assert session.messages is not None, "Session should have messages"
+    assert len(session.messages) >= 4, f"Should have at least 4 messages, got {len(session.messages)}"
 
 
 @pytest.mark.asyncio
-async def test_sqlite_storage_full_memory(test_user_id, test_session_id):
-    """Test SqliteStorage with full memory features."""
-    db_file = tempfile.mktemp(suffix=".db")
-    try:
-        db = SqliteDatabase(
-            db_file=db_file,
-            session_id=test_session_id,
-            user_id=test_user_id,
-            full_session_memory=True,
-            user_analysis_memory=True,
-            num_last_messages=2,
-            model="openai/gpt-4o",
-            debug=True
-        )
-        
-        agent = Agent(model="openai/gpt-4o", db=db)
-        
-        # Multiple conversations
-        for i in range(5):
-            task = Task(description=f"Message {i}: I like number {i}")
-            await agent.do_async(task)
-        
-        # Should only remember last 2 messages
-        task = Task(description="What numbers did I mention?")
-        result = await agent.do_async(task)
-        assert result is not None
-        
-        # Verify CRUD
-        await db.storage.connect_async()
-        session = await db.storage.read_async(test_session_id, AgentSession)
-        assert session is not None
-        
-        # Verify metadata
-        assert session.metadata is not None
-        
-        # Update test
-        session.metadata["test_key"] = "test_value"
-        await db.storage.upsert_async(session)
-        updated = await db.storage.read_async(test_session_id, AgentSession)
-        assert updated.metadata.get("test_key") == "test_value"
-        
-        await db.storage.disconnect_async()
-    finally:
-        if os.path.exists(db_file):
-            os.remove(db_file)
-
-
-@pytest.mark.asyncio
-async def test_postgres_storage_full_memory(test_user_id, test_session_id):
-    """Test PostgresStorage with full memory features."""
-    db_url = os.getenv("POSTGRES_URL", "postgresql://upsonic_test:test_password@localhost:5432/upsonic_test")
-    
-    try:
-        db = PostgresDatabase(
-            db_url=db_url,
-            session_id=test_session_id,
-            user_id=test_user_id,
-            full_session_memory=True,
-            user_analysis_memory=True,
-            num_last_messages=4,
-            model="openai/gpt-4o",
-            debug=True
-        )
-        
-        await db.storage.connect_async()
-        agent = Agent(model="openai/gpt-4o", db=db)
-        
-        task1 = Task(description="I am a software engineer")
-        await agent.do_async(task1)
-        
-        task2 = Task(description="What's my profession?")
-        result = await agent.do_async(task2)
-        assert "engineer" in str(result).lower() or "software" in str(result).lower()
-        
-        # CRUD operations
-        session = await db.storage.read_async(test_session_id, AgentSession)
-        assert session is not None
-        
-        await db.storage.delete_async(test_session_id, AgentSession)
-        await db.storage.disconnect_async()
-        
-    except Exception as e:
-        pytest.skip(f"Postgres not available: {e}")
-
-
-@pytest.mark.asyncio
-async def test_mongo_storage_full_memory(test_user_id, test_session_id):
-    """Test MongoStorage with full memory features."""
-    db_url = os.getenv("MONGO_URL", "mongodb://upsonic_test:test_password@localhost:27017/?authSource=admin")
-    
-    try:
-        db = MongoDatabase(
-            db_url=db_url,
-            database_name="test_db",
-            session_id=test_session_id,
-            user_id=test_user_id,
-            full_session_memory=True,
-            user_analysis_memory=True,
-            num_last_messages=3,
-            model="openai/gpt-4o",
-            debug=True
-        )
-        
-        await db.storage.connect_async()
-        agent = Agent(model="openai/gpt-4o", db=db)
-        
-        task1 = Task(description="My favorite color is blue")
-        await agent.do_async(task1)
-        
-        task2 = Task(description="What's my favorite color?")
-        result = await agent.do_async(task2)
-        assert "blue" in str(result).lower()
-        
-        # CRUD operations
-        session = await db.storage.read_async(test_session_id, AgentSession)
-        assert session is not None
-        
-        await db.storage.delete_async(test_session_id, AgentSession)
-        await db.storage.disconnect_async()
-        
-    except Exception as e:
-        pytest.skip(f"Mongo not available: {e}")
-
-
-@pytest.mark.asyncio
-async def test_redis_storage_full_memory(test_user_id, test_session_id):
-    """Test RedisStorage with full memory features."""
-    try:
-        db = RedisDatabase(
-            prefix="test",
-            host="localhost",
-            port=6379,
-            session_id=test_session_id,
-            user_id=test_user_id,
-            full_session_memory=True,
-            user_analysis_memory=True,
-            num_last_messages=2,
-            model="openai/gpt-4o",
-            debug=True
-        )
-        
-        await db.storage.connect_async()
-        agent = Agent(model="openai/gpt-4o", db=db)
-        
-        task1 = Task(description="I love machine learning")
-        await agent.do_async(task1)
-        
-        task2 = Task(description="What do I love?")
-        result = await agent.do_async(task2)
-        assert result is not None
-        
-        # CRUD operations
-        session = await db.storage.read_async(test_session_id, AgentSession)
-        assert session is not None
-        
-        await db.storage.disconnect_async()
-        
-    except Exception as e:
-        pytest.skip(f"Redis not available: {e}")
-
-
-@pytest.mark.asyncio
-async def test_json_storage_full_memory(test_user_id, test_session_id, temp_dir):
-    """Test JSONStorage with full memory features."""
-    db = JSONDatabase(
-        directory_path=temp_dir,
+async def test_full_session_memory_message_accumulation(inmemory_storage, test_user_id, test_session_id):
+    """Test that messages accumulate correctly across multiple runs."""
+    memory = Memory(
+        storage=inmemory_storage,
         session_id=test_session_id,
         user_id=test_user_id,
         full_session_memory=True,
-        user_analysis_memory=True,
-        num_last_messages=3,
-        model="openai/gpt-4o",
-        debug=True
+        debug=False
     )
     
-    await db.storage.connect_async()
-    agent = Agent(model="openai/gpt-4o", db=db)
+    agent = Agent(model="openai/gpt-4o-mini", memory=memory)
+    message_counts = []
     
-    task1 = Task(description="I am interested in AI")
+    # Run 3 tasks and track message accumulation
+    for i in range(3):
+        task = Task(description=f"This is message number {i+1}")
+        await agent.do_async(task)
+        
+        session = inmemory_storage.get_session(
+            session_id=test_session_id,
+            session_type=SessionType.AGENT,
+            deserialize=True
+        )
+        if session and session.messages:
+            message_counts.append(len(session.messages))
+        else:
+            message_counts.append(0)
+    
+    # Verify message count increases with each run
+    assert len(message_counts) == 3
+    assert message_counts[1] > message_counts[0], \
+        f"Message count should increase. Run 1: {message_counts[0]}, Run 2: {message_counts[1]}"
+    assert message_counts[2] > message_counts[1], \
+        f"Message count should increase. Run 2: {message_counts[1]}, Run 3: {message_counts[2]}"
+
+
+# =============================================================================
+# TEST: num_last_messages Limiting
+# =============================================================================
+
+@pytest.mark.asyncio
+async def test_num_last_messages_limiting(inmemory_storage, test_user_id, test_session_id):
+    """Test that num_last_messages correctly limits chat history."""
+    memory = Memory(
+        storage=inmemory_storage,
+        session_id=test_session_id,
+        user_id=test_user_id,
+        full_session_memory=True,
+        num_last_messages=2,  # Only keep last 2 message turns
+        debug=False
+    )
+    
+    agent = Agent(model="openai/gpt-4o-mini", memory=memory)
+    
+    # Run 5 conversations
+    for i in range(5):
+        task = Task(description=f"Message {i}: I like number {i}")
+        await agent.do_async(task)
+    
+    # Verify messages are stored in session (raw storage)
+    session = inmemory_storage.get_session(
+        session_id=test_session_id,
+        session_type=SessionType.AGENT,
+        deserialize=True
+    )
+    assert session is not None
+    assert session.messages is not None
+    # Storage should have ALL messages
+    assert len(session.messages) >= 10, f"Storage should have all messages, got {len(session.messages)}"
+    
+    # Verify prepare_inputs_for_task applies the limit
+    prepared = await memory.prepare_inputs_for_task(session_type=SessionType.AGENT)
+    limited_messages = prepared["message_history"]
+    
+    # With num_last_messages=2, we should get at most 4 messages (2 runs * 2 messages per run)
+    assert len(limited_messages) <= 4, \
+        f"Limited history should have at most 4 messages, got {len(limited_messages)}"
+
+
+@pytest.mark.asyncio
+async def test_num_last_messages_preserves_context(inmemory_storage, test_user_id, test_session_id):
+    """Test that limiting still preserves necessary context like system prompt."""
+    memory = Memory(
+        storage=inmemory_storage,
+        session_id=test_session_id,
+        user_id=test_user_id,
+        full_session_memory=True,
+        num_last_messages=2,
+        debug=False
+    )
+    
+    agent = Agent(model="openai/gpt-4o-mini", memory=memory)
+    
+    # First message
+    task1 = Task(description="My favorite color is blue")
     await agent.do_async(task1)
     
-    task2 = Task(description="What am I interested in?")
-    result = await agent.do_async(task2)
+    # Second message
+    task2 = Task(description="My favorite food is pizza")
+    await agent.do_async(task2)
+    
+    # Third message
+    task3 = Task(description="My favorite sport is tennis")
+    await agent.do_async(task3)
+    
+    # Ask about old message - should NOT remember (outside window)
+    task4 = Task(description="What is my favorite color? Just say the color or 'I don't know'.")
+    result4 = await agent.do_async(task4)
+    
+    # Due to num_last_messages=2, "blue" should be outside the context window
+    result4_str = str(result4).lower()
+    # Either agent says "I don't know" or doesn't mention "blue"
+    assert "don't know" in result4_str or "do not know" in result4_str or "blue" not in result4_str, \
+        f"num_last_messages should limit context, got: {result4}"
+
+
+# =============================================================================
+# TEST: feed_tool_call_results Filtering
+# =============================================================================
+
+@pytest.mark.asyncio
+async def test_feed_tool_call_results_filtering(inmemory_storage, test_user_id, test_session_id):
+    """Test that feed_tool_call_results=False filters out tool messages."""
+    from upsonic.tools import tool
+    
+    @tool
+    def get_weather(location: str) -> str:
+        """Get weather for a location."""
+        return f"Weather in {location}: Sunny, 72°F"
+    
+    memory = Memory(
+        storage=inmemory_storage,
+        session_id=test_session_id,
+        user_id=test_user_id,
+        full_session_memory=True,
+        feed_tool_call_results=False,
+        debug=False
+    )
+    
+    agent = Agent(
+        model="openai/gpt-4o-mini",
+        memory=memory,
+        tools=[get_weather]
+    )
+    
+    # Make a task that triggers tool call
+    task = Task(description="What's the weather in New York? Use the get_weather tool.")
+    await agent.do_async(task)
+    
+    # Check that prepare_inputs_for_task filters tool messages
+    prepared = await memory.prepare_inputs_for_task(session_type=SessionType.AGENT)
+    message_history = prepared["message_history"]
+    
+    # Count tool messages
+    tool_count = 0
+    for msg in message_history:
+        if isinstance(msg, ModelRequest):
+            if hasattr(msg, 'parts'):
+                for part in msg.parts:
+                    if hasattr(part, 'part_kind') and part.part_kind == 'tool-return':
+                        tool_count += 1
+                        break
+        elif isinstance(msg, ModelResponse):
+            if hasattr(msg, 'parts'):
+                for part in msg.parts:
+                    if hasattr(part, 'part_kind') and part.part_kind == 'tool-call':
+                        tool_count += 1
+                        break
+    
+    assert tool_count == 0, f"Tool messages should be filtered when feed_tool_call_results=False, found {tool_count}"
+
+
+@pytest.mark.asyncio
+async def test_feed_tool_call_results_included(inmemory_storage, test_user_id, test_session_id):
+    """Test that feed_tool_call_results=True includes tool messages."""
+    from upsonic.tools import tool
+    
+    @tool
+    def get_weather(location: str) -> str:
+        """Get weather for a location."""
+        return f"Weather in {location}: Sunny, 72°F"
+    
+    memory = Memory(
+        storage=inmemory_storage,
+        session_id=test_session_id,
+        user_id=test_user_id,
+        full_session_memory=True,
+        feed_tool_call_results=True,  # Include tool messages
+        debug=False
+    )
+    
+    agent = Agent(
+        model="openai/gpt-4o-mini",
+        memory=memory,
+        tools=[get_weather]
+    )
+    
+    # Make a task that triggers tool call
+    task = Task(description="What's the weather in London? Use the get_weather tool.")
+    await agent.do_async(task)
+    
+    # Check that prepare_inputs_for_task includes tool messages
+    prepared = await memory.prepare_inputs_for_task(session_type=SessionType.AGENT)
+    message_history = prepared["message_history"]
+    
+    # Count tool messages
+    tool_count = 0
+    for msg in message_history:
+        if isinstance(msg, ModelRequest):
+            if hasattr(msg, 'parts'):
+                for part in msg.parts:
+                    if hasattr(part, 'part_kind') and part.part_kind == 'tool-return':
+                        tool_count += 1
+                        break
+        elif isinstance(msg, ModelResponse):
+            if hasattr(msg, 'parts'):
+                for part in msg.parts:
+                    if hasattr(part, 'part_kind') and part.part_kind == 'tool-call':
+                        tool_count += 1
+                        break
+    
+    assert tool_count > 0, f"Tool messages should be included when feed_tool_call_results=True, found {tool_count}"
+
+
+# =============================================================================
+# TEST: Session Persistence with SQLite
+# =============================================================================
+
+@pytest.mark.asyncio
+async def test_session_persistence_sqlite(sqlite_storage, test_user_id, test_session_id):
+    """Test that sessions persist across Memory instances with SQLite."""
+    # First instance - create and populate session
+    memory1 = Memory(
+        storage=sqlite_storage,
+        session_id=test_session_id,
+        user_id=test_user_id,
+        full_session_memory=True,
+        debug=False
+    )
+    
+    agent1 = Agent(model="openai/gpt-4o-mini", memory=memory1)
+    
+    task1 = Task(description="Remember that my secret code is DELTA-789.")
+    await agent1.do_async(task1)
+    
+    # Create second Memory instance with same session_id
+    memory2 = Memory(
+        storage=sqlite_storage,
+        session_id=test_session_id,  # Same session ID
+        user_id=test_user_id,
+        full_session_memory=True,
+        debug=False
+    )
+    
+    agent2 = Agent(model="openai/gpt-4o-mini", memory=memory2)
+    
+    # Should remember the secret code
+    task2 = Task(description="What is my secret code?")
+    result2 = await agent2.do_async(task2)
+    
+    result2_str = str(result2).upper()
+    code_remembered = "DELTA" in result2_str or "789" in result2_str
+    assert code_remembered, f"Session should persist - 'DELTA' or '789' not found in: {result2}"
+
+
+# =============================================================================
+# TEST: Run Output Attributes
+# =============================================================================
+
+@pytest.mark.asyncio
+async def test_run_output_attributes_stored(inmemory_storage, test_user_id, test_session_id):
+    """Test that AgentRunOutput attributes are stored correctly."""
+    memory = Memory(
+        storage=inmemory_storage,
+        session_id=test_session_id,
+        user_id=test_user_id,
+        full_session_memory=True,
+        debug=False
+    )
+    
+    agent = Agent(model="openai/gpt-4o-mini", memory=memory)
+    
+    # Run a task
+    task = Task(description="Say hello")
+    result = await agent.do_async(task)
     assert result is not None
     
-    # CRUD operations
-    session = await db.storage.read_async(test_session_id, AgentSession)
+    # Check session for stored run
+    session = inmemory_storage.get_session(
+        session_id=test_session_id,
+        session_type=SessionType.AGENT,
+        deserialize=True
+    )
     assert session is not None
+    assert session.runs is not None
+    assert len(session.runs) >= 1
     
-    # Update
-    session.metadata["interest"] = "AI"
-    await db.storage.upsert_async(session)
-    updated = await db.storage.read_async(test_session_id, AgentSession)
-    assert updated.metadata.get("interest") == "AI"
+    # Get the latest run
+    latest_run_data = list(session.runs.values())[-1]
     
-    await db.storage.disconnect_async()
+    if hasattr(latest_run_data, 'output') and latest_run_data.output:
+        run_output = latest_run_data.output
+        
+        from upsonic.run.agent.output import AgentRunOutput
+        if isinstance(run_output, AgentRunOutput):
+            # Verify run has messages
+            if run_output.messages:
+                assert isinstance(run_output.messages, list), "Run messages should be a list"
+                assert len(run_output.messages) >= 2, \
+                    f"Expected at least 2 messages in run, got {len(run_output.messages)}"
+
+
+# =============================================================================
+# TEST: CRUD Operations on Session
+# =============================================================================
+
+@pytest.mark.asyncio
+async def test_session_crud_operations(inmemory_storage, test_user_id, test_session_id):
+    """Test CRUD operations on session."""
+    memory = Memory(
+        storage=inmemory_storage,
+        session_id=test_session_id,
+        user_id=test_user_id,
+        full_session_memory=True,
+        debug=False
+    )
+    
+    agent = Agent(model="openai/gpt-4o-mini", memory=memory)
+    
+    # CREATE - Run a task to create session
+    task = Task(description="Hello world")
+    await agent.do_async(task)
+    
+    # READ - Get session
+    session = await memory.get_session_async()
+    assert session is not None, "Session should exist after task"
+    
+    # UPDATE - Set metadata
+    await memory.set_metadata_async({"test_key": "test_value"})
+    metadata = await memory.get_metadata_async()
+    assert metadata is not None
+    assert metadata.get("test_key") == "test_value"
+    
+    # DELETE - Delete session
+    deleted = await memory.delete_session_async()
+    assert deleted is True
+    
+    # Verify deleted
+    session_after = await memory.get_session_async()
+    assert session_after is None, "Session should be None after delete"

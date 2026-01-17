@@ -774,7 +774,7 @@ async def test_memory_with_event_streaming():
     from upsonic.storage import InMemoryStorage, Memory
     
     # Create a storage provider for in-memory persistence
-    storage = InMemoryStorage(max_sessions=100)
+    storage = InMemoryStorage()
     
     # Create a Memory instance with all memory types enabled
     memory = Memory(

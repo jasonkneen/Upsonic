@@ -315,9 +315,9 @@ class TestDirectDoMethods(unittest.TestCase):
         self.assertIsInstance(result, str)
         mock_file.assert_called_once_with("/path/to/image.png", "rb")
 
+    @pytest.mark.asyncio
     @patch("upsonic.utils.printing.direct_started")
     @patch("upsonic.utils.printing.direct_completed")
-    @pytest.mark.asyncio
     async def test_direct_do_async(self, mock_completed, mock_started):
         """Test async execution."""
         direct = Direct(model=self.mock_model)
@@ -342,9 +342,9 @@ class TestDirectDoMethods(unittest.TestCase):
         mock_started.assert_called_once()
         mock_completed.assert_called_once()
 
+    @pytest.mark.asyncio
     @patch("upsonic.utils.printing.direct_started")
     @patch("upsonic.utils.printing.direct_completed")
-    @pytest.mark.asyncio
     async def test_direct_print_do_async(self, mock_completed, mock_started):
         """Test async print_do_async()."""
         direct = Direct(model=self.mock_model)

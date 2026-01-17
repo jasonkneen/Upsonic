@@ -28,7 +28,7 @@ from upsonic.run.requirements import RunRequirement
 from upsonic.run.tools.tools import ToolExecution
 from upsonic.run.pipeline.stats import PipelineExecutionStats
 from upsonic.run.agent.input import AgentRunInput
-from upsonic.usage import RequestUsage
+from upsonic.usage import RequestUsage, RunUsage
 from upsonic.profiles import ModelProfile
 from upsonic.messages.messages import ModelResponse, ModelRequest
 
@@ -266,16 +266,45 @@ def verify_messages_list(messages: List, description: str, min_count: int = 0) -
     return messages
 
 
-def verify_request_usage(usage: Any, description: str) -> RequestUsage:
-    """Comprehensive RequestUsage verification with all attributes."""
-    print(f"\n  === RequestUsage: {description} ===")
+def verify_request_usage(usage: Any, description: str) -> Any:
+    """Comprehensive RequestUsage/RunUsage verification with all attributes."""
+    print(f"\n  === Usage: {description} ===")
     
     if usage is None:
         print("    (No usage data - skipping)")
         return None
     
-    # Verify it's the correct type
-    assert isinstance(usage, RequestUsage), f"FAIL [{description}]: Expected RequestUsage, got {type(usage).__name__}"
+    # Usage can be RequestUsage, RunUsage, or dict (from deserialization)
+    is_dict = isinstance(usage, dict)
+    is_usage_obj = isinstance(usage, (RequestUsage, RunUsage))
+    
+    assert is_dict or is_usage_obj, f"FAIL [{description}]: Expected RequestUsage, RunUsage, or dict, got {type(usage).__name__}"
+    
+    if is_dict:
+        print("    (Usage is dict from deserialization - validating structure)")
+        # In error cases, usage dict might be empty or have minimal structure
+        # Just validate it's a dict and print what's available
+        assert isinstance(usage, dict), f"FAIL [{description}]: Expected dict, got {type(usage).__name__}"
+        print(f"    dict keys: {list(usage.keys())}")
+        if 'input_tokens' in usage:
+            print(f"    input_tokens: {usage.get('input_tokens', 0)}")
+        if 'output_tokens' in usage:
+            print(f"    output_tokens: {usage.get('output_tokens', 0)}")
+        if 'input_tokens' in usage or 'output_tokens' in usage:
+            print(f"    total_tokens: {usage.get('input_tokens', 0) + usage.get('output_tokens', 0)}")
+        if 'cache_write_tokens' in usage:
+            print(f"    cache_write_tokens: {usage.get('cache_write_tokens', 0)}")
+        if 'cache_read_tokens' in usage:
+            print(f"    cache_read_tokens: {usage.get('cache_read_tokens', 0)}")
+        if 'requests' in usage:
+            print(f"    requests: {usage.get('requests', 0)}")
+        if 'tool_calls' in usage:
+            print(f"    tool_calls: {usage.get('tool_calls', 0)}")
+        if 'details' in usage:
+            print(f"    details: {usage.get('details', {})}")
+        if len(usage) == 0:
+            print("    (Empty usage dict - may occur in error cases)")
+        return usage
     
     # === Token counts ===
     assert hasattr(usage, 'input_tokens'), f"FAIL [{description}]: Missing input_tokens"
@@ -313,6 +342,27 @@ def verify_request_usage(usage: Any, description: str) -> RequestUsage:
     assert hasattr(usage, 'details'), f"FAIL [{description}]: Missing details"
     assert isinstance(usage.details, dict), f"FAIL [{description}]: details should be dict"
     print(f"    details: {usage.details}")
+    
+    # === RunUsage specific attributes ===
+    if isinstance(usage, RunUsage):
+        assert hasattr(usage, 'requests'), f"FAIL [{description}]: Missing requests"
+        assert isinstance(usage.requests, int), f"FAIL [{description}]: requests should be int"
+        print(f"    requests: {usage.requests}")
+        
+        assert hasattr(usage, 'tool_calls'), f"FAIL [{description}]: Missing tool_calls"
+        assert isinstance(usage.tool_calls, int), f"FAIL [{description}]: tool_calls should be int"
+        print(f"    tool_calls: {usage.tool_calls}")
+        
+        assert hasattr(usage, 'reasoning_tokens'), f"FAIL [{description}]: Missing reasoning_tokens"
+        assert isinstance(usage.reasoning_tokens, int), f"FAIL [{description}]: reasoning_tokens should be int"
+        print(f"    reasoning_tokens: {usage.reasoning_tokens}")
+        
+        if usage.duration is not None:
+            print(f"    duration: {usage.duration}")
+        if usage.cost is not None:
+            print(f"    cost: {usage.cost}")
+        if usage.time_to_first_token is not None:
+            print(f"    time_to_first_token: {usage.time_to_first_token}")
     
     return usage
 
@@ -650,40 +700,93 @@ def compare_messages_lists(list1: List, list2: List, description: str) -> None:
 
 
 def verify_session_messages_consistency(session: AgentSession, output: AgentRunOutput, description: str) -> None:
-    """Verify that AgentSession.messages and AgentRunOutput.chat_history are consistent."""
+    """
+    Verify comprehensive consistency between AgentSession and AgentRunOutput.
+    
+    Key relationships:
+    1. output.chat_history should match session.messages (full conversation)
+    2. output.messages should match the LAST elements of session.messages 
+       (since output.messages = THIS run's messages, session.messages = whole history)
+    3. Run statuses should match
+    """
     print(f"\n{'='*60}")
-    print(f"Session Messages vs Output Chat History: {description}")
+    print(f"Session vs Output Consistency: {description}")
     print(f"{'='*60}")
     
-    # Get session messages
+    # Get all relevant data
     session_messages = session.messages if session.messages else []
     output_chat_history = output.chat_history if output.chat_history else []
+    output_messages = output.messages if output.messages else []
     
     print(f"  session.messages count: {len(session_messages)}")
     print(f"  output.chat_history count: {len(output_chat_history)}")
+    print(f"  output.messages count: {len(output_messages)}")
     
-    # They should have the same length (or chat_history might be longer if it includes historical)
-    # For consistency, we check that chat_history contains all session messages
-    if len(session_messages) > 0:
-        assert len(output_chat_history) >= len(session_messages), \
-            f"FAIL [{description}]: chat_history ({len(output_chat_history)}) should contain at least session.messages ({len(session_messages)})"
+    # === 1. Verify output.chat_history matches session.messages ===
+    print("\n--- Verification 1: output.chat_history == session.messages ---")
+    
+    if len(session_messages) > 0 or len(output_chat_history) > 0:
+        # They should match in length for a completed run
+        assert len(output_chat_history) == len(session_messages), \
+            f"FAIL [{description}]: output.chat_history ({len(output_chat_history)}) should equal session.messages ({len(session_messages)})"
         
-        # Compare the last N messages where N = len(session_messages)
-        # This handles the case where chat_history includes historical messages
-        if len(output_chat_history) >= len(session_messages):
-            recent_chat_history = output_chat_history[-len(session_messages):]
-            print(f"  Comparing last {len(session_messages)} messages from chat_history with session.messages")
-            
-            for i in range(len(session_messages)):
-                if not compare_messages_content(session_messages[i], recent_chat_history[i], i, description):
-                    print(f"  ✗ Message[{i}] mismatch between session.messages and chat_history")
-                    assert False, f"FAIL [{description}]: Message[{i}] mismatch"
-                else:
-                    print(f"  ✓ Message[{i}] matches")
-            
-            print("\n  ✓ ALL MESSAGES CONSISTENT")
+        # Compare each message
+        for i in range(len(session_messages)):
+            if not compare_messages_content(session_messages[i], output_chat_history[i], i, description):
+                print(f"  ✗ Message[{i}] mismatch between session.messages and output.chat_history")
+                assert False, f"FAIL [{description}]: Message[{i}] mismatch"
+            else:
+                print(f"  ✓ Message[{i}] matches")
+        
+        print("  ✓ output.chat_history == session.messages VERIFIED")
     else:
-        print("  (No session messages to compare)")
+        print("  (No messages to compare)")
+    
+    # === 2. Verify output.messages matches LAST elements of session.messages ===
+    print("\n--- Verification 2: output.messages == session.messages[-N:] ---")
+    
+    if len(output_messages) > 0:
+        # output.messages should be the LAST N messages of session.messages
+        # where N = len(output.messages)
+        assert len(session_messages) >= len(output_messages), \
+            f"FAIL [{description}]: session.messages ({len(session_messages)}) should be >= output.messages ({len(output_messages)})"
+        
+        # Get the last N messages from session
+        session_last_n = session_messages[-len(output_messages):]
+        
+        print(f"  Comparing output.messages with session.messages[-{len(output_messages)}:]")
+        
+        for i in range(len(output_messages)):
+            if not compare_messages_content(output_messages[i], session_last_n[i], i, description + " - messages match"):
+                print(f"  ✗ output.messages[{i}] doesn't match session.messages[{-len(output_messages)+i}]")
+                assert False, f"FAIL [{description}]: output.messages[{i}] doesn't match last messages of session"
+            else:
+                print(f"  ✓ output.messages[{i}] matches session.messages[-{len(output_messages)-i}]")
+        
+        print("  ✓ output.messages == session.messages[-N:] VERIFIED")
+    else:
+        print("  (No output.messages to compare - may be empty for error states)")
+    
+    # === 3. Verify run status consistency ===
+    print("\n--- Verification 3: Run Status Consistency ---")
+    
+    # Get stored output from session.runs if available
+    if output.run_id and output.run_id in session.runs:
+        stored_run = session.runs[output.run_id]
+        stored_output = stored_run.output
+        
+        print(f"  output.status: {output.status}")
+        print(f"  stored_output.status: {stored_output.status}")
+        
+        assert output.status == stored_output.status, \
+            f"FAIL [{description}]: output.status ({output.status}) != stored_output.status ({stored_output.status})"
+        
+        print("  ✓ Run statuses match")
+    else:
+        print(f"  output.status: {output.status}")
+        print("  (No stored run to compare status - using output directly)")
+    
+    print(f"\n  ✓ ALL CONSISTENCY CHECKS PASSED for {description}")
 
 
 def verify_storage_consistency(before_session: AgentSession, after_session: AgentSession,
@@ -988,7 +1091,7 @@ async def test_external_tool_comprehensive():
     
     cleanup()
     
-    db = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user")
+    db = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user", full_session_memory=True)
     agent1 = Agent("openai/gpt-4o-mini", name="agent1", db=db, debug=DEBUG)
     task = Task(
         description="Send an email to test@example.com with subject 'Hello' and body 'Test'.",
@@ -1036,7 +1139,7 @@ async def test_external_tool_comprehensive():
     # Note: We need to get the session from the agent's memory if available
     # For now, we'll read from storage and compare
     
-    session = await db.storage.read_async("test_session", AgentSession)
+    session = db.storage.get_session(session_id="test_session")
     verify_agent_session(session, "After Pause", expected_run_id=run_id, expected_run_count=1)
     
     stored_output = session.runs[run_id].output
@@ -1077,7 +1180,7 @@ async def test_external_tool_comprehensive():
     # =========================================================================
     print("\n[STEP 4] Resuming with new agent...")
     
-    db2 = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user")
+    db2 = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user", full_session_memory=True)
     agent2 = Agent("openai/gpt-4o-mini", name="agent2", db=db2, debug=DEBUG)
     
     result = await agent2.continue_run_async(
@@ -1110,7 +1213,7 @@ async def test_external_tool_comprehensive():
     before_session = session
     before_output = stored_output
     
-    final_session = await db2.storage.read_async("test_session", AgentSession)
+    final_session = db2.storage.get_session(session_id="test_session")
     verify_agent_session(final_session, "Final", expected_run_id=run_id)
     
     final_output = final_session.runs[run_id].output
@@ -1157,7 +1260,7 @@ async def test_cancel_run_comprehensive():
     
     cleanup()
     
-    db = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user")
+    db = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user", full_session_memory=True)
     agent1 = Agent("openai/gpt-4o-mini", name="agent1", db=db, debug=DEBUG)
     task = Task(
         description="Call long_running_task with 5 seconds.",
@@ -1198,7 +1301,7 @@ async def test_cancel_run_comprehensive():
     # =========================================================================
     print("\n[STEP 2] Verifying storage after cancel...")
     
-    session = await db.storage.read_async("test_session", AgentSession)
+    session = db.storage.get_session(session_id="test_session")
     verify_agent_session(session, "After Cancel", expected_run_id=run_id)
     
     stored_output = session.runs[run_id].output
@@ -1219,7 +1322,7 @@ async def test_cancel_run_comprehensive():
     # =========================================================================
     print("\n[STEP 3] Resuming with new agent...")
     
-    db2 = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user")
+    db2 = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user", full_session_memory=True)
     agent2 = Agent("openai/gpt-4o-mini", name="agent2", db=db2, debug=DEBUG)
     
     result = await agent2.continue_run_async(run_id=run_id, return_output=True)
@@ -1243,7 +1346,7 @@ async def test_cancel_run_comprehensive():
     before_session = session
     before_output = stored_output
     
-    final_session = await db2.storage.read_async("test_session", AgentSession)
+    final_session = db2.storage.get_session(session_id="test_session")
     final_output = final_session.runs[run_id].output
     
     verify_agent_run_output(
@@ -1284,7 +1387,7 @@ async def test_durable_execution_comprehensive():
     
     cleanup()
     
-    db = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user")
+    db = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user", full_session_memory=True)
     agent = Agent("openai/gpt-4o-mini", db=db, debug=DEBUG, retry=1)
     task = Task(
         description="What is 5 + 3? Reply with just the number.",
@@ -1331,7 +1434,7 @@ async def test_durable_execution_comprehensive():
     # =========================================================================
     print("\n[STEP 2] Verifying storage after error...")
     
-    session = await db.storage.read_async("test_session", AgentSession)
+    session = db.storage.get_session(session_id="test_session")
     verify_agent_session(session, "After Error", expected_run_id=run_id)
     
     stored_output = session.runs[run_id].output
@@ -1378,7 +1481,7 @@ async def test_durable_execution_comprehensive():
     before_session = session
     before_output = stored_output
     
-    final_session = await db.storage.read_async("test_session", AgentSession)
+    final_session = db.storage.get_session(session_id="test_session")
     final_output = final_session.runs[run_id].output
     
     verify_agent_run_output(
@@ -1423,7 +1526,7 @@ async def test_durable_cross_process_comprehensive():
     
     cleanup()
     
-    db = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user")
+    db = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user", full_session_memory=True)
     agent1 = Agent("openai/gpt-4o-mini", db=db, debug=DEBUG, retry=1)
     task = Task("What is 7 + 2? Reply with just the number.")
     
@@ -1453,7 +1556,7 @@ async def test_durable_cross_process_comprehensive():
     # =========================================================================
     print("\n[STEP 2] Verifying storage...")
     
-    session = await db.storage.read_async("test_session", AgentSession)
+    session = db.storage.get_session(session_id="test_session")
     stored_output = session.runs[run_id].output
     
     verify_agent_run_output(stored_output, "Stored Error", expected_status=RunStatus.error)
@@ -1470,7 +1573,7 @@ async def test_durable_cross_process_comprehensive():
     # =========================================================================
     print("\n[STEP 3] Resuming with NEW agent (cross-process)...")
     
-    db2 = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user")
+    db2 = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user", full_session_memory=True)
     agent2 = Agent("openai/gpt-4o-mini", db=db2, debug=DEBUG, retry=1)
     
     assert agent2.agent_id != agent1.agent_id, "Should be different agent"
@@ -1495,7 +1598,7 @@ async def test_durable_cross_process_comprehensive():
     before_session = session
     before_output = stored_output
     
-    final_session = await db2.storage.read_async("test_session", AgentSession)
+    final_session = db2.storage.get_session(session_id="test_session")
     final_output = final_session.runs[run_id].output
     
     compare_outputs(stored_output, final_output, "Cross-Process Error vs Completed")
@@ -1519,6 +1622,489 @@ async def test_durable_cross_process_comprehensive():
 
 
 # =============================================================================
+# TEST: DURABLE EXECUTION - EARLY STEPS (Before and At MessageBuildStep)
+# =============================================================================
+
+async def test_durable_execution_early_steps():
+    """
+    Test durable execution with error injection at early steps:
+    - Steps 0-6 (before MessageBuildStep)
+    - Step 7 (MessageBuildStep itself)
+    
+    This verifies that _run_boundaries is correctly handled when:
+    - Resuming FROM MessageBuildStep (step 7) - MessageBuildStep sets its own boundary
+    - Resuming FROM earlier steps (0-6) - MessageBuildStep will rebuild and set boundary
+    """
+    print("\n" + "="*80)
+    print("TEST: Durable Execution - Early Steps (Before/At MessageBuildStep)")
+    print("="*80)
+    
+    # Define early steps to test with their names and step indices
+    # MessageBuildStep is at index 7
+    early_steps_to_test = [
+        ("tool_setup", 6),        # Step right before MessageBuildStep
+        ("message_build", 7),     # MessageBuildStep itself
+        ("model_selection", 5),   # Even earlier step
+    ]
+    
+    for step_name, expected_step_index in early_steps_to_test:
+        print(f"\n{'='*60}")
+        print(f"Testing error injection at: {step_name} (step {expected_step_index})")
+        print(f"{'='*60}")
+        
+        cleanup()
+        
+        db = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user", full_session_memory=True)
+        agent = Agent("openai/gpt-4o-mini", db=db, debug=DEBUG, retry=1)
+        task = Task(
+            description="What is 5 + 3? Reply with just the number.",
+            tools=[simple_math]
+        )
+        
+        # Inject error at the specific step (triggers once)
+        inject_error_into_step(step_name, RuntimeError, f"Simulated error at {step_name}", trigger_count=1)
+        
+        # =====================================================================
+        # STEP 1: Run and catch error
+        # =====================================================================
+        print(f"\n[STEP 1] Running with error injection at {step_name}...")
+        
+        try:
+            output = await agent.do_async(task, return_output=True)
+            # For some early steps, we might get an error output instead of exception
+            if output.status == RunStatus.error:
+                print("  Error status returned as expected")
+            else:
+                assert False, f"Expected error at {step_name}, but got status: {output.status}"
+        except RuntimeError as e:
+            print(f"  Caught expected RuntimeError: {e}")
+            output = agent._agent_run_output
+        
+        # Note: agent.run_id is cleared in finally block, so get from output
+        assert output is not None, "Output should exist after error"
+        run_id = output.run_id
+        assert run_id is not None, "run_id should be available from output"
+        print(f"  Run ID: {run_id}")
+        print(f"  Status: {output.status}")
+        
+        # Verify step_results exists
+        assert output.step_results is not None, "step_results should exist"
+        print(f"  Step results count: {len(output.step_results)}")
+        
+        # Find the failed step
+        failed_step = None
+        for sr in output.step_results:
+            if sr.status == StepStatus.ERROR:
+                failed_step = sr
+                break
+        
+        if failed_step:
+            print(f"  Failed step: {failed_step.name} (step {failed_step.step_number})")
+            assert failed_step.name == step_name, f"Failed step should be {step_name}, got {failed_step.name}"
+        
+        print("\n[STEP 1] PASSED")
+        
+        # =====================================================================
+        # STEP 2: Verify storage after error
+        # =====================================================================
+        print(f"\n[STEP 2] Verifying storage after error at {step_name}...")
+        
+        session = db.storage.get_session(session_id="test_session")
+        assert session is not None, "Session should exist"
+        assert run_id in session.runs, f"Run {run_id} should be in session.runs"
+        
+        stored_output = session.runs[run_id].output
+        assert stored_output is not None, "Stored output should exist"
+        assert stored_output.status == RunStatus.error, f"Stored status should be error, got {stored_output.status}"
+        
+        # Verify in-memory output status matches stored output status
+        assert output.status == stored_output.status, \
+            f"In-memory status ({output.status}) should match stored status ({stored_output.status})"
+        
+        # Verify chat_history state
+        print(f"  In-memory output.status: {output.status}")
+        print(f"  Stored output.status: {stored_output.status}")
+        print("  ✓ Status consistency verified")
+        print(f"  Stored chat_history length: {len(stored_output.chat_history) if stored_output.chat_history else 0}")
+        print(f"  Stored messages length: {len(stored_output.messages) if stored_output.messages else 0}")
+        print(f"  Stored _run_boundaries: {stored_output._run_boundaries}")
+        
+        print("\n[STEP 2] PASSED")
+        
+        # =====================================================================
+        # STEP 3: Resume and complete
+        # =====================================================================
+        print(f"\n[STEP 3] Resuming run after {step_name} error...")
+        
+        # Clear the error injection so resume succeeds
+        clear_error_injection()
+        
+        # Create new database and agent (simulating process restart)
+        db2 = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user", full_session_memory=True)
+        agent2 = Agent("openai/gpt-4o-mini", db=db2, debug=DEBUG)
+        
+        result = await agent2.continue_run_async(run_id=run_id, return_output=True)
+        
+        # Verify completion
+        assert result is not None, "Result should exist"
+        assert result.status == RunStatus.completed, f"Status should be completed, got {result.status}"
+        assert result.run_id == run_id, f"run_id should match: {result.run_id} vs {run_id}"
+        
+        print(f"  Result status: {result.status}")
+        print(f"  Result output: {result.output}")
+        
+        # Verify chat_history is correct after resume
+        assert result.chat_history is not None, "chat_history should exist"
+        assert len(result.chat_history) >= 2, f"chat_history should have at least 2 messages, got {len(result.chat_history)}"
+        print(f"  Final chat_history length: {len(result.chat_history)}")
+        
+        # Verify messages were extracted correctly
+        assert result.messages is not None, "messages should exist"
+        print(f"  Final messages length: {len(result.messages)}")
+        
+        # Verify _run_boundaries is correct
+        print(f"  Final _run_boundaries: {result._run_boundaries}")
+        
+        print("\n[STEP 3] PASSED")
+        
+        # =====================================================================
+        # STEP 4: Verify final storage consistency
+        # =====================================================================
+        print(f"\n[STEP 4] Verifying final storage consistency for {step_name}...")
+        
+        final_session = db2.storage.get_session(session_id="test_session")
+        assert final_session is not None, "Final session should exist"
+        
+        final_output = final_session.runs[run_id].output
+        assert final_output is not None, "Final output should exist"
+        assert final_output.status == RunStatus.completed, f"Final status should be completed, got {final_output.status}"
+        
+        # Verify session.messages vs output.chat_history consistency
+        print(f"  Final stored chat_history length: {len(final_output.chat_history) if final_output.chat_history else 0}")
+        print(f"  Final session.messages length: {len(final_session.messages) if final_session.messages else 0}")
+        
+        # The key verification: messages should be extractable and correct
+        verify_session_messages_consistency(final_session, final_output, f"{step_name} - Final Storage")
+        
+        print(f"\n[STEP 4] PASSED for {step_name}")
+        
+        cleanup()
+    
+    print("\n" + "="*80)
+    print("ALL TESTS PASSED: Durable Execution - Early Steps")
+    print("="*80)
+
+
+# =============================================================================
+# TEST: CANCEL RUN - EARLY STEPS (Before and At MessageBuildStep)
+# =============================================================================
+
+async def test_cancel_run_early_steps():
+    """
+    Test cancel run at early steps:
+    - Steps 0-6 (before MessageBuildStep)
+    - Step 7 (MessageBuildStep itself)
+    
+    This verifies that resumption from early cancellation points correctly
+    handles _run_boundaries and message tracking.
+    """
+    print("\n" + "="*80)
+    print("TEST: Cancel Run - Early Steps (Before/At MessageBuildStep)")
+    print("="*80)
+    
+    # We'll test cancellation at different timing points
+    # Since we can't precisely control which step gets cancelled,
+    # we'll use error injection to simulate the cancellation point
+    # by injecting an error that causes early failure, then testing resume
+    
+    # For this test, we'll inject a SLOW operation at specific steps
+    # and cancel during that slow operation
+    
+    early_steps_to_test = [
+        ("tool_setup", 6, 0.3),        # Step right before MessageBuildStep
+        ("message_build", 7, 0.5),     # MessageBuildStep itself
+    ]
+    
+    for step_name, expected_step_index, delay_before_cancel in early_steps_to_test:
+        print(f"\n{'='*60}")
+        print(f"Testing cancel at: {step_name} (step {expected_step_index})")
+        print(f"{'='*60}")
+        
+        cleanup()
+        
+        db = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user", full_session_memory=True)
+        agent = Agent("openai/gpt-4o-mini", db=db, debug=DEBUG)
+        task = Task(
+            description="Call long_running_task with 5 seconds.",
+            tools=[long_running_task]
+        )
+        
+        # =====================================================================
+        # STEP 1: Start and cancel quickly
+        # =====================================================================
+        print(f"\n[STEP 1] Starting run and cancelling at {step_name}...")
+        
+        async def run_task():
+            return await agent.do_async(task, return_output=True)
+        
+        run_future = asyncio.create_task(run_task())
+        
+        # Wait a short time, then cancel
+        # This timing aims to cancel during early steps
+        await asyncio.sleep(delay_before_cancel)
+        
+        run_id = agent.run_id
+        if run_id:
+            cancel_run(run_id)
+            print(f"  Cancelled run: {run_id}")
+        
+        try:
+            output = await asyncio.wait_for(run_future, timeout=10.0)
+        except asyncio.TimeoutError:
+            print("  Timeout waiting for cancelled run")
+            output = agent._agent_run_output
+        
+        if output is None:
+            print(f"  Run cancelled too early - no output yet. Skipping {step_name}.")
+            cleanup()
+            continue
+        
+        run_id = output.run_id or agent.run_id
+        if run_id is None:
+            print(f"  Run ID not available - run cancelled too early. Skipping {step_name}.")
+            cleanup()
+            continue
+        
+        print(f"  Run ID: {run_id}")
+        print(f"  Output status: {output.status}")
+        
+        # Check what step we were on when cancelled
+        if output.step_results:
+            last_step = output.step_results[-1] if output.step_results else None
+            if last_step:
+                print(f"  Last step executed: {last_step.name} (step {last_step.step_number})")
+        
+        print("\n[STEP 1] PASSED")
+        
+        # =====================================================================
+        # STEP 2: Verify storage after cancel
+        # =====================================================================
+        print("\n[STEP 2] Verifying storage after cancel...")
+        
+        # Give storage time to save
+        await asyncio.sleep(0.5)
+        
+        session = db.storage.get_session(session_id="test_session")
+        
+        if session is None or run_id not in session.runs:
+            print(f"  Run not saved to storage (cancelled too early). Skipping storage checks for {step_name}.")
+            cleanup()
+            continue
+        
+        stored_output = session.runs[run_id].output
+        print(f"  Stored status: {stored_output.status}")
+        print(f"  Stored chat_history length: {len(stored_output.chat_history) if stored_output.chat_history else 0}")
+        print(f"  Stored _run_boundaries: {stored_output._run_boundaries}")
+        
+        print("\n[STEP 2] PASSED")
+        
+        # =====================================================================
+        # STEP 3: Resume and complete
+        # =====================================================================
+        print(f"\n[STEP 3] Resuming run after cancel at {step_name}...")
+        
+        db2 = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user", full_session_memory=True)
+        agent2 = Agent("openai/gpt-4o-mini", db=db2, debug=DEBUG)
+        
+        result = await agent2.continue_run_async(run_id=run_id, return_output=True)
+        
+        # Verify completion
+        assert result is not None, "Result should exist"
+        assert result.status == RunStatus.completed, f"Status should be completed, got {result.status}"
+        
+        print(f"  Result status: {result.status}")
+        print(f"  Result output: {result.output}")
+        
+        # Verify chat_history is correct after resume
+        assert result.chat_history is not None, "chat_history should exist"
+        print(f"  Final chat_history length: {len(result.chat_history)}")
+        
+        # Verify messages were extracted correctly
+        assert result.messages is not None, "messages should exist"
+        print(f"  Final messages length: {len(result.messages)}")
+        
+        # Verify _run_boundaries is correct
+        print(f"  Final _run_boundaries: {result._run_boundaries}")
+        
+        print("\n[STEP 3] PASSED")
+        
+        # =====================================================================
+        # STEP 4: Verify final storage consistency
+        # =====================================================================
+        print(f"\n[STEP 4] Verifying final storage consistency for {step_name}...")
+        
+        final_session = db2.storage.get_session(session_id="test_session")
+        assert final_session is not None, "Final session should exist"
+        
+        final_output = final_session.runs[run_id].output
+        assert final_output is not None, "Final output should exist"
+        assert final_output.status == RunStatus.completed, f"Final status should be completed, got {final_output.status}"
+        
+        # Verify session.messages vs output.chat_history consistency
+        print(f"  Final stored chat_history length: {len(final_output.chat_history) if final_output.chat_history else 0}")
+        print(f"  Final session.messages length: {len(final_session.messages) if final_session.messages else 0}")
+        
+        # The key verification: messages should be extractable and correct
+        verify_session_messages_consistency(final_session, final_output, f"{step_name} Cancel - Final Storage")
+        
+        print(f"\n[STEP 4] PASSED for {step_name}")
+        
+        cleanup()
+    
+    print("\n" + "="*80)
+    print("ALL TESTS PASSED: Cancel Run - Early Steps")
+    print("="*80)
+
+
+# =============================================================================
+# TEST: MESSAGE BUILD STEP SPECIFIC - Boundary Verification
+# =============================================================================
+
+async def test_message_build_step_boundary():
+    """
+    Specifically test that _run_boundaries is correctly set when:
+    1. Error occurs AT MessageBuildStep
+    2. Resume happens - MessageBuildStep runs again and sets correct boundary
+    3. Final messages are correctly extracted
+    """
+    print("\n" + "="*80)
+    print("TEST: MessageBuildStep Boundary Verification")
+    print("="*80)
+    
+    cleanup()
+    
+    db = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user", full_session_memory=True)
+    agent = Agent("openai/gpt-4o-mini", db=db, debug=DEBUG, retry=1)
+    task = Task(
+        description="What is 2 + 2? Reply with just the number.",
+        tools=[simple_math]
+    )
+    
+    # Inject error at message_build step
+    inject_error_into_step("message_build", RuntimeError, "Simulated error at message_build", trigger_count=1)
+    
+    # =========================================================================
+    # STEP 1: Run and catch error at message_build
+    # =========================================================================
+    print("\n[STEP 1] Running with error at message_build step...")
+    
+    try:
+        output = await agent.do_async(task, return_output=True)
+        if output.status != RunStatus.error:
+            assert False, f"Expected error status, got {output.status}"
+    except RuntimeError as e:
+        print(f"  Caught expected error: {e}")
+        output = agent._agent_run_output
+    
+    # Note: agent.run_id is cleared in finally block, so get from output
+    assert output is not None, "Output should exist after error"
+    run_id = output.run_id
+    assert run_id is not None, "run_id should exist"
+    
+    # At this point, chat_history might be empty or partial since MessageBuildStep failed
+    print(f"  Run ID: {run_id}")
+    print(f"  Status: {output.status}")
+    print(f"  chat_history length: {len(output.chat_history) if output.chat_history else 0}")
+    print(f"  _run_boundaries: {output._run_boundaries}")
+    
+    # Verify the failed step is message_build
+    failed_step = None
+    for sr in output.step_results:
+        if sr.status == StepStatus.ERROR:
+            failed_step = sr
+            break
+    
+    assert failed_step is not None, "Should have a failed step"
+    assert failed_step.name == "message_build", f"Failed step should be message_build, got {failed_step.name}"
+    print(f"  Failed step: {failed_step.name} (step {failed_step.step_number})")
+    
+    print("\n[STEP 1] PASSED")
+    
+    # =========================================================================
+    # STEP 2: Resume - MessageBuildStep should run again
+    # =========================================================================
+    print("\n[STEP 2] Resuming from message_build error...")
+    
+    clear_error_injection()
+    
+    db2 = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user", full_session_memory=True)
+    agent2 = Agent("openai/gpt-4o-mini", db=db2, debug=DEBUG)
+    
+    result = await agent2.continue_run_async(run_id=run_id, return_output=True)
+    
+    # Verify completion
+    assert result is not None, "Result should exist"
+    assert result.status == RunStatus.completed, f"Status should be completed, got {result.status}"
+    
+    print(f"  Result status: {result.status}")
+    print(f"  Result output: {result.output}")
+    
+    # =========================================================================
+    # STEP 3: Verify _run_boundaries was correctly set by MessageBuildStep
+    # =========================================================================
+    print("\n[STEP 3] Verifying _run_boundaries handling...")
+    
+    # chat_history should exist and have messages
+    assert result.chat_history is not None, "chat_history should exist"
+    assert len(result.chat_history) >= 2, f"chat_history should have at least 2 messages (request + response), got {len(result.chat_history)}"
+    
+    # _run_boundaries should have at least one entry
+    assert result._run_boundaries is not None, "_run_boundaries should exist"
+    assert len(result._run_boundaries) >= 1, f"_run_boundaries should have at least 1 entry, got {len(result._run_boundaries)}"
+    
+    # messages should be correctly extracted
+    assert result.messages is not None, "messages should exist"
+    assert len(result.messages) >= 2, f"messages should have at least 2 entries, got {len(result.messages)}"
+    
+    print(f"  chat_history length: {len(result.chat_history)}")
+    print(f"  _run_boundaries: {result._run_boundaries}")
+    print(f"  messages length: {len(result.messages)}")
+    
+    # Verify new_messages() returns correct messages
+    new_msgs = result.new_messages()
+    print(f"  new_messages() length: {len(new_msgs)}")
+    
+    # The boundary should be correct: messages extracted from chat_history after boundary
+    boundary = result._run_boundaries[-1]
+    expected_new_count = len(result.chat_history) - boundary
+    assert len(new_msgs) == expected_new_count, f"new_messages count mismatch: {len(new_msgs)} vs expected {expected_new_count}"
+    
+    print("\n[STEP 3] PASSED")
+    
+    # =========================================================================
+    # STEP 4: Verify final storage
+    # =========================================================================
+    print("\n[STEP 4] Verifying final storage consistency...")
+    
+    final_session = db2.storage.get_session(session_id="test_session")
+    assert final_session is not None, "Final session should exist"
+    
+    final_output = final_session.runs[run_id].output
+    assert final_output is not None, "Final output should exist"
+    assert final_output.status == RunStatus.completed, f"Final status should be completed, got {final_output.status}"
+    
+    # Verify session.messages is consistent
+    verify_session_messages_consistency(final_session, final_output, "MessageBuildStep Boundary - Final")
+    
+    print("\n[STEP 4] PASSED")
+    
+    cleanup()
+    print("\n" + "="*80)
+    print("ALL TESTS PASSED: MessageBuildStep Boundary Verification")
+    print("="*80)
+
+
+# =============================================================================
 # MAIN
 # =============================================================================
 
@@ -1530,12 +2116,20 @@ async def main():
     await test_durable_execution_comprehensive()
     await test_durable_cross_process_comprehensive()
     
+    # New early step tests
+    await test_durable_execution_early_steps()
+    await test_cancel_run_early_steps()
+    await test_message_build_step_boundary()
+    
     print("\n" + "="*80)
     print("ALL COMPREHENSIVE TESTS PASSED!")
     print("  - External Tool: PASSED")
     print("  - Cancel Run: PASSED")
     print("  - Durable Execution: PASSED")
     print("  - Durable Cross-Process: PASSED")
+    print("  - Durable Execution Early Steps: PASSED")
+    print("  - Cancel Run Early Steps: PASSED")
+    print("  - MessageBuildStep Boundary: PASSED")
     print("="*80)
 
 

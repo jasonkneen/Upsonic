@@ -75,7 +75,7 @@ async def basic_streaming_example():
             print(f"  ⏳ [{event.step_index + 1}/{event.total_steps}] {event.step_name}...")
             
         elif isinstance(event, StepEndEvent):
-            status_icon = "✅" if event.status == "success" else "❌"
+            status_icon = "✅" if event.status == "COMPLETED" else "❌"
             print(f"  {status_icon} {event.step_name} completed in {event.execution_time:.3f}s")
             
         elif isinstance(event, TextDeltaEvent):

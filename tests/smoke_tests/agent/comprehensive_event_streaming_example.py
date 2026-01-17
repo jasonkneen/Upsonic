@@ -14,8 +14,7 @@ from typing import Dict, List, Set
 
 from upsonic import Agent, Task
 from upsonic.tools import tool
-from upsonic.storage.providers.in_memory import InMemoryStorage
-from upsonic.storage.memory.memory import Memory
+from upsonic.storage import InMemoryStorage, Memory
 
 # Import ALL event classes
 from upsonic.run.events.events import (

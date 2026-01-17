@@ -23,6 +23,7 @@ async def test_knowledgebase_as_context_basic():
     # Create temporary directory and test document
     temp_dir = tempfile.mkdtemp()
     test_doc_path = os.path.join(temp_dir, "document.txt")
+    kb = None
     
     try:
         # Create test document with specific content
@@ -96,7 +97,12 @@ async def test_knowledgebase_as_context_basic():
             "Should show knowledge base was queried"
         
     finally:
-        # Cleanup
+        # Cleanup KnowledgeBase
+        if kb is not None:
+            try:
+                await kb.close()
+            except Exception:
+                pass
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir)
 
@@ -106,6 +112,7 @@ async def test_knowledgebase_context_multiple_sources():
     """Test KnowledgeBase with multiple document sources as context."""
     
     temp_dir = tempfile.mkdtemp()
+    kb = None
     
     try:
         # Create multiple test documents
@@ -161,6 +168,12 @@ async def test_knowledgebase_context_multiple_sources():
             "Result should mention at least one language"
         
     finally:
+        # Cleanup KnowledgeBase
+        if kb is not None:
+            try:
+                await kb.close()
+            except Exception:
+                pass
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir)
 
@@ -172,6 +185,7 @@ async def test_knowledgebase_context_with_directory():
     temp_dir = tempfile.mkdtemp()
     data_dir = os.path.join(temp_dir, "data")
     os.makedirs(data_dir)
+    kb = None
     
     try:
         # Create documents in directory
@@ -216,6 +230,12 @@ async def test_knowledgebase_context_with_directory():
         assert len(result) > 0, "Result should not be empty"
         
     finally:
+        # Cleanup KnowledgeBase
+        if kb is not None:
+            try:
+                await kb.close()
+            except Exception:
+                pass
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir)
 
@@ -226,6 +246,7 @@ async def test_knowledgebase_context_mixed_with_other_context():
     
     temp_dir = tempfile.mkdtemp()
     test_doc_path = os.path.join(temp_dir, "document.txt")
+    kb = None
     
     try:
         with open(test_doc_path, "w") as f:
@@ -252,7 +273,8 @@ async def test_knowledgebase_context_mixed_with_other_context():
         additional_context = "Focus on cost-effectiveness and scalability."
         task = Task(
             description="Explain the benefits of cloud computing",
-            context=[kb, additional_context]
+            context=[kb, additional_context],
+            vector_search_similarity_threshold=0.0  # Lower threshold to ensure results
         )
         
         # Verify task context
@@ -268,6 +290,12 @@ async def test_knowledgebase_context_mixed_with_other_context():
         assert result is not None, "Result should not be None"
         
     finally:
+        # Cleanup KnowledgeBase
+        if kb is not None:
+            try:
+                await kb.close()
+            except Exception:
+                pass
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir)
 
@@ -278,6 +306,7 @@ async def test_knowledgebase_context_logging(capsys):
     
     temp_dir = tempfile.mkdtemp()
     test_doc_path = os.path.join(temp_dir, "document.txt")
+    kb = None
     
     try:
         with open(test_doc_path, "w") as f:
@@ -302,7 +331,8 @@ async def test_knowledgebase_context_logging(capsys):
         agent = Agent("openai/gpt-4o-mini", debug=True)
         task = Task(
             description="What is blockchain?",
-            context=[kb]
+            context=[kb],
+            vector_search_similarity_threshold=0.0  # Lower threshold to ensure results
         )
         
         output_buffer = StringIO()
@@ -316,6 +346,12 @@ async def test_knowledgebase_context_logging(capsys):
         # Debug mode should show context processing
         
     finally:
+        # Cleanup KnowledgeBase
+        if kb is not None:
+            try:
+                await kb.close()
+            except Exception:
+                pass
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir)
 
@@ -326,6 +362,7 @@ async def test_knowledgebase_context_attributes():
     
     temp_dir = tempfile.mkdtemp()
     test_doc_path = os.path.join(temp_dir, "document.txt")
+    kb = None
     
     try:
         with open(test_doc_path, "w") as f:
@@ -362,7 +399,8 @@ async def test_knowledgebase_context_attributes():
         # Use in task
         task = Task(
             description="Test query",
-            context=[kb]
+            context=[kb],
+            vector_search_similarity_threshold=0.0  # Lower threshold to ensure results
         )
         
         agent = Agent("openai/gpt-4o-mini", debug=True)
@@ -371,6 +409,12 @@ async def test_knowledgebase_context_attributes():
         assert result is not None, "Result should not be None"
         
     finally:
+        # Cleanup KnowledgeBase
+        if kb is not None:
+            try:
+                await kb.close()
+            except Exception:
+                pass
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir)
 
