@@ -7,10 +7,12 @@ Usage:
 """
 
 import asyncio
+import pytest
 from upsonic import Agent, Task, Graph
 from upsonic.graph.graph import DecisionFunc, DecisionLLM
 
 
+@pytest.mark.asyncio
 async def test_example_1_decision_func():
     """Test Example 1: DecisionFunc with branching."""
     print("\n" + "=" * 100)
@@ -54,6 +56,7 @@ async def test_example_1_decision_func():
     print("\n" + "=" * 100)
 
 
+@pytest.mark.asyncio
 async def test_example_2_decision_llm():
     """Test Example 2: DecisionLLM with branching."""
     print("\n" + "=" * 100)
@@ -92,6 +95,7 @@ async def test_example_2_decision_llm():
     print("\n" + "=" * 100)
 
 
+@pytest.mark.asyncio
 async def test_sequential_tasks():
     """Test simple sequential tasks (no branching)."""
     print("\n" + "=" * 100)

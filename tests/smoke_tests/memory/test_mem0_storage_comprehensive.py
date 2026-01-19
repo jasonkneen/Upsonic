@@ -15,6 +15,7 @@ This test suite verifies ALL methods and attributes of Mem0Storage:
 import os
 import sys
 import time
+import pytest
 from typing import Any, Dict, List, Optional
 
 from upsonic.session.agent import AgentSession, RunData
@@ -226,6 +227,7 @@ def test_table_management():
 # ============================================================================
 # TEST 3: Session CRUD Operations
 # ============================================================================
+@pytest.mark.timeout(60)
 def test_session_crud():
     """Test session Create, Read, Update, Delete operations."""
     print_separator("TEST 3: Session CRUD Operations")

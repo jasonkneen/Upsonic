@@ -13,6 +13,7 @@ This will show:
 """
 
 import asyncio
+import pytest
 from upsonic import Agent, Task
 from pydantic import BaseModel, Field
 
@@ -34,6 +35,7 @@ class ProductInfo(BaseModel):
     in_stock: bool = Field(description="Whether product is in stock")
 
 
+@pytest.mark.asyncio
 async def test_agent_with_tools_debug_level_1():
     """Test Agent with tools using debug level 1."""
     print("\n" + "=" * 100)
@@ -67,6 +69,7 @@ async def test_agent_with_tools_debug_level_1():
     print("\n" + "=" * 100)
 
 
+@pytest.mark.asyncio
 async def test_agent_with_tools_debug_level_2():
     """Test Agent with tools using debug level 2 (magnificent tables)."""
     print("\n" + "=" * 100)
@@ -105,6 +108,7 @@ async def test_agent_with_tools_debug_level_2():
     print("\n" + "=" * 100)
 
 
+@pytest.mark.asyncio
 async def test_agent_pydantic_structured_output_debug_level_1():
     """Test Agent with Pydantic structured output using debug level 1."""
     print("\n" + "=" * 100)
@@ -136,6 +140,7 @@ async def test_agent_pydantic_structured_output_debug_level_1():
     print("\n" + "=" * 100)
 
 
+@pytest.mark.asyncio
 async def test_agent_pydantic_structured_output_debug_level_2():
     """Test Agent with Pydantic structured output using debug level 2 (magnificent tables)."""
     print("\n" + "=" * 100)
@@ -167,6 +172,7 @@ async def test_agent_pydantic_structured_output_debug_level_2():
     print("\n" + "=" * 100)
 
 
+@pytest.mark.asyncio
 async def test_agent_tools_and_pydantic_debug_level_2():
     """Test Agent with both tools and Pydantic structured output using debug level 2."""
     print("\n" + "=" * 100)
@@ -213,6 +219,7 @@ async def test_agent_tools_and_pydantic_debug_level_2():
     print("\n" + "=" * 100)
 
 
+@pytest.mark.asyncio
 async def test_agent_multiple_tool_calls_debug_level_2():
     """Test Agent with multiple tool calls using debug level 2."""
     print("\n" + "=" * 100)

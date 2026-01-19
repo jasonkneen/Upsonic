@@ -23,7 +23,8 @@ from upsonic.agent import Agent
 from upsonic.tasks.tasks import Task
 from upsonic.storage.memory import Memory
 from upsonic.culture import CultureManager, CulturalKnowledge
-from upsonic.storage.providers import InMemoryStorage, SqliteStorage
+from upsonic.storage.in_memory import InMemoryStorage
+from upsonic.storage.sqlite import SqliteStorage
 
 
 # =============================================================================

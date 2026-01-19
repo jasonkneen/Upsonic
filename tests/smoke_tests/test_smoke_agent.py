@@ -3,7 +3,7 @@ import random
 import string
 from upsonic import Task, Agent
 from upsonic.storage import Memory
-from upsonic.storage.providers.sqlite import SqliteStorage
+from upsonic.storage.sqlite import SqliteStorage
 from upsonic.safety_engine.policies.crypto_policies import CryptoBlockPolicy
 from upsonic.safety_engine.policies.adult_content_policies import AdultContentBlockPolicy
 from upsonic.reliability_layer.reliability_layer import ReliabilityProcessor
@@ -57,7 +57,11 @@ def test_agent_roles_attributes():
 def test_agent_memory_and_task_chaining():
     """Test agent memory functionality and task chaining with previous results"""
     # Create storage and memory
-    storage = SqliteStorage("sessions", "profiles", "agent_memory.db")
+    storage = SqliteStorage(
+        session_table="sessions",
+        user_memory_table="profiles",
+        db_file="agent_memory.db"
+    )
     memory = Memory(
         storage=storage,
         session_id="session_001",

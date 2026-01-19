@@ -5,8 +5,6 @@ from __future__ import annotations
 import dataclasses
 from typing import Any, Dict, Optional
 
-import pydantic
-
 from upsonic._utils import dataclasses_no_defaults_repr
 
 
@@ -42,16 +40,5 @@ class ToolMetrics:
             tool_call_limit=data.get("tool_call_limit"),
         )
     
-    def serialize(self) -> bytes:
-        """Serialize to bytes using Pydantic TypeAdapter."""
-        return ToolMetricsTypeAdapter.dump_json(self)
-    
-    @classmethod
-    def deserialize(cls, data: bytes) -> "ToolMetrics":
-        """Deserialize from bytes using Pydantic TypeAdapter."""
-        return ToolMetricsTypeAdapter.validate_json(data)
-    
     __repr__ = dataclasses_no_defaults_repr
 
-
-ToolMetricsTypeAdapter = pydantic.TypeAdapter(ToolMetrics)

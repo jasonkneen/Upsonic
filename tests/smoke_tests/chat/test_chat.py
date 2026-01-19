@@ -13,9 +13,13 @@ This test suite validates:
 """
 import pytest
 import os
+from pathlib import Path
 
 from upsonic import Agent, Chat, Task
 from upsonic.chat import SessionState, ChatMessage, SessionMetrics, ChatAttachment
+
+# Get project root (4 levels up from this test file)
+PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 
 pytestmark = pytest.mark.timeout(120)
 
@@ -857,9 +861,9 @@ async def test_chat_with_attachments():
     print("TEST: test_chat_with_attachments")
     print("="*60)
     
-    # Use actual test files from workspace
-    pdf_path = "Upsonic/example_document.pdf"
-    image_path = "Upsonic/premium_photo-1661342428515-5ca8cee4385a.jpeg"
+    # Use actual test files from project root
+    pdf_path = str(PROJECT_ROOT / "example_document.pdf")
+    image_path = str(PROJECT_ROOT / "premium_photo-1661342428515-5ca8cee4385a.jpeg")
     
     # Verify files exist
     assert os.path.exists(pdf_path), f"PDF file not found: {pdf_path}"
@@ -1090,9 +1094,9 @@ async def test_chat_remove_attachment():
     print("TEST: test_chat_remove_attachment")
     print("="*60)
     
-    # Use actual test files from workspace
-    pdf_path = "Upsonic/example_document.pdf"
-    image_path = "Upsonic/premium_photo-1661342428515-5ca8cee4385a.jpeg"
+    # Use actual test files from project root
+    pdf_path = str(PROJECT_ROOT / "example_document.pdf")
+    image_path = str(PROJECT_ROOT / "premium_photo-1661342428515-5ca8cee4385a.jpeg")
     
     # Verify files exist
     assert os.path.exists(pdf_path), f"PDF file not found: {pdf_path}"
@@ -1312,8 +1316,9 @@ async def test_chat_remove_attachment_by_path():
     print("TEST: test_chat_remove_attachment_by_path")
     print("="*60)
     
-    pdf_path = "Upsonic/example_document.pdf"
-    image_path = "Upsonic/premium_photo-1661342428515-5ca8cee4385a.jpeg"
+    # Use actual test files from project root
+    pdf_path = str(PROJECT_ROOT / "example_document.pdf")
+    image_path = str(PROJECT_ROOT / "premium_photo-1661342428515-5ca8cee4385a.jpeg")
     
     # Verify files exist
     assert os.path.exists(pdf_path), f"PDF file not found: {pdf_path}"

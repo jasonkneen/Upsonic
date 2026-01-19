@@ -8,7 +8,7 @@ from __future__ import annotations as _annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from inspect import Parameter, signature
-from typing import TYPE_CHECKING, Any, cast, get_origin
+from typing import TYPE_CHECKING, Any, cast
 
 from pydantic import ConfigDict
 from pydantic._internal import _decorators, _generate_schema, _typing_extra
@@ -22,7 +22,7 @@ from upsonic._griffe import doc_descriptions
 from upsonic._utils import is_async_callable, is_model_like
 
 if TYPE_CHECKING:
-    from upsonic.tools.base import DocstringFormat, ObjectJsonSchema
+    from upsonic.tools.base import DocstringFormat
 
 
 __all__ = ('FunctionSchema', 'function_schema', 'SchemaGenerationError', 'GenerateToolJsonSchema')

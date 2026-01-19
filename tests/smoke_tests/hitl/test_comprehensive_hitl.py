@@ -12,6 +12,7 @@ verification of all attributes in:
 - ModelResponse, RequestUsage, ModelProfile, AgentRunInput, ModelMessage
 """
 
+import pytest
 import asyncio
 import os
 import time
@@ -31,6 +32,8 @@ from upsonic.run.agent.input import AgentRunInput
 from upsonic.usage import RequestUsage, RunUsage
 from upsonic.profiles import ModelProfile
 from upsonic.messages.messages import ModelResponse, ModelRequest
+
+pytestmark = pytest.mark.timeout(300)
 
 DEBUG = True
 DB_FILE = "test_comprehensive.db"
@@ -1083,6 +1086,7 @@ def compare_outputs(before: AgentRunOutput, after: AgentRunOutput, description: 
 # TEST: EXTERNAL TOOL
 # =============================================================================
 
+@pytest.mark.asyncio
 async def test_external_tool_comprehensive():
     """Comprehensive External Tool test with full attribute verification."""
     print("\n" + "="*80)
@@ -1252,6 +1256,7 @@ async def test_external_tool_comprehensive():
 # TEST: CANCEL RUN
 # =============================================================================
 
+@pytest.mark.asyncio
 async def test_cancel_run_comprehensive():
     """Comprehensive Cancel Run test with full attribute verification."""
     print("\n" + "="*80)
@@ -1379,6 +1384,7 @@ async def test_cancel_run_comprehensive():
 # TEST: DURABLE EXECUTION
 # =============================================================================
 
+@pytest.mark.asyncio
 async def test_durable_execution_comprehensive():
     """Comprehensive Durable Execution test with full attribute verification."""
     print("\n" + "="*80)
@@ -1518,6 +1524,7 @@ async def test_durable_execution_comprehensive():
 # TEST: CROSS-PROCESS DURABLE EXECUTION
 # =============================================================================
 
+@pytest.mark.asyncio
 async def test_durable_cross_process_comprehensive():
     """Durable execution with new agent (cross-process simulation)."""
     print("\n" + "="*80)
@@ -1625,6 +1632,7 @@ async def test_durable_cross_process_comprehensive():
 # TEST: DURABLE EXECUTION - EARLY STEPS (Before and At MessageBuildStep)
 # =============================================================================
 
+@pytest.mark.asyncio
 async def test_durable_execution_early_steps():
     """
     Test durable execution with error injection at early steps:
@@ -1799,6 +1807,7 @@ async def test_durable_execution_early_steps():
 # TEST: CANCEL RUN - EARLY STEPS (Before and At MessageBuildStep)
 # =============================================================================
 
+@pytest.mark.asyncio
 async def test_cancel_run_early_steps():
     """
     Test cancel run at early steps:
@@ -1970,6 +1979,7 @@ async def test_cancel_run_early_steps():
 # TEST: MESSAGE BUILD STEP SPECIFIC - Boundary Verification
 # =============================================================================
 
+@pytest.mark.asyncio
 async def test_message_build_step_boundary():
     """
     Specifically test that _run_boundaries is correctly set when:
@@ -2105,11 +2115,11 @@ async def test_message_build_step_boundary():
 
 
 # =============================================================================
-# MAIN
+# MAIN (for manual execution)
 # =============================================================================
 
 async def main():
-    """Run all comprehensive tests."""
+    """Run all comprehensive tests manually."""
     
     await test_external_tool_comprehensive()
     await test_cancel_run_comprehensive()

@@ -20,7 +20,7 @@ from typing import List, Optional
 
 # Import culture classes
 from upsonic.culture import CulturalKnowledge, CultureManager
-from upsonic.storage.providers import InMemoryStorage
+from upsonic.storage.in_memory import InMemoryStorage
 
 
 # =============================================================================

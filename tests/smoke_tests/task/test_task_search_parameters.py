@@ -154,6 +154,7 @@ async def test_task_search_params_with_rrf_fusion():
 
 
 @pytest.mark.asyncio
+@pytest.mark.timeout(60)
 async def test_task_search_params_with_filter():
     """Test Task with metadata filter."""
     
@@ -187,7 +188,7 @@ async def test_task_search_params_with_filter():
         )
         await kb.setup_async()
         
-        # Create task with filter (though actual filtering depends on vectordb support)
+        # Create task with filter
         filter_dict = {"source": "python.txt"}
         task = Task(
             description="What is Python used for?",
