@@ -632,6 +632,8 @@ class TestMemoryManager:
             "context_injection": "",
             "system_prompt_injection": "",
             "metadata_injection": "",
+            "culture_injection": "",
+            "cultural_knowledge_list": [],
         }
         assert manager._agent_run_output is None
 
@@ -645,6 +647,8 @@ class TestMemoryManager:
             "context_injection": "",
             "system_prompt_injection": "",
             "metadata_injection": "",
+            "culture_injection": "",
+            "cultural_knowledge_list": [],
         }
 
     def test_memory_manager_get_message_history(self):
