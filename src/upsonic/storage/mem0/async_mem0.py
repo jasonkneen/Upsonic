@@ -17,18 +17,23 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 if TYPE_CHECKING:
     from mem0 import AsyncMemory, AsyncMemoryClient
     from mem0.configs.base import MemoryConfig
+    from upsonic.culture.cultural_knowledge import CulturalKnowledge
     from upsonic.session.base import Session, SessionType
 
 from upsonic.storage.base import AsyncStorage
 from upsonic.storage.mem0.utils import (
     apply_pagination,
+    build_cultural_knowledge_filters,
     build_session_filters,
     build_user_memory_filters,
+    deserialize_cultural_knowledge_from_mem0,
     deserialize_session_from_mem0,
     deserialize_session_to_object,
     deserialize_user_memory_from_mem0,
+    generate_cultural_knowledge_memory_id,
     generate_session_memory_id,
     generate_user_memory_id,
+    serialize_cultural_knowledge_to_mem0,
     serialize_session_to_mem0,
     serialize_user_memory_to_mem0,
     sort_records_by_field,
@@ -103,6 +108,7 @@ class AsyncMem0Storage(AsyncStorage):
         # Common parameters
         session_table: Optional[str] = None,
         user_memory_table: Optional[str] = None,
+        cultural_knowledge_table: Optional[str] = None,
         default_user_id: str = "upsonic_default",
         id: Optional[str] = None,
     ) -> None:
@@ -124,6 +130,7 @@ class AsyncMem0Storage(AsyncStorage):
             config: MemoryConfig for self-hosted AsyncMemory instance.
             session_table: Name of the session table (used in metadata for filtering).
             user_memory_table: Name of the user memory table (used in metadata).
+            cultural_knowledge_table: Name of the cultural knowledge table (used in metadata).
             default_user_id: Default user_id for Mem0 operations (required by Mem0).
             id: Unique identifier for this storage instance.
         
@@ -134,6 +141,7 @@ class AsyncMem0Storage(AsyncStorage):
         super().__init__(
             session_table=session_table,
             user_memory_table=user_memory_table,
+            cultural_knowledge_table=cultural_knowledge_table,
             id=id,
         )
         
@@ -892,13 +900,227 @@ class AsyncMem0Storage(AsyncStorage):
         _logger.debug(f"Deleted {deleted_count} user memories")
         return deleted_count
 
+    # ======================== Cultural Knowledge Methods ========================
+
+    async def adelete_cultural_knowledge(self, id: str) -> None:
+        """
+        Delete cultural knowledge from Mem0 (async).
+        
+        Args:
+            id: The ID of the cultural knowledge to delete.
+        
+        Raises:
+            Exception: If an error occurs during deletion.
+        """
+        try:
+            memory_id = generate_cultural_knowledge_memory_id(id, self.cultural_knowledge_table_name)
+            success = await self._adelete_memory(memory_id)
+            if success:
+                _logger.debug(f"Successfully deleted cultural knowledge id: {id}")
+            else:
+                _logger.debug(f"No cultural knowledge found with id: {id}")
+        except Exception as e:
+            _logger.error(f"Error deleting cultural knowledge: {e}")
+            raise e
+
+    async def aget_cultural_knowledge(
+        self,
+        id: str,
+        deserialize: bool = True,
+    ) -> Optional[Union["CulturalKnowledge", Dict[str, Any]]]:
+        """
+        Get cultural knowledge from Mem0 (async).
+        
+        Args:
+            id: The ID of the cultural knowledge to get.
+            deserialize: If True, return CulturalKnowledge object. If False, return dict.
+        
+        Returns:
+            CulturalKnowledge object or dict if found, None otherwise.
+        
+        Raises:
+            Exception: If an error occurs during retrieval.
+        """
+        from upsonic.culture.cultural_knowledge import CulturalKnowledge
+        
+        try:
+            memory_id = generate_cultural_knowledge_memory_id(id, self.cultural_knowledge_table_name)
+            stored = await self._aget_memory_by_id(memory_id)
+            
+            if stored is None:
+                return None
+            
+            db_row = deserialize_cultural_knowledge_from_mem0(stored)
+            
+            if not deserialize:
+                return db_row
+            return CulturalKnowledge.from_dict(db_row)
+        
+        except Exception as e:
+            _logger.error(f"Error getting cultural knowledge: {e}")
+            raise e
+
+    async def aget_all_cultural_knowledge(
+        self,
+        name: Optional[str] = None,
+        limit: Optional[int] = None,
+        page: Optional[int] = None,
+        sort_by: Optional[str] = None,
+        sort_order: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        team_id: Optional[str] = None,
+        deserialize: bool = True,
+    ) -> Union[List["CulturalKnowledge"], Tuple[List[Dict[str, Any]], int]]:
+        """
+        Get all cultural knowledge from Mem0 (async).
+        
+        Args:
+            name: Filter by name.
+            limit: Maximum number of records to return.
+            page: Page number (1-indexed).
+            sort_by: Field to sort by.
+            sort_order: Sort order ('asc' or 'desc').
+            agent_id: Filter by agent ID.
+            team_id: Filter by team ID.
+            deserialize: If True, return list of CulturalKnowledge objects.
+                        If False, return tuple of (list of dicts, total count).
+        
+        Returns:
+            List of CulturalKnowledge objects or tuple of (list of dicts, total count).
+        
+        Raises:
+            Exception: If an error occurs during retrieval.
+        """
+        from upsonic.culture.cultural_knowledge import CulturalKnowledge
+        
+        try:
+            # Build filters
+            filters = build_cultural_knowledge_filters(
+                table_name=self.cultural_knowledge_table_name,
+                name=name,
+                agent_id=agent_id,
+                team_id=team_id,
+            )
+            
+            records = await self._asearch_memories(filters=filters)
+            
+            if not records:
+                return [] if deserialize else ([], 0)
+            
+            # Get total count before pagination
+            total_count = len(records)
+            
+            # Sort records
+            sorted_records = sort_records_by_field(
+                records,
+                sort_by=sort_by or "created_at",
+                sort_order=sort_order or "desc",
+            )
+            
+            # Apply pagination (convert page to offset)
+            offset = None
+            if page is not None and limit is not None:
+                offset = (page - 1) * limit
+            
+            paginated_records = apply_pagination(sorted_records, limit, offset)
+            
+            # Deserialize all records
+            db_rows = [deserialize_cultural_knowledge_from_mem0(r) for r in paginated_records]
+            
+            if not deserialize:
+                return db_rows, total_count
+            
+            return [CulturalKnowledge.from_dict(row) for row in db_rows]
+        
+        except Exception as e:
+            _logger.error(f"Error getting all cultural knowledge: {e}")
+            raise e
+
+    async def aupsert_cultural_knowledge(
+        self,
+        cultural_knowledge: "CulturalKnowledge",
+        deserialize: bool = True,
+    ) -> Optional[Union["CulturalKnowledge", Dict[str, Any]]]:
+        """
+        Upsert cultural knowledge into Mem0 (async).
+        
+        Args:
+            cultural_knowledge: The CulturalKnowledge instance to upsert.
+            deserialize: If True, return CulturalKnowledge object. If False, return dict.
+        
+        Returns:
+            The upserted CulturalKnowledge object or dict, or None if error.
+        
+        Raises:
+            Exception: If an error occurs during upsert.
+        """
+        from upsonic.culture.cultural_knowledge import CulturalKnowledge
+        import uuid
+        
+        try:
+            if cultural_knowledge.id is None:
+                cultural_knowledge.id = str(uuid.uuid4())
+            
+            # Serialize for Mem0
+            serialized = serialize_cultural_knowledge_to_mem0(
+                cultural_knowledge, self.cultural_knowledge_table_name
+            )
+            memory_id = serialized["memory_id"]
+            
+            # Check if memory already exists
+            existing = await self._aget_memory_by_id(memory_id)
+            
+            if existing:
+                # Update existing - preserve created_at
+                existing_data = deserialize_cultural_knowledge_from_mem0(existing)
+                created_at = existing_data.get("created_at", int(time.time()))
+                
+                # Update the _data in metadata with preserved created_at
+                data_str = serialized["metadata"].get("_data")
+                if data_str:
+                    import json
+                    data_dict = json.loads(data_str)
+                    data_dict["created_at"] = created_at
+                    serialized["metadata"]["_data"] = json.dumps(data_dict)
+                    serialized["metadata"]["created_at"] = created_at
+                
+                await self._aupdate_memory(
+                    memory_id=memory_id,
+                    content=serialized["content"],
+                    metadata=serialized["metadata"],
+                )
+                _logger.debug(f"Updated cultural knowledge: {cultural_knowledge.id}")
+            else:
+                # Add new memory
+                await self._aadd_memory(
+                    memory_id=memory_id,
+                    content=serialized["content"],
+                    metadata=serialized["metadata"],
+                )
+                _logger.debug(f"Added cultural knowledge: {cultural_knowledge.id}")
+            
+            # Retrieve and return the stored record
+            stored = await self._aget_memory_by_id(memory_id)
+            if stored is None:
+                return None
+            
+            db_row = deserialize_cultural_knowledge_from_mem0(stored)
+            
+            if not deserialize:
+                return db_row
+            return CulturalKnowledge.from_dict(db_row)
+        
+        except Exception as e:
+            _logger.error(f"Error upserting cultural knowledge: {e}")
+            raise e
+
     # ======================== Utility Methods ========================
 
     async def aclear_all(self) -> None:
         """
         Clear all data from all tables (async).
         
-        This removes all sessions and user memories from the storage.
+        This removes all sessions, user memories, and cultural knowledge from storage.
         Use with caution.
         """
         try:
@@ -927,6 +1149,21 @@ class AsyncMem0Storage(AsyncStorage):
                     await self._adelete_memory(memory_id)
             
             _logger.debug(f"Cleared {len(user_memory_records)} user memories")
+            
+            # Get all cultural knowledge and delete them
+            cultural_knowledge_filters = build_cultural_knowledge_filters(
+                table_name=self.cultural_knowledge_table_name
+            )
+            cultural_knowledge_records = await self._asearch_memories(
+                filters=cultural_knowledge_filters
+            )
+            
+            for record in cultural_knowledge_records:
+                memory_id = record.get("id") or record.get("memory_id")
+                if memory_id:
+                    await self._adelete_memory(memory_id)
+            
+            _logger.debug(f"Cleared {len(cultural_knowledge_records)} cultural knowledge entries")
             _logger.info("Cleared all data from AsyncMem0 storage")
         
         except Exception as e:

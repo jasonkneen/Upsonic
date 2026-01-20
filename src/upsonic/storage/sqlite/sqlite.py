@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 if TYPE_CHECKING:
     from sqlalchemy.engine import Engine
     from upsonic.session.base import SessionType, Session
+    from upsonic.culture.cultural_knowledge import CulturalKnowledge
 
 try:
     from sqlalchemy import Column, MetaData, Table, func, select, text
@@ -130,6 +131,7 @@ class SqliteStorage(Storage):
         # Table references (populated lazily)
         self._session_table: Optional[Table] = None
         self._user_memory_table: Optional[Table] = None
+        self._cultural_knowledge_table: Optional[Table] = None
         self._tables: Dict[str, Table] = {}  # Cache for generic model tables
 
     def close(self) -> None:
@@ -149,6 +151,7 @@ class SqliteStorage(Storage):
         tables_to_create = [
             (self.session_table_name, "sessions"),
             (self.user_memory_table_name, "user_memories"),
+            (self.cultural_knowledge_table_name, "cultural_knowledge"),
         ]
 
         for table_name, table_type in tables_to_create:
@@ -259,6 +262,16 @@ class SqliteStorage(Storage):
                 create_if_not_found=create_if_not_found,
             )
         return self._user_memory_table
+
+    def _get_cultural_knowledge_table(self, create_if_not_found: bool = False) -> Table:
+        """Get the cultural knowledge table, creating if needed."""
+        if self._cultural_knowledge_table is None:
+            self._cultural_knowledge_table = self._get_or_create_table(
+                table_name=self.cultural_knowledge_table_name,
+                table_type="cultural_knowledge",
+                create_if_not_found=create_if_not_found,
+            )
+        return self._cultural_knowledge_table
 
 
     def _get_session_type_value(self, session: "Session") -> str:
@@ -1128,3 +1141,205 @@ class SqliteStorage(Storage):
             _logger.error(f"Error listing models: {e}")
             return []
 
+    # ======================== Cultural Knowledge Methods ========================
+
+    def delete_cultural_knowledge(self, id: str) -> None:
+        """Delete cultural knowledge from the database.
+        
+        Args:
+            id: The ID of the cultural knowledge to delete.
+        
+        Raises:
+            Exception: If an error occurs during deletion.
+        """
+        try:
+            table = self._get_cultural_knowledge_table(create_if_not_found=False)
+
+            with self.Session() as sess, sess.begin():
+                delete_stmt = table.delete().where(table.c.id == id)
+                result = sess.execute(delete_stmt)
+
+                success = result.rowcount > 0
+                if success:
+                    _logger.debug(f"Successfully deleted cultural knowledge id: {id}")
+                else:
+                    _logger.debug(f"No cultural knowledge found with id: {id}")
+
+        except Exception as e:
+            _logger.error(f"Error deleting cultural knowledge: {e}")
+            raise e
+
+    def get_cultural_knowledge(
+        self,
+        id: str,
+        deserialize: bool = True,
+    ) -> Optional[Union["CulturalKnowledge", Dict[str, Any]]]:
+        """Get cultural knowledge from the database.
+        
+        Args:
+            id: The ID of the cultural knowledge to get.
+            deserialize: If True, return CulturalKnowledge object. If False, return dict.
+        
+        Returns:
+            CulturalKnowledge object or dict if found, None otherwise.
+        
+        Raises:
+            Exception: If an error occurs during retrieval.
+        """
+        from upsonic.culture.cultural_knowledge import CulturalKnowledge
+        
+        try:
+            table = self._get_cultural_knowledge_table(create_if_not_found=False)
+
+            with self.Session() as sess, sess.begin():
+                stmt = select(table).where(table.c.id == id)
+                result = sess.execute(stmt).fetchone()
+                if result is None:
+                    return None
+
+                db_row = dict(result._mapping)
+                if not deserialize:
+                    return db_row
+                return CulturalKnowledge.from_dict(db_row)
+
+        except Exception as e:
+            _logger.error(f"Exception reading from cultural knowledge table: {e}")
+            raise e
+
+    def get_all_cultural_knowledge(
+        self,
+        name: Optional[str] = None,
+        limit: Optional[int] = None,
+        page: Optional[int] = None,
+        sort_by: Optional[str] = None,
+        sort_order: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        team_id: Optional[str] = None,
+        deserialize: bool = True,
+    ) -> Union[List["CulturalKnowledge"], Tuple[List[Dict[str, Any]], int]]:
+        """Get all cultural knowledge entries from the database.
+        
+        Args:
+            name: Filter by name.
+            limit: Maximum number of records to return.
+            page: Page number (1-indexed).
+            sort_by: Column to sort by.
+            sort_order: Sort order ('asc' or 'desc').
+            agent_id: Filter by agent ID.
+            team_id: Filter by team ID.
+            deserialize: If True, return list of CulturalKnowledge objects.
+                        If False, return tuple of (list of dicts, total count).
+        
+        Returns:
+            List of CulturalKnowledge objects or tuple of (list of dicts, total count).
+        
+        Raises:
+            Exception: If an error occurs during retrieval.
+        """
+        from upsonic.culture.cultural_knowledge import CulturalKnowledge
+        from sqlalchemy import func
+        
+        try:
+            table = self._get_cultural_knowledge_table(create_if_not_found=False)
+
+            with self.Session() as sess, sess.begin():
+                stmt = select(table)
+
+                # Filtering
+                if name is not None:
+                    stmt = stmt.where(table.c.name == name)
+                if agent_id is not None:
+                    stmt = stmt.where(table.c.agent_id == agent_id)
+                if team_id is not None:
+                    stmt = stmt.where(table.c.team_id == team_id)
+
+                # Get total count after applying filtering
+                count_stmt = select(func.count()).select_from(stmt.alias())
+                count_result = sess.execute(count_stmt)
+                total_count = count_result.scalar() or 0
+
+                # Sorting
+                stmt = apply_sorting(stmt, table, sort_by, sort_order)
+                
+                # Paginating
+                if limit is not None:
+                    stmt = stmt.limit(limit)
+                    if page is not None:
+                        stmt = stmt.offset((page - 1) * limit)
+
+                result = sess.execute(stmt).fetchall()
+                if not result:
+                    return [] if deserialize else ([], 0)
+
+                db_rows = [dict(record._mapping) for record in result]
+                if not deserialize:
+                    return db_rows, total_count
+                return [CulturalKnowledge.from_dict(row) for row in db_rows]
+
+        except Exception as e:
+            _logger.error(f"Error reading from cultural knowledge table: {e}")
+            raise e
+
+    def upsert_cultural_knowledge(
+        self,
+        cultural_knowledge: "CulturalKnowledge",
+        deserialize: bool = True,
+    ) -> Optional[Union["CulturalKnowledge", Dict[str, Any]]]:
+        """Upsert cultural knowledge into the database.
+        
+        Args:
+            cultural_knowledge: The CulturalKnowledge instance to upsert.
+            deserialize: If True, return CulturalKnowledge object. If False, return dict.
+        
+        Returns:
+            The upserted CulturalKnowledge object or dict, or None if error occurs.
+        
+        Raises:
+            Exception: If an error occurs during upsert.
+        """
+        from upsonic.culture.cultural_knowledge import CulturalKnowledge
+        import uuid
+        
+        try:
+            table = self._get_cultural_knowledge_table(create_if_not_found=True)
+
+            if cultural_knowledge.id is None:
+                cultural_knowledge.id = str(uuid.uuid4())
+
+            # Use to_dict for serialization
+            data = cultural_knowledge.to_dict()
+            
+            # Convert RFC3339 timestamps to epoch seconds for storage
+            if "created_at" in data and data["created_at"] is not None:
+                if isinstance(data["created_at"], str):
+                    from upsonic.utils.dttm import to_epoch_s
+                    data["created_at"] = to_epoch_s(data["created_at"])
+            if "updated_at" in data and data["updated_at"] is not None:
+                if isinstance(data["updated_at"], str):
+                    from upsonic.utils.dttm import to_epoch_s
+                    data["updated_at"] = to_epoch_s(data["updated_at"])
+            else:
+                # Set updated_at to current time if not set
+                data["updated_at"] = int(time.time())
+
+            with self.Session() as sess, sess.begin():
+                stmt = sqlite.insert(table).values(**data)
+                stmt = stmt.on_conflict_do_update(  # type: ignore
+                    index_elements=["id"],
+                    set_={k: v for k, v in data.items() if k != "id"},
+                ).returning(table)
+
+                result = sess.execute(stmt)
+                row = result.fetchone()
+
+                if row is None:
+                    return None
+
+            db_row: Dict[str, Any] = dict(row._mapping)
+            if not deserialize:
+                return db_row
+            return CulturalKnowledge.from_dict(db_row)
+
+        except Exception as e:
+            _logger.error(f"Error upserting cultural knowledge: {e}")
+            raise e

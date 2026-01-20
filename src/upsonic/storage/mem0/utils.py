@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from upsonic.utils.logging_config import get_logger
 
 if TYPE_CHECKING:
+    from upsonic.culture.cultural_knowledge import CulturalKnowledge
     from upsonic.session.base import Session, SessionType
 
 _logger = get_logger("upsonic.storage.mem0.utils")
@@ -59,6 +60,21 @@ USER_MEMORY_SCHEMA: Dict[str, Dict[str, Any]] = {
     "team_id": {"type": "string"},
     "created_at": {"type": "integer"},
     "updated_at": {"type": "integer"},
+}
+
+CULTURAL_KNOWLEDGE_SCHEMA: Dict[str, Dict[str, Any]] = {
+    "id": {"type": "string", "primary_key": True},
+    "name": {"type": "string"},
+    "summary": {"type": "string"},
+    "content": {"type": "string"},
+    "metadata": {"type": "json"},
+    "notes": {"type": "json"},
+    "categories": {"type": "json"},
+    "input": {"type": "string"},
+    "created_at": {"type": "integer"},
+    "updated_at": {"type": "integer"},
+    "agent_id": {"type": "string"},
+    "team_id": {"type": "string"},
 }
 
 
@@ -129,6 +145,41 @@ def extract_user_id_from_memory_id(memory_id: str) -> Optional[str]:
         The user_id or None if format is invalid
     """
     if not memory_id or not memory_id.startswith("user_memory__"):
+        return None
+    
+    parts = memory_id.split("__", 2)
+    if len(parts) >= 3:
+        return parts[2]
+    return None
+
+
+def generate_cultural_knowledge_memory_id(cultural_knowledge_id: str, table_name: str) -> str:
+    """
+    Generate a unique memory ID for a cultural knowledge record.
+    
+    Note: Uses underscores instead of colons for URL compatibility with Mem0 Platform.
+    
+    Args:
+        cultural_knowledge_id: The cultural knowledge ID
+        table_name: The table name for namespacing
+    
+    Returns:
+        A unique memory ID string (URL-safe format)
+    """
+    return f"cultural_knowledge__{table_name}__{cultural_knowledge_id}"
+
+
+def extract_cultural_knowledge_id_from_memory_id(memory_id: str) -> Optional[str]:
+    """
+    Extract cultural_knowledge_id from a memory ID.
+    
+    Args:
+        memory_id: The memory ID (format: "cultural_knowledge__{table}__{id}")
+    
+    Returns:
+        The cultural knowledge id or None if format is invalid
+    """
+    if not memory_id or not memory_id.startswith("cultural_knowledge__"):
         return None
     
     parts = memory_id.split("__", 2)
@@ -459,6 +510,130 @@ def deserialize_user_memory_from_mem0(
     return {}
 
 
+def serialize_cultural_knowledge_to_mem0(
+    cultural_knowledge: "CulturalKnowledge",
+    table_name: str,
+) -> Dict[str, Any]:
+    """
+    Serialize cultural knowledge for Mem0 storage.
+    
+    For Mem0 Platform, the message content is processed by LLM and transformed.
+    We store the actual data in metadata._data as a JSON string.
+    
+    Args:
+        cultural_knowledge: The CulturalKnowledge instance to serialize
+        table_name: The table name for namespacing
+    
+    Returns:
+        Dictionary with 'content', 'metadata', and 'memory_id'
+    """
+    if not cultural_knowledge.id:
+        import uuid
+        cultural_knowledge.id = str(uuid.uuid4())
+    
+    current_time = int(time.time())
+    
+    # Use to_dict for serialization
+    data_payload = cultural_knowledge.to_dict()
+    
+    # Convert RFC3339 timestamps to epoch seconds for storage
+    if "created_at" in data_payload and data_payload["created_at"] is not None:
+        if isinstance(data_payload["created_at"], str):
+            # Parse RFC3339 to epoch
+            try:
+                from datetime import datetime
+                dt = datetime.fromisoformat(data_payload["created_at"].replace("Z", "+00:00"))
+                data_payload["created_at"] = int(dt.timestamp())
+            except (ValueError, AttributeError):
+                data_payload["created_at"] = current_time
+    else:
+        data_payload["created_at"] = current_time
+    
+    # Always update updated_at
+    data_payload["updated_at"] = current_time
+    
+    memory_id = generate_cultural_knowledge_memory_id(cultural_knowledge.id, table_name)
+    
+    # Metadata contains:
+    # 1. Filtering fields for lookups
+    # 2. _data: Full data as JSON string (not processed by LLM)
+    metadata = {
+        "_type": "cultural_knowledge",
+        "_table": table_name,
+        "_upsonic_memory_id": memory_id,
+        "_data": json.dumps(data_payload),  # Store actual data in metadata
+        "id": cultural_knowledge.id,
+        "name": cultural_knowledge.name,
+        "agent_id": cultural_knowledge.agent_id,
+        "team_id": cultural_knowledge.team_id,
+        "created_at": data_payload["created_at"],
+        "updated_at": data_payload["updated_at"],
+    }
+    
+    # Remove None values from metadata
+    metadata = {k: v for k, v in metadata.items() if v is not None}
+    
+    # Content is just a simple identifier (LLM will process this but we ignore it)
+    content = f"Upsonic cultural knowledge: {cultural_knowledge.name or cultural_knowledge.id}"
+    
+    return {
+        "content": content,
+        "metadata": metadata,
+        "memory_id": memory_id,
+    }
+
+
+def deserialize_cultural_knowledge_from_mem0(
+    mem0_record: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Deserialize a Mem0 record back to cultural knowledge dictionary.
+    
+    The actual data is stored in metadata._data as a JSON string.
+    
+    Args:
+        mem0_record: The Mem0 record containing metadata with _data field
+    
+    Returns:
+        Cultural knowledge dictionary
+    """
+    # Primary: Get data from metadata._data (where we store the actual data)
+    metadata = mem0_record.get("metadata", {})
+    data_str = metadata.get("_data")
+    
+    if data_str:
+        try:
+            return json.loads(data_str)
+        except json.JSONDecodeError:
+            _logger.warning(f"Failed to parse _data from metadata: {data_str[:100]}")
+    
+    # Fallback: Try to get from content (for backwards compatibility)
+    content = mem0_record.get("memory") or mem0_record.get("content", "")
+    
+    if isinstance(content, str):
+        try:
+            data = json.loads(content)
+            return data
+        except json.JSONDecodeError:
+            pass
+    elif isinstance(content, dict):
+        return content
+    
+    # Last resort: Reconstruct from metadata fields
+    if metadata:
+        return {
+            "id": metadata.get("id"),
+            "name": metadata.get("name"),
+            "agent_id": metadata.get("agent_id"),
+            "team_id": metadata.get("team_id"),
+            "created_at": metadata.get("created_at"),
+            "updated_at": metadata.get("updated_at"),
+        }
+    
+    _logger.warning("Could not deserialize cultural knowledge from Mem0 record")
+    return {}
+
+
 # ======================== Session Deserialization ========================
 
 def deserialize_session_to_object(
@@ -567,6 +742,39 @@ def build_user_memory_filters(
     
     if user_id is not None:
         filters["user_id"] = user_id
+    if agent_id is not None:
+        filters["agent_id"] = agent_id
+    if team_id is not None:
+        filters["team_id"] = team_id
+    
+    return filters
+
+
+def build_cultural_knowledge_filters(
+    table_name: str,
+    name: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    team_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Build metadata filters for Mem0 cultural knowledge queries.
+    
+    Args:
+        table_name: The table name to filter by
+        name: Optional name filter
+        agent_id: Optional agent ID filter
+        team_id: Optional team ID filter
+    
+    Returns:
+        Dictionary of metadata filters for Mem0 search
+    """
+    filters: Dict[str, Any] = {
+        "_type": "cultural_knowledge",
+        "_table": table_name,
+    }
+    
+    if name is not None:
+        filters["name"] = name
     if agent_id is not None:
         filters["agent_id"] = agent_id
     if team_id is not None:

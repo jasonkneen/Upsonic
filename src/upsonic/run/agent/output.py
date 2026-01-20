@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from upsonic.run.pipeline.stats import PipelineExecutionStats
     from upsonic.tasks.tasks import Task
     from upsonic.schemas.kb_filter import KBFilterExpr
+    from upsonic.culture.cultural_knowledge import CulturalKnowledge
 
 
 @dataclass
@@ -141,6 +142,9 @@ class AgentRunOutput:
     # --- Metadata ---
     metadata: Optional[Dict[str, Any]] = None
     session_state: Optional[Dict[str, Any]] = None
+    
+    # --- Cultural Knowledge ---
+    cultural_knowledge: Optional["CulturalKnowledge"] = None
     
     # --- Execution state ---
     is_streaming: bool = False
@@ -796,6 +800,12 @@ class AgentRunOutput:
         else:
             result["current_step_result"] = None
         
+        # cultural_knowledge: to_dict
+        if self.cultural_knowledge is not None:
+            result["cultural_knowledge"] = self.cultural_knowledge.to_dict()
+        else:
+            result["cultural_knowledge"] = None
+        
         return result
     
     def to_json(self, indent: Optional[int] = 2, serialize_flag: bool = False) -> str:
@@ -835,6 +845,7 @@ class AgentRunOutput:
         from upsonic.profiles import ModelProfile
         from upsonic.usage import RunUsage
         from upsonic.schemas.kb_filter import KBFilterExpr
+        from upsonic.culture.cultural_knowledge import CulturalKnowledge
 
         # Handle task (dict or Task object) - with deserialize_flag
         task = None
@@ -1021,6 +1032,14 @@ class AgentRunOutput:
         else:
             current_step_result = current_step_result_data
         
+        # Handle cultural_knowledge: from_dict
+        cultural_knowledge_data = data.get("cultural_knowledge")
+        cultural_knowledge = None
+        if cultural_knowledge_data and isinstance(cultural_knowledge_data, dict):
+            cultural_knowledge = CulturalKnowledge.from_dict(cultural_knowledge_data)
+        else:
+            cultural_knowledge = cultural_knowledge_data
+        
         return cls(
             run_id=data.get("run_id"),
             agent_id=data.get("agent_id"),
@@ -1064,6 +1083,7 @@ class AgentRunOutput:
             _run_boundaries=data.get("_run_boundaries", []),
             pause_reason=data.get("pause_reason"),
             error_details=data.get("error_details"),
+            cultural_knowledge=cultural_knowledge,
         )
     
     def __str__(self) -> str:

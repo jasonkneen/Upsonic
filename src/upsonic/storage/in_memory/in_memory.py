@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 if TYPE_CHECKING:
     from upsonic.session.base import Session, SessionType
+    from upsonic.culture.cultural_knowledge import CulturalKnowledge
 
 from upsonic.storage.base import Storage
 from upsonic.storage.in_memory.utils import (
@@ -72,6 +73,7 @@ class InMemoryStorage(Storage):
         # In-memory storage using lists of dictionaries
         self._sessions: List[Dict[str, Any]] = []
         self._user_memories: List[Dict[str, Any]] = []
+        self._cultural_knowledge: List[Dict[str, Any]] = []
         # Generic model storage: {collection_name: {key: model_data}}
         self._generic_models: Dict[str, Dict[str, Any]] = {}
 
@@ -93,6 +95,7 @@ class InMemoryStorage(Storage):
         """Close storage. Clears all data for in-memory storage."""
         self._sessions.clear()
         self._user_memories.clear()
+        self._cultural_knowledge.clear()
         _logger.info(f"InMemoryStorage with id: {self.id} closed and cleared")
 
     def _get_session_type_value(self, session: "Session") -> str:
@@ -1043,3 +1046,126 @@ class InMemoryStorage(Storage):
             _logger.error(f"Error listing models: {e}")
             return []
 
+    # ======================== Cultural Knowledge Methods ========================
+
+    def delete_cultural_knowledge(self, id: str) -> None:
+        """Delete cultural knowledge from in-memory storage."""
+        try:
+            self._cultural_knowledge = [
+                ck for ck in self._cultural_knowledge if ck.get("id") != id
+            ]
+            _logger.debug(f"Deleted cultural knowledge with id: {id}")
+        except Exception as e:
+            _logger.error(f"Error deleting cultural knowledge: {e}")
+            raise e
+
+    def get_cultural_knowledge(
+        self,
+        id: str,
+        deserialize: bool = True,
+    ) -> Optional[Union["CulturalKnowledge", Dict[str, Any]]]:
+        """Get cultural knowledge from in-memory storage."""
+        from upsonic.culture.cultural_knowledge import CulturalKnowledge
+        
+        try:
+            for ck_data in self._cultural_knowledge:
+                if ck_data.get("id") == id:
+                    ck_data_copy = deep_copy_record(ck_data)
+                    if not deserialize:
+                        return ck_data_copy
+                    return CulturalKnowledge.from_dict(ck_data_copy)
+            return None
+        except Exception as e:
+            _logger.error(f"Error getting cultural knowledge: {e}")
+            raise e
+
+    def get_all_cultural_knowledge(
+        self,
+        name: Optional[str] = None,
+        limit: Optional[int] = None,
+        page: Optional[int] = None,
+        sort_by: Optional[str] = None,
+        sort_order: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        team_id: Optional[str] = None,
+        deserialize: bool = True,
+    ) -> Union[List["CulturalKnowledge"], Tuple[List[Dict[str, Any]], int]]:
+        """Get all cultural knowledge from in-memory storage."""
+        from upsonic.culture.cultural_knowledge import CulturalKnowledge
+        
+        try:
+            filtered_ck: List[Dict[str, Any]] = []
+            for ck_data in self._cultural_knowledge:
+                if name is not None and ck_data.get("name") != name:
+                    continue
+                if agent_id is not None and ck_data.get("agent_id") != agent_id:
+                    continue
+                if team_id is not None and ck_data.get("team_id") != team_id:
+                    continue
+                filtered_ck.append(ck_data)
+
+            # Apply sorting
+            if sort_by:
+                filtered_ck = apply_sorting(filtered_ck, sort_by, sort_order)
+
+            total_count = len(filtered_ck)
+
+            # Apply pagination
+            if limit and page:
+                start = (page - 1) * limit
+                filtered_ck = filtered_ck[start : start + limit]
+            elif limit:
+                filtered_ck = filtered_ck[:limit]
+
+            if not deserialize:
+                return deep_copy_records(filtered_ck), total_count
+            return [CulturalKnowledge.from_dict(deep_copy_record(ck)) for ck in filtered_ck]
+
+        except Exception as e:
+            _logger.error(f"Error getting all cultural knowledge: {e}")
+            raise e
+
+    def upsert_cultural_knowledge(
+        self,
+        cultural_knowledge: "CulturalKnowledge",
+        deserialize: bool = True,
+    ) -> Optional[Union["CulturalKnowledge", Dict[str, Any]]]:
+        """Upsert cultural knowledge into in-memory storage."""
+        from upsonic.culture.cultural_knowledge import CulturalKnowledge
+        import uuid
+        import time
+        
+        try:
+            if cultural_knowledge.id is None:
+                cultural_knowledge.id = str(uuid.uuid4())
+
+            # Use to_dict for serialization
+            data = cultural_knowledge.to_dict()
+            
+            # Convert RFC3339 timestamps to epoch seconds for storage
+            if "created_at" in data and data["created_at"] is not None:
+                if isinstance(data["created_at"], str):
+                    from upsonic.utils.dttm import to_epoch_s
+                    data["created_at"] = to_epoch_s(data["created_at"])
+            if "updated_at" in data and data["updated_at"] is not None:
+                if isinstance(data["updated_at"], str):
+                    from upsonic.utils.dttm import to_epoch_s
+                    data["updated_at"] = to_epoch_s(data["updated_at"])
+            else:
+                data["updated_at"] = int(time.time())
+
+            # Remove existing entry with same id
+            self._cultural_knowledge = [
+                ck for ck in self._cultural_knowledge if ck.get("id") != cultural_knowledge.id
+            ]
+
+            # Add new entry
+            self._cultural_knowledge.append(data)
+
+            if not deserialize:
+                return deep_copy_record(data)
+            return CulturalKnowledge.from_dict(data)
+
+        except Exception as e:
+            _logger.error(f"Error upserting cultural knowledge: {e}")
+            raise e

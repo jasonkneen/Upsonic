@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 if TYPE_CHECKING:
     from upsonic.session.base import Session, SessionType
+    from upsonic.culture.cultural_knowledge import CulturalKnowledge
 
 try:
     from motor.motor_asyncio import (
@@ -234,8 +235,10 @@ class AsyncMongoStorage(AsyncStorage):
         # Collection caches
         self._session_collection: Optional[AsyncMongoCollectionType] = None
         self._user_memory_collection: Optional[AsyncMongoCollectionType] = None
+        self._cultural_knowledge_collection: Optional[AsyncMongoCollectionType] = None
         self._sessions_initialized: bool = False
         self._user_memories_initialized: bool = False
+        self._cultural_knowledge_initialized: bool = False
 
     # ======================== Client Management ========================
 
@@ -303,8 +306,10 @@ class AsyncMongoStorage(AsyncStorage):
             # Clear collection caches and initialization flags
             self._session_collection = None
             self._user_memory_collection = None
+            self._cultural_knowledge_collection = None
             self._sessions_initialized = False
             self._user_memories_initialized = False
+            self._cultural_knowledge_initialized = False
 
         return self._client  # type: ignore
 
@@ -338,6 +343,7 @@ class AsyncMongoStorage(AsyncStorage):
             self._database = None
             self._session_collection = None
             self._user_memory_collection = None
+            self._cultural_knowledge_collection = None
 
     # ======================== Table/Collection Management ========================
 
@@ -359,6 +365,7 @@ class AsyncMongoStorage(AsyncStorage):
         collections_to_create = [
             ("sessions", self.session_table_name),
             ("user_memories", self.user_memory_table_name),
+            ("cultural_knowledge", self.cultural_knowledge_table_name),
         ]
 
         for collection_type, collection_name in collections_to_create:
@@ -422,6 +429,19 @@ class AsyncMongoStorage(AsyncStorage):
                     create_collection_if_not_found=create_collection_if_not_found,
                 )
             return self._user_memory_collection
+
+        if collection_type == "cultural_knowledge":
+            if reset_cache or self._cultural_knowledge_collection is None:
+                if self.cultural_knowledge_table_name is None:
+                    raise ValueError(
+                        "Cultural knowledge collection was not provided on initialization"
+                    )
+                self._cultural_knowledge_collection = await self._get_or_create_collection(
+                    collection_name=self.cultural_knowledge_table_name,
+                    collection_type="cultural_knowledge",
+                    create_collection_if_not_found=create_collection_if_not_found,
+                )
+            return self._cultural_knowledge_collection
 
         raise ValueError(f"Unknown collection type: {collection_type}")
 
@@ -1484,3 +1504,214 @@ class AsyncMongoStorage(AsyncStorage):
             _logger.error(f"Error listing models: {e}")
             return []
 
+    # ======================== Cultural Knowledge Methods ========================
+
+    async def _get_cultural_knowledge_collection(
+        self, create_collection_if_not_found: bool = False
+    ) -> Optional[AsyncMongoCollectionType]:
+        """Get the cultural knowledge collection, creating if needed."""
+        return await self._get_collection(
+            "cultural_knowledge",
+            create_collection_if_not_found=create_collection_if_not_found,
+        )
+
+    async def adelete_cultural_knowledge(self, id: str) -> None:
+        """Delete cultural knowledge from the database (async).
+        
+        Args:
+            id: The ID of the cultural knowledge to delete.
+        
+        Raises:
+            Exception: If an error occurs during deletion.
+        """
+        try:
+            collection = await self._get_cultural_knowledge_collection(
+                create_collection_if_not_found=False
+            )
+            if collection is None:
+                return
+
+            await collection.delete_one({"id": id})
+            _logger.debug(f"Deleted cultural knowledge with ID: {id}")
+
+        except Exception as e:
+            _logger.error(f"Error deleting cultural knowledge: {e}")
+            raise e
+
+    async def aget_cultural_knowledge(
+        self,
+        id: str,
+        deserialize: bool = True,
+    ) -> Optional[Union["CulturalKnowledge", Dict[str, Any]]]:
+        """Get cultural knowledge from the database (async).
+        
+        Args:
+            id: The ID of the cultural knowledge to get.
+            deserialize: If True, return CulturalKnowledge object. If False, return dict.
+        
+        Returns:
+            CulturalKnowledge object or dict if found, None otherwise.
+        
+        Raises:
+            Exception: If an error occurs during retrieval.
+        """
+        from upsonic.culture.cultural_knowledge import CulturalKnowledge
+        
+        try:
+            collection = await self._get_cultural_knowledge_collection(
+                create_collection_if_not_found=False
+            )
+            if collection is None:
+                return None
+
+            result = await collection.find_one({"id": id})
+            if result is None:
+                return None
+
+            # Remove MongoDB's _id field
+            db_row = remove_mongo_id(result)
+            if not deserialize:
+                return db_row
+            return CulturalKnowledge.from_dict(db_row)
+
+        except Exception as e:
+            _logger.error(f"Exception reading from cultural knowledge collection: {e}")
+            raise e
+
+    async def aget_all_cultural_knowledge(
+        self,
+        name: Optional[str] = None,
+        limit: Optional[int] = None,
+        page: Optional[int] = None,
+        sort_by: Optional[str] = None,
+        sort_order: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        team_id: Optional[str] = None,
+        deserialize: bool = True,
+    ) -> Union[List["CulturalKnowledge"], Tuple[List[Dict[str, Any]], int]]:
+        """Get all cultural knowledge entries from the database (async).
+        
+        Args:
+            name: Filter by name.
+            limit: Maximum number of records to return.
+            page: Page number (1-indexed).
+            sort_by: Column to sort by.
+            sort_order: Sort order ('asc' or 'desc').
+            agent_id: Filter by agent ID.
+            team_id: Filter by team ID.
+            deserialize: If True, return list of CulturalKnowledge objects.
+                        If False, return tuple of (list of dicts, total count).
+        
+        Returns:
+            List of CulturalKnowledge objects or tuple of (list of dicts, total count).
+        
+        Raises:
+            Exception: If an error occurs during retrieval.
+        """
+        from upsonic.culture.cultural_knowledge import CulturalKnowledge
+        
+        try:
+            collection = await self._get_cultural_knowledge_collection(
+                create_collection_if_not_found=False
+            )
+            if collection is None:
+                return [] if deserialize else ([], 0)
+
+            # Build query
+            query: Dict[str, Any] = {}
+            if name is not None:
+                query["name"] = name
+            if agent_id is not None:
+                query["agent_id"] = agent_id
+            if team_id is not None:
+                query["team_id"] = team_id
+
+            # Get total count for pagination
+            total_count = await collection.count_documents(query)
+
+            # Apply sorting
+            sort_criteria = apply_sorting({}, sort_by, sort_order)
+
+            # Build cursor with sorting and pagination
+            cursor = collection.find(query)
+            if sort_criteria:
+                cursor = cursor.sort(sort_criteria)
+            
+            # Apply pagination
+            if limit is not None:
+                if page is not None and page > 1:
+                    offset = (page - 1) * limit
+                    cursor = cursor.skip(offset)
+                cursor = cursor.limit(limit)
+
+            # Remove MongoDB's _id field from all results
+            db_rows = [remove_mongo_id(item) async for item in cursor]
+
+            if not deserialize:
+                return db_rows, total_count
+            return [CulturalKnowledge.from_dict(row) for row in db_rows]
+
+        except Exception as e:
+            _logger.error(f"Error reading from cultural knowledge collection: {e}")
+            raise e
+
+    async def aupsert_cultural_knowledge(
+        self,
+        cultural_knowledge: "CulturalKnowledge",
+        deserialize: bool = True,
+    ) -> Optional[Union["CulturalKnowledge", Dict[str, Any]]]:
+        """Upsert cultural knowledge into the database (async).
+        
+        Args:
+            cultural_knowledge: The CulturalKnowledge instance to upsert.
+            deserialize: If True, return CulturalKnowledge object. If False, return dict.
+        
+        Returns:
+            The upserted CulturalKnowledge object or dict, or None if error occurs.
+        
+        Raises:
+            Exception: If an error occurs during upsert.
+        """
+        from upsonic.culture.cultural_knowledge import CulturalKnowledge
+        import uuid
+        
+        try:
+            collection = await self._get_cultural_knowledge_collection(
+                create_collection_if_not_found=True
+            )
+            if collection is None:
+                return None
+
+            if cultural_knowledge.id is None:
+                cultural_knowledge.id = str(uuid.uuid4())
+
+            # Use to_dict for serialization
+            data = cultural_knowledge.to_dict()
+            
+            # Convert RFC3339 timestamps to epoch seconds for storage
+            if "created_at" in data and data["created_at"] is not None:
+                if isinstance(data["created_at"], str):
+                    from upsonic.utils.dttm import to_epoch_s
+                    data["created_at"] = to_epoch_s(data["created_at"])
+            if "updated_at" in data and data["updated_at"] is not None:
+                if isinstance(data["updated_at"], str):
+                    from upsonic.utils.dttm import to_epoch_s
+                    data["updated_at"] = to_epoch_s(data["updated_at"])
+            else:
+                # Set updated_at to current time if not set
+                data["updated_at"] = int(time.time())
+
+            # Upsert using replace_one
+            await collection.replace_one(
+                {"id": cultural_knowledge.id},
+                data,
+                upsert=True,
+            )
+
+            if not deserialize:
+                return data
+            return CulturalKnowledge.from_dict(data)
+
+        except Exception as e:
+            _logger.error(f"Error upserting cultural knowledge: {e}")
+            raise e

@@ -2,7 +2,6 @@
 CulturalKnowledge data model for storing shared knowledge, principles,
 and best practices across agents.
 
-Notice: Culture is an experimental feature and is subject to change.
 """
 
 from __future__ import annotations
@@ -57,8 +56,6 @@ class CulturalKnowledge:
     Cultural knowledge represents shared knowledge, insights, and practices
     that can improve performance across agents. Unlike user-specific Memory,
     Culture stores universal principles that benefit everyone.
-    
-    Notice: Culture is an experimental feature and is subject to change.
     
     Attributes:
         id: Unique identifier, auto-generated if not provided

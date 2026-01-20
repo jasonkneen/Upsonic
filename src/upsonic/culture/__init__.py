@@ -6,7 +6,6 @@ agents to share universal knowledge, principles, and best practices across
 all interactions. Unlike Memory (user-specific facts), Culture stores
 universal principles that benefit all agents.
 
-Notice: Culture is an experimental feature and is subject to change.
 """
 
 from __future__ import annotations

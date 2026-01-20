@@ -1,776 +1,546 @@
 """
-CultureManager - Orchestrator for managing cultural knowledge.
+CultureManager for handling user-provided cultural knowledge.
 
-This module provides the CultureManager class that handles all cultural
-knowledge operations including CRUD, LLM-based extraction, and system
-prompt generation.
+This manager handles:
+- Accepting user-provided CulturalKnowledge instances or string descriptions
+- Using an Agent to create/refine cultural knowledge based on user input
+- Combining user input with stored cultural knowledge
+- Formatting cultural knowledge for system prompt injection
 
-Notice: Culture is an experimental feature and is subject to change.
+Storage operations are handled by the Memory class, not CultureManager.
+
 """
-
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 if TYPE_CHECKING:
-    from upsonic.models import Model, ModelRequest, ModelResponse
-    from upsonic.storage.base import Storage
+    from upsonic.culture.cultural_knowledge import CulturalKnowledge
+    from upsonic.models import Model
 
-from upsonic.culture.cultural_knowledge import CulturalKnowledge
-from upsonic.utils.async_utils import AsyncExecutionMixin
-from upsonic.utils.printing import (
-    culture_info,
-    culture_debug,
-    culture_warning,
-    culture_error,
-    culture_knowledge_added,
-    culture_knowledge_updated,
-    culture_knowledge_deleted,
-    culture_extraction_started,
-    culture_extraction_completed,
-)
+# System prompt for the cultural knowledge extraction agent
+CULTURE_EXTRACTION_SYSTEM_PROMPT = """You are a Cultural Knowledge Architect responsible for extracting and refining cultural knowledge from user inputs.
+
+Your role is to:
+1. Analyze user-provided descriptions, instructions, or context
+2. Extract meaningful cultural principles, guidelines, and best practices
+3. Create or update CulturalKnowledge entries that capture:
+   - Name: A concise, specific title for the knowledge
+   - Summary: A one-line purpose or takeaway
+   - Content: Detailed principles, rules, or guidelines
+   - Categories: Relevant tags (e.g., 'engineering', 'communication', 'principles')
+   - Notes: Contextual notes, rationale, or examples
+
+Guidelines for extraction:
+- Focus on UNIVERSAL principles that benefit all agents, not user-specific preferences
+- Extract actionable guidelines, not just observations
+- Preserve the intent and context of the original input
+- Be specific and concrete, avoid vague generalizations
+- If updating existing knowledge, MERGE and ENHANCE rather than replace
+- Categories should be lowercase, hyphenated (e.g., 'code-review', 'customer-service')
+
+When given existing cultural knowledge:
+- Review and consider what's already captured
+- Add new insights without duplicating existing content
+- Update if new information contradicts or improves existing knowledge
+- Maintain consistency in naming and categorization
+"""
 
 
-DEFAULT_CULTURE_MODEL = "openai/gpt-4o"
-
-
-class CultureManager(AsyncExecutionMixin):
-    """
-    Orchestrator for managing cultural knowledge.
+class CultureManager:
+    """Manager for cultural knowledge user input and formatting.
     
     CultureManager handles:
-    - CRUD operations for CulturalKnowledge via Storage providers
-    - LLM-based knowledge extraction from conversations
-    - System prompt generation for agents
-    - Tool generation for agentic culture updates
+    1. Accepting user-provided CulturalKnowledge or string descriptions
+    2. Using an Agent to create/refine cultural knowledge from strings
+    3. Combining user input with stored cultural knowledge
+    4. Formatting for system prompt injection
     
-    Notice: Culture is an experimental feature and is subject to change.
+    Storage operations are managed by the Memory class, NOT CultureManager.
     
-    Attributes:
-        storage: The storage provider for persisting cultural knowledge
-        model: Optional LLM model for knowledge extraction
-        knowledge_updated: Flag indicating if tools were called in last LLM run
-        
-    Example:
-        ```python
-        from upsonic.storage.providers import InMemoryStorage
-        from upsonic.culture import CultureManager
-        
-        storage = InMemoryStorage()
-        manager = CultureManager(storage=storage)
-        
-        # Add knowledge manually
+    Usage:
+        # With explicit CulturalKnowledge
         knowledge = CulturalKnowledge(
-            id="k1",
-            name="Communication Style",
-            content="Always be concise and direct.",
-            categories=["communication", "style"]
+            name="Code Review Standards",
+            content="Focus on maintainability, security, and performance"
         )
-        manager.add_cultural_knowledge(knowledge)
+        manager = CultureManager(model="openai/gpt-4o")
+        manager.set_cultural_knowledge(knowledge)
         
-        # Get all knowledge
-        all_knowledge = manager.get_all_knowledge()
-        ```
+        # With string description (Agent creates CulturalKnowledge)
+        manager = CultureManager(model="openai/gpt-4o")
+        manager.set_cultural_knowledge("I want my agent to be helpful and professional")
+        await manager.aprepare()  # This processes the string input
+    
     """
-
+    
     def __init__(
         self,
-        storage: "Storage",
         model: Optional[Union["Model", str]] = None,
-        system_message: Optional[str] = None,
-        culture_capture_instructions: Optional[str] = None,
-        additional_instructions: Optional[str] = None,
-        add_knowledge: bool = True,
-        update_knowledge: bool = True,
-        delete_knowledge: bool = False,
-        clear_knowledge: bool = False,
+        enabled: bool = True,
+        agent_id: Optional[str] = None,
+        team_id: Optional[str] = None,
         debug: bool = False,
-    ):
+        debug_level: int = 1,
+    ) -> None:
         """
-        Initialize CultureManager.
+        Initialize the CultureManager.
         
         Args:
-            storage: Storage provider for cultural knowledge persistence
-            model: LLM model for knowledge extraction (string or Model instance).
-                   If None, extraction features are disabled.
-                   Default model is "openai/gpt-4o" when needed.
-            system_message: Custom system message for knowledge extraction
-            culture_capture_instructions: Instructions for what to capture as culture
-            additional_instructions: Additional context-specific instructions
-            add_knowledge: Enable add_cultural_knowledge tool (default True)
-            update_knowledge: Enable update_cultural_knowledge tool (default True)
-            delete_knowledge: Enable delete_cultural_knowledge tool (default False - risky)
-            clear_knowledge: Enable clear_cultural_knowledge tool (default False - very risky)
+            model: Model for cultural knowledge extraction
+            enabled: Whether culture management is enabled
+            agent_id: Agent ID for culture context
+            team_id: Team ID for culture context
             debug: Enable debug logging
+            debug_level: Debug verbosity level (1-3)
         """
-        self.storage = storage
-        self._model: Optional["Model"] = None
         self._model_spec = model
-        self._owns_model = False
-        
-        self.system_message = system_message
-        self.culture_capture_instructions = culture_capture_instructions
-        self.additional_instructions = additional_instructions
-        
-        # Tool control flags
-        self.add_knowledge = add_knowledge
-        self.update_knowledge = update_knowledge
-        self.delete_knowledge = delete_knowledge
-        self.clear_knowledge = clear_knowledge
-        
+        self.enabled = enabled
+        self.agent_id = agent_id
+        self.team_id = team_id
         self.debug = debug
+        self.debug_level = debug_level
         
-        # Track if knowledge was updated in last LLM run
-        self.knowledge_updated: bool = False
-
-    def _get_or_create_model(self) -> "Model":
-        """
-        Get or create the LLM model for culture operations.
+        # Current cultural knowledge (user-provided or extracted)
+        self._cultural_knowledge: Optional["CulturalKnowledge"] = None
         
-        Returns:
-            Model instance
-        """
-        if self._model is not None:
-            return self._model
+        # Raw string input that needs processing (set by set_cultural_knowledge)
+        self._pending_string_input: Optional[str] = None
         
-        from upsonic.models import Model, infer_model
+        # Whether the user input was a CulturalKnowledge instance (no processing needed)
+        self._is_instance_input: bool = False
         
-        if self._model_spec is None:
-            # Use default model
-            self._model = infer_model(DEFAULT_CULTURE_MODEL)
-            self._owns_model = True
-        elif isinstance(self._model_spec, str):
-            # Infer model from string
-            self._model = infer_model(self._model_spec)
-            self._owns_model = True
-        else:
-            # User provided model instance
-            self._model = self._model_spec
-            self._owns_model = False
+        # Cultural knowledge loaded from storage (set by MemoryManager)
+        self._stored_knowledge: List["CulturalKnowledge"] = []
         
-        return self._model
-
-    # =========================================================================
-    # Core CRUD Methods (Synchronous)
-    # =========================================================================
-
-    def get_knowledge(self, knowledge_id: str) -> Optional[CulturalKnowledge]:
-        """
-        Get a cultural knowledge entry by ID.
+        # Track if knowledge was updated in this session
+        self._knowledge_updated: bool = False
         
-        Args:
-            knowledge_id: The unique identifier of the knowledge entry
-            
-        Returns:
-            CulturalKnowledge instance if found, None otherwise
-        """
-        return self._run_async_from_sync(self.aget_knowledge(knowledge_id))
-
-    def get_all_knowledge(self, name: Optional[str] = None) -> List[CulturalKnowledge]:
-        """
-        Get all cultural knowledge entries.
-        
-        Args:
-            name: Optional filter - returns entries where name contains this string
-            
-        Returns:
-            List of CulturalKnowledge instances
-        """
-        return self._run_async_from_sync(self.aget_all_knowledge(name))
-
-    def add_cultural_knowledge(self, knowledge: CulturalKnowledge) -> Optional[str]:
-        """
-        Add a new cultural knowledge entry.
-        
-        If knowledge.id is None, a UUID will be generated.
-        
-        Args:
-            knowledge: CulturalKnowledge instance to add
-            
-        Returns:
-            The ID of the added knowledge entry
-        """
-        return self._run_async_from_sync(self.aadd_cultural_knowledge(knowledge))
-
-    def delete_cultural_knowledge(self, knowledge_id: str) -> None:
-        """
-        Delete a cultural knowledge entry.
-        
-        Args:
-            knowledge_id: The ID of the knowledge entry to delete
-        """
-        return self._run_async_from_sync(self.adelete_cultural_knowledge(knowledge_id))
-
-    def clear_all_knowledge(self) -> None:
-        """
-        Delete ALL cultural knowledge entries.
-        
-        Warning: This is a destructive operation. Use with caution.
-        """
-        return self._run_async_from_sync(self.aclear_all_knowledge())
-
-    # =========================================================================
-    # Core CRUD Methods (Asynchronous)
-    # =========================================================================
-
-    async def aget_knowledge(self, knowledge_id: str) -> Optional[CulturalKnowledge]:
-        """Async version of get_knowledge."""
-        culture_debug(f"Reading knowledge: {knowledge_id}", debug=self.debug)
-        result = await self.storage.read_cultural_knowledge_async(knowledge_id)
-        if result:
-            culture_debug(f"Found knowledge: {result.name}", debug=self.debug)
-        else:
-            culture_debug(f"Knowledge not found: {knowledge_id}", debug=self.debug)
-        return result
-
-    async def aget_all_knowledge(self, name: Optional[str] = None) -> List[CulturalKnowledge]:
-        """Async version of get_all_knowledge."""
-        filter_msg = f" (filter: {name})" if name else ""
-        culture_debug(f"Listing all knowledge{filter_msg}", debug=self.debug)
-        result = await self.storage.list_all_cultural_knowledge_async(name)
-        culture_debug(f"Found {len(result)} knowledge entries", debug=self.debug)
-        return result
-
-    async def aadd_cultural_knowledge(self, knowledge: CulturalKnowledge) -> Optional[str]:
-        """Async version of add_cultural_knowledge."""
-        # Generate ID if not provided
-        if knowledge.id is None:
-            knowledge.id = str(uuid.uuid4())
-        
-        await self.storage.upsert_cultural_knowledge_async(knowledge)
-        culture_knowledge_added(knowledge.name, knowledge.id, debug=self.debug)
-        return knowledge.id
-
-    async def adelete_cultural_knowledge(self, knowledge_id: str) -> None:
-        """Async version of delete_cultural_knowledge."""
-        await self.storage.delete_cultural_knowledge_async(knowledge_id)
-        culture_knowledge_deleted(knowledge_id, debug=self.debug)
-
-    async def aclear_all_knowledge(self) -> None:
-        """Async version of clear_all_knowledge."""
-        culture_warning("Clearing ALL cultural knowledge", debug=self.debug)
-        await self.storage.clear_cultural_knowledge_async()
-        culture_info("All cultural knowledge cleared", debug=self.debug)
-
-    # =========================================================================
-    # Tool Generation (Closure Pattern)
-    # =========================================================================
-
-    def _get_db_tools(
+        # Track if aprepare was called
+        self._prepared: bool = False
+    
+    @property
+    def cultural_knowledge(self) -> Optional["CulturalKnowledge"]:
+        """Get the current cultural knowledge."""
+        return self._cultural_knowledge
+    
+    @property
+    def stored_knowledge(self) -> List["CulturalKnowledge"]:
+        """Get cultural knowledge loaded from storage."""
+        return self._stored_knowledge
+    
+    @stored_knowledge.setter
+    def stored_knowledge(self, value: List["CulturalKnowledge"]) -> None:
+        """Set stored knowledge (used by MemoryManager)."""
+        self._stored_knowledge = value
+    
+    @property
+    def knowledge_updated(self) -> bool:
+        """Check if knowledge was updated in this session."""
+        return self._knowledge_updated
+    
+    @property
+    def has_pending_input(self) -> bool:
+        """Check if there's a pending string input that needs processing."""
+        return self._pending_string_input is not None and not self._prepared
+    
+    def set_cultural_knowledge(
         self,
-        enable_add_knowledge: bool = True,
-        enable_update_knowledge: bool = True,
-        enable_delete_knowledge: bool = False,
-        enable_clear_knowledge: bool = False,
-    ) -> List[Callable]:
+        knowledge: Union["CulturalKnowledge", str],
+    ) -> None:
         """
-        Generate tools as closures that capture the storage instance.
+        Set cultural knowledge from user input.
         
-        Each tool function has the storage in its closure scope, so the LLM
-        doesn't need to pass db as a parameter.
+        If a string is provided, it will be stored for later processing
+        by aprepare() which uses an Agent to extract structured knowledge.
+        
+        If a CulturalKnowledge instance is provided, it's used directly.
         
         Args:
-            enable_add_knowledge: Include add_cultural_knowledge tool
-            enable_update_knowledge: Include update_cultural_knowledge tool
-            enable_delete_knowledge: Include delete_cultural_knowledge tool (risky)
-            enable_clear_knowledge: Include clear_cultural_knowledge tool (very risky)
+            knowledge: CulturalKnowledge instance or string description
+        """
+        from upsonic.culture.cultural_knowledge import CulturalKnowledge
+        
+        if isinstance(knowledge, str):
+            # Store the string for later processing in aprepare()
+            self._pending_string_input = knowledge
+            self._is_instance_input = False
+            # Also create a basic fallback in case aprepare() isn't called
+            self._cultural_knowledge = CulturalKnowledge(
+                id=str(uuid.uuid4()),
+                name="User Cultural Guidelines",
+                content=knowledge,
+                summary="User-provided cultural guidelines",
+                categories=["user-provided"],
+            )
+        else:
+            # Use provided CulturalKnowledge instance directly
+            if knowledge.id is None:
+                knowledge.id = str(uuid.uuid4())
+            self._cultural_knowledge = knowledge
+            self._pending_string_input = None
+            self._is_instance_input = True
+        
+        self._knowledge_updated = True
+    
+    async def aprepare(self) -> None:
+        """
+        Prepare cultural knowledge by processing any pending string input.
+        
+        This method should be called after stored_knowledge is set by MemoryManager.
+        
+        If user provided a string:
+        - Calls acreate_cultural_knowledge() with stored knowledge as context
+        - Creates a properly structured CulturalKnowledge instance
+        
+        If user provided a CulturalKnowledge instance:
+        - No processing needed, uses directly
+        
+        After this, format_for_system_prompt() will combine user input + stored knowledge.
+        """
+        if self._prepared:
+            return
+        
+        self._prepared = True
+        
+        # If user provided a string, process it with an Agent
+        if self._pending_string_input and not self._is_instance_input:
+            await self._process_string_input(self._pending_string_input)
+    
+    def prepare(self) -> None:
+        """Synchronous version of aprepare."""
+        import asyncio
+        try:
+            loop = asyncio.get_running_loop()
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                pool.submit(asyncio.run, self.aprepare()).result()
+        except RuntimeError:
+            asyncio.run(self.aprepare())
+    
+    async def _process_string_input(self, message: str) -> Optional["CulturalKnowledge"]:
+        """
+        Process a string input into structured CulturalKnowledge using an Agent.
+        
+        This uses stored_knowledge as context for the extraction.
+        
+        Args:
+            message: User message describing desired cultural behaviors
             
         Returns:
-            List of callable tool functions
+            Created CulturalKnowledge instance
         """
-        tools = []
-        manager = self  # Capture self in closure
+        from pydantic import BaseModel, Field
+        from typing import List as ListType, Optional as OptionalType
+        from upsonic.culture.cultural_knowledge import CulturalKnowledge
+        from upsonic.utils.printing import info_log, warning_log
         
-        if enable_add_knowledge:
-            def add_cultural_knowledge(
-                name: str,
-                summary: Optional[str] = None,
-                content: Optional[str] = None,
-                categories: Optional[List[str]] = None,
-                notes: Optional[List[str]] = None,
-            ) -> str:
-                """
-                Add new cultural knowledge entry.
-                
-                Args:
-                    name: Short, specific title for the knowledge (required)
-                    summary: One-line purpose or takeaway
-                    content: The main principle, rule, or guideline
-                    categories: List of tags (e.g., ['guardrails', 'rules', 'practices'])
-                    notes: List of contextual notes, rationale, or examples
-                    
-                Returns:
-                    Success message with knowledge ID
-                """
-                knowledge = CulturalKnowledge(
-                    id=str(uuid.uuid4()),
-                    name=name,
-                    summary=summary,
-                    content=content,
-                    categories=categories,
-                    notes=notes,
+        if not self._model_spec:
+            if self.debug:
+                warning_log(
+                    "CultureManager: No model configured, using basic extraction",
+                    "CultureManager"
                 )
-                manager.storage.upsert_cultural_knowledge(knowledge)
-                manager.knowledge_updated = True
-                culture_knowledge_added(name, knowledge.id, debug=manager.debug)
-                return f"Successfully added cultural knowledge: {knowledge.id}"
-            
-            tools.append(add_cultural_knowledge)
+            # Keep the basic fallback that was already created
+            return self._cultural_knowledge
         
-        if enable_update_knowledge:
-            def update_cultural_knowledge(
-                knowledge_id: str,
-                name: str,
-                summary: Optional[str] = None,
-                content: Optional[str] = None,
-                categories: Optional[List[str]] = None,
-                notes: Optional[List[str]] = None,
-            ) -> str:
-                """
-                Update an existing cultural knowledge entry.
-                
-                Args:
-                    knowledge_id: The ID of the knowledge entry to update (required)
-                    name: New title for the knowledge (required)
-                    summary: New one-line purpose or takeaway
-                    content: New main principle, rule, or guideline
-                    categories: New list of tags
-                    notes: New list of contextual notes
-                    
-                Returns:
-                    Success message
-                """
-                # Get existing knowledge
-                existing = manager.storage.read_cultural_knowledge(knowledge_id)
-                if not existing:
-                    culture_warning(f"Knowledge entry not found for update: {knowledge_id}", debug=manager.debug)
-                    return f"Knowledge entry not found: {knowledge_id}"
-                
-                # Update fields
-                existing.name = name
-                if summary is not None:
-                    existing.summary = summary
-                if content is not None:
-                    existing.content = content
-                if categories is not None:
-                    existing.categories = categories
-                if notes is not None:
-                    existing.notes = notes
-                
-                manager.storage.upsert_cultural_knowledge(existing)
-                manager.knowledge_updated = True
-                culture_knowledge_updated(name, knowledge_id, debug=manager.debug)
-                return f"Successfully updated cultural knowledge: {knowledge_id}"
-            
-            tools.append(update_cultural_knowledge)
+        # Define output schema for extraction
+        class ExtractedCulture(BaseModel):
+            """Extracted cultural knowledge from user input."""
+            name: str = Field(..., description="Concise, specific title for the knowledge")
+            summary: str = Field(..., description="One-line purpose or takeaway")
+            content: str = Field(..., description="Detailed principles, rules, or guidelines")
+            categories: ListType[str] = Field(
+                default_factory=list,
+                description="Relevant tags (lowercase, hyphenated)"
+            )
+            notes: OptionalType[ListType[str]] = Field(
+                default=None,
+                description="Contextual notes, rationale, or examples"
+            )
         
-        if enable_delete_knowledge:
-            def delete_cultural_knowledge(knowledge_id: str) -> str:
-                """
-                Delete a cultural knowledge entry.
-                
-                WARNING: This is a destructive operation.
-                
-                Args:
-                    knowledge_id: The ID of the knowledge entry to delete
-                    
-                Returns:
-                    Success message
-                """
-                manager.storage.delete_cultural_knowledge(knowledge_id)
-                manager.knowledge_updated = True
-                culture_knowledge_deleted(knowledge_id, debug=manager.debug)
-                return f"Successfully deleted cultural knowledge: {knowledge_id}"
-            
-            tools.append(delete_cultural_knowledge)
+        # Build context with existing stored knowledge
+        context_parts: List[str] = []
         
-        if enable_clear_knowledge:
-            def clear_cultural_knowledge() -> str:
-                """
-                Clear ALL cultural knowledge entries.
-                
-                WARNING: This will delete ALL knowledge. Use with extreme caution.
-                
-                Returns:
-                    Success message
-                """
-                culture_warning("Clearing ALL cultural knowledge via tool", debug=manager.debug)
-                manager.storage.clear_cultural_knowledge()
-                manager.knowledge_updated = True
-                culture_info("All cultural knowledge cleared via tool", debug=manager.debug)
-                return "Successfully cleared all cultural knowledge"
-            
-            tools.append(clear_cultural_knowledge)
-        
-        return tools
-
-    def get_culture_tools(self) -> List[Callable]:
-        """
-        Get culture tools for agent registration (when enable_agentic_culture=True).
-        
-        Returns tools based on configured flags (add_knowledge, update_knowledge,
-        delete_knowledge, clear_knowledge).
-        
-        Returns:
-            List of callable tool functions
-        """
-        return self._get_db_tools(
-            enable_add_knowledge=self.add_knowledge,
-            enable_update_knowledge=self.update_knowledge,
-            enable_delete_knowledge=self.delete_knowledge,
-            enable_clear_knowledge=self.clear_knowledge,
-        )
-
-    # =========================================================================
-    # System Prompt Generation
-    # =========================================================================
-
-    def _get_default_system_message(self) -> str:
-        """Get the default system message for cultural knowledge extraction."""
-        return """You are the Cultural Knowledge Manager, responsible for maintaining shared cultural knowledge for Agents and Teams.
-
-## Your Role
-Analyze conversations and inputs to extract valuable cultural knowledge that can improve agent performance across all interactions.
-
-## Criteria for Cultural Knowledge
-<knowledge_to_capture>
-- Best practices and successful approaches
-- Common patterns in user behavior
-- Processes, design principles, rules of operation
-- Guardrails, decision rationales, ethical guidelines
-- Domain-specific lessons that generalize
-- Communication styles that lead to better outcomes
-</knowledge_to_capture>
-
-## When to Add/Update Knowledge
-- If new insights meet criteria and not already captured -> ADD
-- If existing practices evolved or can be improved -> UPDATE (preserve history in notes)
-- If nothing new or valuable -> respond with "No changes needed"
-
-## How to Structure Knowledge
-- `name`: short, specific title (required)
-- `summary`: one-line takeaway
-- `content`: reusable insight/rule (required)
-- `categories`: tags like ["guardrails", "rules", "practices", "communication"]
-- `notes`: context, rationale, examples
-
-## De-duplication
-- Search existing knowledge before adding
-- UPDATE similar entries instead of duplicating
-- Preserve lineage via notes field
-
-## Safety
-- Never include secrets, credentials, PII
-- Only capture generalizable principles"""
-
-    def _get_capture_instructions(self) -> str:
-        """Get culture capture instructions."""
-        if self.culture_capture_instructions:
-            return self.culture_capture_instructions
-        
-        return """## What to Capture
-Look for patterns that would benefit future interactions:
-- Successful communication approaches
-- User preferences and expectations
-- Domain-specific best practices
-- Decision-making frameworks
-- Quality standards and guidelines"""
-
-    def get_system_message(
-        self,
-        existing_knowledge: Optional[List[Dict[str, Any]]] = None,
-        enable_add_knowledge: bool = True,
-        enable_update_knowledge: bool = True,
-        enable_delete_knowledge: bool = False,
-        enable_clear_knowledge: bool = False,
-    ) -> str:
-        """
-        Build the system prompt for knowledge extraction.
-        
-        Args:
-            existing_knowledge: List of existing knowledge previews
-            enable_add_knowledge: Whether add tool is available
-            enable_update_knowledge: Whether update tool is available
-            enable_delete_knowledge: Whether delete tool is available
-            enable_clear_knowledge: Whether clear tool is available
-            
-        Returns:
-            Complete system prompt string
-        """
-        parts = []
-        
-        # Base message
-        if self.system_message:
-            parts.append(self.system_message)
-        else:
-            parts.append(self._get_default_system_message())
-        
-        # Capture instructions
-        parts.append(self._get_capture_instructions())
-        
-        # Additional instructions
-        if self.additional_instructions:
-            parts.append(f"\n## Additional Instructions\n{self.additional_instructions}")
-        
-        # Tool usage instructions
-        available_tools = []
-        if enable_add_knowledge:
-            available_tools.append("- `add_cultural_knowledge`: Add new knowledge entries")
-        if enable_update_knowledge:
-            available_tools.append("- `update_cultural_knowledge`: Update existing entries")
-        if enable_delete_knowledge:
-            available_tools.append("- `delete_cultural_knowledge`: Delete entries (use carefully)")
-        if enable_clear_knowledge:
-            available_tools.append("- `clear_cultural_knowledge`: Clear ALL entries (use with extreme caution)")
-        
-        if available_tools:
-            parts.append("\n## Available Tools\n" + "\n".join(available_tools))
-        
-        # Existing knowledge context
-        if existing_knowledge:
-            knowledge_str = "\n".join([
-                f"- ID: {k.get('id')}, Name: {k.get('name')}, Categories: {k.get('categories', [])}"
-                for k in existing_knowledge
+        if self._stored_knowledge:
+            existing_str = "\n".join([
+                f"- {k.name}: {k.summary or ''}" 
+                for k in self._stored_knowledge[:5]
             ])
-            parts.append(f"\n## Existing Knowledge\n<existing_knowledge>\n{knowledge_str}\n</existing_knowledge>")
-        else:
-            parts.append("\n## Existing Knowledge\n<existing_knowledge>\nNo existing knowledge entries.\n</existing_knowledge>")
+            context_parts.append(f"Existing Cultural Knowledge from Storage:\n{existing_str}")
         
-        # No-op instruction
-        parts.append("\n## When No Changes Needed\nIf no valuable knowledge emerges from the input, respond exactly:\n\"No changes needed\"")
+        context_str = "\n\n".join(context_parts) if context_parts else "No existing cultural knowledge in storage."
         
-        return "\n\n".join(parts)
+        # Create extraction task
+        extraction_prompt = f"""Analyze the following user input and extract cultural knowledge.
 
-    # =========================================================================
-    # LLM-Based Methods
-    # =========================================================================
+{context_str}
 
-    def create_cultural_knowledge(
-        self,
-        message: Optional[str] = None,
-        messages: Optional[List[Any]] = None,
-    ) -> str:
-        """
-        Analyze messages to extract valuable cultural knowledge.
+User Input:
+{message}
+
+Extract the cultural knowledge as structured data. Focus on universal principles that benefit all agents.
+Consider the existing knowledge above and create complementary knowledge that enhances the overall culture.
+"""
         
-        SAFE FLOW: Only provides add_knowledge and update_knowledge tools.
-        Does NOT provide delete or clear tools.
-        
-        Args:
-            message: Single message to analyze
-            messages: List of messages to analyze
+        try:
+            from upsonic.agent.agent import Agent
+            from upsonic.tasks.tasks import Task
             
-        Returns:
-            LLM response text
-        """
-        return self._run_async_from_sync(
-            self.acreate_cultural_knowledge(message=message, messages=messages)
-        )
-
+            extractor = Agent(
+                model=self._model_spec,
+                name="Culture Extractor",
+                system_prompt=CULTURE_EXTRACTION_SYSTEM_PROMPT,
+                debug=self.debug,
+            )
+            
+            task = Task(
+                description=extraction_prompt,
+                response_format=ExtractedCulture,
+            )
+            
+            result = await extractor.do_async(task)
+            
+            if result and hasattr(result, 'name'):
+                # Create CulturalKnowledge from extracted data
+                self._cultural_knowledge = CulturalKnowledge(
+                    id=str(uuid.uuid4()),
+                    name=result.name,
+                    summary=result.summary,
+                    content=result.content,
+                    categories=result.categories,
+                    notes=result.notes,
+                    input=message,
+                    agent_id=self.agent_id,
+                    team_id=self.team_id,
+                )
+                
+                self._knowledge_updated = True
+                
+                if self.debug:
+                    info_log(
+                        f"Extracted cultural knowledge: {self._cultural_knowledge.name}",
+                        "CultureManager"
+                    )
+                
+                return self._cultural_knowledge
+            else:
+                if self.debug:
+                    warning_log("Culture extraction returned no result, using basic fallback", "CultureManager")
+                # Keep the basic fallback
+                return self._cultural_knowledge
+                
+        except Exception as e:
+            if self.debug:
+                warning_log(f"Culture extraction failed: {e}, using basic fallback", "CultureManager")
+            # Keep the basic fallback
+            return self._cultural_knowledge
+    
     async def acreate_cultural_knowledge(
         self,
-        message: Optional[str] = None,
-        messages: Optional[List[Any]] = None,
-    ) -> str:
+        message: str,
+        existing_knowledge: Optional[List["CulturalKnowledge"]] = None,
+    ) -> Optional["CulturalKnowledge"]:
         """
-        Async version of create_cultural_knowledge.
+        Create cultural knowledge from a user message using an Agent.
         
-        SAFE FLOW: Only provides add_knowledge and update_knowledge tools.
-        """
-        from upsonic.messages import ModelRequest, UserPromptPart, SystemPromptPart
-        
-        culture_extraction_started(debug=self.debug)
-        
-        # Reset knowledge_updated flag
-        self.knowledge_updated = False
-        
-        # Get existing knowledge for context
-        all_knowledge = await self.aget_all_knowledge()
-        existing_previews = [k.preview() for k in all_knowledge]
-        culture_debug(f"Found {len(all_knowledge)} existing knowledge entries for context", debug=self.debug)
-        
-        # Build system message
-        system_message = self.get_system_message(
-            existing_knowledge=existing_previews,
-            enable_add_knowledge=True,
-            enable_update_knowledge=True,
-            enable_delete_knowledge=False,  # SAFE: No delete
-            enable_clear_knowledge=False,   # SAFE: No clear
-        )
-        
-        # Get tools (SAFE: only add + update)
-        tools = self._get_db_tools(
-            enable_add_knowledge=True,
-            enable_update_knowledge=True,
-            enable_delete_knowledge=False,
-            enable_clear_knowledge=False,
-        )
-        
-        # Build user message
-        if message:
-            user_content = message
-        elif messages:
-            user_content = "\n".join([str(m) for m in messages])
-        else:
-            culture_warning("No messages provided for culture extraction", debug=self.debug)
-            return "No messages provided for analysis"
-        
-        # Get model and bind tools
-        model = self._get_or_create_model()
-        culture_debug(f"Using model for extraction: {model.model_name}", debug=self.debug)
-        
-        # Bind tools to model for the extraction task
-        model.bind_tools(tools)
-        
-        # Build request with system prompt and user content
-        request = ModelRequest(parts=[
-            SystemPromptPart(content=system_message),
-            UserPromptPart(content=user_content),
-        ])
-        
-        # Run with ainvoke which handles tools properly
-        try:
-            response = await model.ainvoke(request)
-            culture_extraction_completed(self.knowledge_updated, debug=self.debug)
-            
-            # Extract text from response
-            if hasattr(response, 'text'):
-                return response.text or "No response"
-            elif hasattr(response, 'parts'):
-                from upsonic.messages import TextPart
-                text_parts = [p.content for p in response.parts if isinstance(p, TextPart)]
-                return "".join(text_parts) if text_parts else "No response"
-            return "No response"
-        except Exception as e:
-            culture_error(f"Culture extraction failed: {e}", debug=self.debug)
-            raise
-        finally:
-            # Clear tools from model after use
-            model._tools = None
-
-    def update_culture_task(self, task: str) -> str:
-        """
-        Execute explicit administrative culture management task.
-        
-        ADMIN FLOW: Provides ALL tools including delete and clear.
-        Use for tasks like:
-        - "Delete all outdated entries about old email system"
-        - "Update knowledge about communication preferences"
-        - "Clear all knowledge and start fresh"
+        This method uses an LLM to analyze the user's message and extract
+        meaningful cultural knowledge that can be applied across agents.
         
         Args:
-            task: Description of the administrative task
+            message: User message describing desired cultural behaviors
+            existing_knowledge: Optional list of existing knowledge for context
             
         Returns:
-            LLM response text
+            Created CulturalKnowledge instance
         """
-        return self._run_async_from_sync(self.aupdate_culture_task(task))
-
-    async def aupdate_culture_task(self, task: str) -> str:
-        """
-        Async version of update_culture_task.
+        # If existing_knowledge is provided, temporarily set it as stored_knowledge
+        if existing_knowledge:
+            self._stored_knowledge = existing_knowledge
         
-        ADMIN FLOW: Provides ALL tools including delete and clear.
-        """
-        from upsonic.messages import ModelRequest, UserPromptPart, SystemPromptPart
+        self._pending_string_input = message
+        self._is_instance_input = False
         
-        culture_info(f"Executing admin culture task: {task[:100]}...", debug=self.debug)
-        
-        # Reset knowledge_updated flag
-        self.knowledge_updated = False
-        
-        # Get existing knowledge for context
-        all_knowledge = await self.aget_all_knowledge()
-        existing_previews = [k.preview() for k in all_knowledge]
-        culture_debug(f"Found {len(all_knowledge)} existing knowledge entries for admin task", debug=self.debug)
-        
-        # Build system message with ADMIN access
-        system_message = self.get_system_message(
-            existing_knowledge=existing_previews,
-            enable_add_knowledge=True,
-            enable_update_knowledge=True,
-            enable_delete_knowledge=True,   # ADMIN: Enable delete
-            enable_clear_knowledge=True,    # ADMIN: Enable clear
-        )
-        
-        # Get ALL tools (ADMIN)
-        tools = self._get_db_tools(
-            enable_add_knowledge=True,
-            enable_update_knowledge=True,
-            enable_delete_knowledge=True,
-            enable_clear_knowledge=True,
-        )
-        
-        # Get model and bind tools
-        model = self._get_or_create_model()
-        culture_debug(f"Using model for admin task: {model.model_name}", debug=self.debug)
-        
-        # Bind tools to model for the admin task
-        model.bind_tools(tools)
-        
-        # Build request
-        request = ModelRequest(parts=[
-            SystemPromptPart(content=system_message),
-            UserPromptPart(content=f"Administrative Task: {task}"),
-        ])
-        
-        # Run with ainvoke which handles tools properly
+        return await self._process_string_input(message)
+    
+    def create_cultural_knowledge(
+        self,
+        message: str,
+        existing_knowledge: Optional[List["CulturalKnowledge"]] = None,
+    ) -> Optional["CulturalKnowledge"]:
+        """Synchronous version of acreate_cultural_knowledge."""
+        import asyncio
         try:
-            response = await model.ainvoke(request)
-            culture_info(f"Admin culture task completed, knowledge_updated={self.knowledge_updated}", debug=self.debug)
-            
-            # Extract text from response
-            if hasattr(response, 'text'):
-                return response.text or "No response"
-            elif hasattr(response, 'parts'):
-                from upsonic.messages import TextPart
-                text_parts = [p.content for p in response.parts if isinstance(p, TextPart)]
-                return "".join(text_parts) if text_parts else "No response"
-            return "No response"
-        except Exception as e:
-            culture_error(f"Admin culture task failed: {e}", debug=self.debug)
-            raise
-        finally:
-            # Clear tools from model after use
-            model._tools = None
-
-    # =========================================================================
-    # Context Building for Agents
-    # =========================================================================
-
-    def get_culture_context(self) -> str:
+            _ = asyncio.get_running_loop()
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                return pool.submit(
+                    asyncio.run,
+                    self.acreate_cultural_knowledge(message, existing_knowledge)
+                ).result()
+        except RuntimeError:
+            return asyncio.run(
+                self.acreate_cultural_knowledge(message, existing_knowledge)
+            )
+    
+    def get_combined_knowledge(self) -> List["CulturalKnowledge"]:
         """
-        Build cultural knowledge context for agent system prompt.
+        Get all cultural knowledge (user-provided + stored) for system prompt.
+        
+        ALWAYS combines user-provided knowledge with stored knowledge:
+        1. User-provided knowledge (string or instance) takes priority (listed first)
+        2. Stored knowledge is added after, avoiding duplicates by ID
+        
+        If no user input was provided but there's stored knowledge,
+        the stored knowledge is still returned.
         
         Returns:
-            Formatted string of cultural knowledge for injection into system prompt
+            Combined list of CulturalKnowledge instances
         """
-        return self._run_async_from_sync(self.aget_culture_context())
-
-    async def aget_culture_context(self) -> str:
-        """Async version of get_culture_context."""
-        culture_debug("Building culture context for system prompt", debug=self.debug)
-        all_knowledge = await self.aget_all_knowledge()
-        culture_debug(f"Including {len(all_knowledge)} knowledge entries in context", debug=self.debug)
+        combined: List["CulturalKnowledge"] = []
         
-        if not all_knowledge:
-            return ""
+        # Add user-provided knowledge first (higher priority)
+        if self._cultural_knowledge:
+            combined.append(self._cultural_knowledge)
         
-        lines = ["## Cultural Knowledge"]
-        lines.append("The following cultural knowledge should guide your responses:\n")
+        # Add stored knowledge (avoid duplicates by ID)
+        seen_ids = {k.id for k in combined if k.id}
+        for knowledge in self._stored_knowledge:
+            if knowledge.id and knowledge.id not in seen_ids:
+                combined.append(knowledge)
+                seen_ids.add(knowledge.id)
         
-        for knowledge in all_knowledge:
-            lines.append(f"### {knowledge.name or 'Unnamed'}")
+        return combined
+    
+    def format_for_system_prompt(
+        self,
+        max_length: int = 3000,
+    ) -> Optional[str]:
+        """
+        Format cultural knowledge for system prompt injection.
+        
+        Combines user-provided cultural knowledge with stored cultural knowledge
+        and formats it for injection into the system prompt.
+        
+        Args:
+            max_length: Maximum length of formatted output
+            
+        Returns:
+            Formatted string for system prompt, or None if empty
+        """
+        combined = self.get_combined_knowledge()
+        if not combined:
+            return None
+        
+        parts: List[str] = []
+        current_length = 0
+        
+        for knowledge in combined:
+            entry_parts: List[str] = []
+            
+            if knowledge.name:
+                entry_parts.append(f"### {knowledge.name}")
+            
             if knowledge.summary:
-                lines.append(f"**Summary**: {knowledge.summary}")
+                entry_parts.append(f"**Purpose:** {knowledge.summary}")
+            
             if knowledge.content:
-                lines.append(f"**Content**: {knowledge.content}")
+                entry_parts.append(f"\n{knowledge.content}")
+            
             if knowledge.categories:
-                lines.append(f"**Categories**: {', '.join(knowledge.categories)}")
+                entry_parts.append(f"\n*Tags: {', '.join(knowledge.categories)}*")
+            
             if knowledge.notes:
-                lines.append(f"**Notes**: {'; '.join(knowledge.notes)}")
-            lines.append("")
+                notes_str = "\n".join(f"- {note}" for note in knowledge.notes[:3])
+                entry_parts.append(f"\n**Notes:**\n{notes_str}")
+            
+            entry = "\n".join(entry_parts)
+            entry_length = len(entry)
+            
+            if current_length + entry_length > max_length:
+                break
+            
+            parts.append(entry)
+            current_length += entry_length + 4  # +4 for separators
         
-        return "\n".join(lines)
+        if not parts:
+            return None
+        
+        formatted = "\n\n---\n\n".join(parts)
+        
+        instruction = (
+            "**Important:** You are not required to use all of the cultural knowledge provided below. "
+            "Select and apply only the cultural knowledge that is relevant and useful for the current task. "
+            "You may use one, multiple, or none of the cultural knowledge entries based on what best serves the task at hand.\n\n"
+        )
+        
+        return f"<CulturalKnowledge>\n{instruction}{formatted}\n</CulturalKnowledge>"
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Serialize CultureManager state to dictionary.
+        
+        Returns:
+            Dictionary representation of the manager state
+        """
+        result: Dict[str, Any] = {
+            "enabled": self.enabled,
+            "agent_id": self.agent_id,
+            "team_id": self.team_id,
+            "knowledge_updated": self._knowledge_updated,
+            "prepared": self._prepared,
+        }
+        
+        if self._cultural_knowledge:
+            result["cultural_knowledge"] = self._cultural_knowledge.to_dict()
+        else:
+            result["cultural_knowledge"] = None
+        
+        if self._stored_knowledge:
+            result["stored_knowledge"] = [k.to_dict() for k in self._stored_knowledge]
+        else:
+            result["stored_knowledge"] = []
+        
+        return result
+    
+    @classmethod
+    def from_dict(
+        cls,
+        data: Dict[str, Any],
+        model: Optional[Union["Model", str]] = None,
+    ) -> "CultureManager":
+        """
+        Create CultureManager from dictionary.
+        
+        Args:
+            data: Dictionary containing manager state
+            model: Model for cultural knowledge extraction
+            
+        Returns:
+            CultureManager instance
+        """
+        from upsonic.culture.cultural_knowledge import CulturalKnowledge
+        
+        manager = cls(
+            model=model,
+            enabled=data.get("enabled", True),
+            agent_id=data.get("agent_id"),
+            team_id=data.get("team_id"),
+        )
+        
+        manager._knowledge_updated = data.get("knowledge_updated", False)
+        manager._prepared = data.get("prepared", False)
+        
+        knowledge_data = data.get("cultural_knowledge")
+        if knowledge_data and isinstance(knowledge_data, dict):
+            manager._cultural_knowledge = CulturalKnowledge.from_dict(knowledge_data)
+        
+        stored_data = data.get("stored_knowledge", [])
+        if stored_data:
+            manager._stored_knowledge = [
+                CulturalKnowledge.from_dict(k) if isinstance(k, dict) else k
+                for k in stored_data
+            ]
+        
+        return manager

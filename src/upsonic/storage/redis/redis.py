@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from upsonic.storage.base import Storage
 from upsonic.storage.redis.schemas import (
+    CULTURAL_KNOWLEDGE_INDEX_FIELDS,
     SESSION_INDEX_FIELDS,
     USER_MEMORY_INDEX_FIELDS,
 )
@@ -32,6 +33,7 @@ from upsonic.storage.utils import deserialize_session
 if TYPE_CHECKING:
     from redis import Redis, RedisCluster
     from upsonic.session.base import SessionType, Session
+    from upsonic.culture.cultural_knowledge import CulturalKnowledge
 
 _logger = get_logger("upsonic.storage.redis")
 
@@ -1076,7 +1078,7 @@ class RedisStorage(Storage):
 
     def _get_model_key(self, key: str, collection: str) -> str:
         """Generate Redis key for a generic model."""
-        return f"{self.prefix}:models:{collection}:{key}"
+        return f"{self.db_prefix}:models:{collection}:{key}"
 
     def upsert_model(
         self,
@@ -1185,7 +1187,7 @@ class RedisStorage(Storage):
         import json
         
         try:
-            pattern = f"{self.prefix}:models:{collection}:*"
+            pattern = f"{self.db_prefix}:models:{collection}:*"
             
             models = []
             cursor = 0
@@ -1210,3 +1212,233 @@ class RedisStorage(Storage):
             _logger.error(f"Error listing models: {e}")
             return []
 
+    # ======================== Cultural Knowledge Methods ========================
+
+    def delete_cultural_knowledge(self, id: str) -> None:
+        """Delete cultural knowledge from Redis.
+        
+        Args:
+            id: The ID of the cultural knowledge to delete.
+        
+        Raises:
+            Exception: If an error occurs during deletion.
+        """
+        try:
+            key = generate_redis_key(self.db_prefix, "cultural_knowledge", id)
+            
+            # Get existing data to remove index entries
+            existing_data = self.redis_client.get(key)
+            if existing_data:
+                record_data = deserialize_data(existing_data)
+                remove_index_entries(
+                    redis_client=self.redis_client,
+                    prefix=self.db_prefix,
+                    table_type="cultural_knowledge",
+                    record_id=id,
+                    record_data=record_data,
+                    index_fields=CULTURAL_KNOWLEDGE_INDEX_FIELDS,
+                )
+                self.redis_client.delete(key)
+                _logger.debug(f"Successfully deleted cultural knowledge id: {id}")
+            else:
+                _logger.debug(f"No cultural knowledge found with id: {id}")
+
+        except Exception as e:
+            _logger.error(f"Error deleting cultural knowledge: {e}")
+            raise e
+
+    def get_cultural_knowledge(
+        self,
+        id: str,
+        deserialize: bool = True,
+    ) -> Optional[Union["CulturalKnowledge", Dict[str, Any]]]:
+        """Get cultural knowledge from Redis.
+        
+        Args:
+            id: The ID of the cultural knowledge to get.
+            deserialize: If True, return CulturalKnowledge object. If False, return dict.
+        
+        Returns:
+            CulturalKnowledge object or dict if found, None otherwise.
+        
+        Raises:
+            Exception: If an error occurs during retrieval.
+        """
+        from upsonic.culture.cultural_knowledge import CulturalKnowledge
+        
+        try:
+            key = generate_redis_key(self.db_prefix, "cultural_knowledge", id)
+            data = self.redis_client.get(key)
+            
+            if data is None:
+                return None
+
+            db_row = deserialize_data(data)
+            if not deserialize:
+                return db_row
+            return CulturalKnowledge.from_dict(db_row)
+
+        except Exception as e:
+            _logger.error(f"Error getting cultural knowledge: {e}")
+            raise e
+
+    def get_all_cultural_knowledge(
+        self,
+        name: Optional[str] = None,
+        limit: Optional[int] = None,
+        page: Optional[int] = None,
+        sort_by: Optional[str] = None,
+        sort_order: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        team_id: Optional[str] = None,
+        deserialize: bool = True,
+    ) -> Union[List["CulturalKnowledge"], Tuple[List[Dict[str, Any]], int]]:
+        """Get all cultural knowledge entries from Redis.
+        
+        Args:
+            name: Filter by name.
+            limit: Maximum number of records to return.
+            page: Page number (1-indexed).
+            sort_by: Column to sort by.
+            sort_order: Sort order ('asc' or 'desc').
+            agent_id: Filter by agent ID.
+            team_id: Filter by team ID.
+            deserialize: If True, return list of CulturalKnowledge objects.
+                        If False, return tuple of (list of dicts, total count).
+        
+        Returns:
+            List of CulturalKnowledge objects or tuple of (list of dicts, total count).
+        
+        Raises:
+            Exception: If an error occurs during retrieval.
+        """
+        from upsonic.culture.cultural_knowledge import CulturalKnowledge
+        
+        try:
+            # Get all cultural knowledge keys
+            keys = get_all_keys_for_table(
+                redis_client=self.redis_client,
+                prefix=self.db_prefix,
+                table_type="cultural_knowledge",
+            )
+            
+            all_items: List[Dict[str, Any]] = []
+            for key in keys:
+                data = self.redis_client.get(key)
+                if data:
+                    all_items.append(deserialize_data(data))
+
+            # Apply filters
+            filtered_items: List[Dict[str, Any]] = []
+            for item in all_items:
+                if name is not None and item.get("name") != name:
+                    continue
+                if agent_id is not None and item.get("agent_id") != agent_id:
+                    continue
+                if team_id is not None and item.get("team_id") != team_id:
+                    continue
+                filtered_items.append(item)
+
+            total_count = len(filtered_items)
+
+            # Apply sorting
+            sorted_items = apply_sorting(
+                records=filtered_items,
+                sort_by=sort_by or "created_at",
+                sort_order=sort_order or "desc",
+            )
+            
+            # Apply pagination
+            paginated_items = apply_pagination(
+                records=sorted_items,
+                limit=limit,
+                page=page,
+            )
+
+            if not deserialize:
+                return paginated_items, total_count
+            return [CulturalKnowledge.from_dict(item) for item in paginated_items]
+
+        except Exception as e:
+            _logger.error(f"Error getting all cultural knowledge: {e}")
+            raise e
+
+    def upsert_cultural_knowledge(
+        self,
+        cultural_knowledge: "CulturalKnowledge",
+        deserialize: bool = True,
+    ) -> Optional[Union["CulturalKnowledge", Dict[str, Any]]]:
+        """Upsert cultural knowledge into Redis.
+        
+        Args:
+            cultural_knowledge: The CulturalKnowledge instance to upsert.
+            deserialize: If True, return CulturalKnowledge object. If False, return dict.
+        
+        Returns:
+            The upserted CulturalKnowledge object or dict, or None if error occurs.
+        
+        Raises:
+            Exception: If an error occurs during upsert.
+        """
+        from upsonic.culture.cultural_knowledge import CulturalKnowledge
+        import uuid
+        
+        try:
+            if cultural_knowledge.id is None:
+                cultural_knowledge.id = str(uuid.uuid4())
+
+            # Use to_dict for serialization
+            data = cultural_knowledge.to_dict()
+            
+            # Convert RFC3339 timestamps to epoch seconds for storage
+            if "created_at" in data and data["created_at"] is not None:
+                if isinstance(data["created_at"], str):
+                    from upsonic.utils.dttm import to_epoch_s
+                    data["created_at"] = to_epoch_s(data["created_at"])
+            if "updated_at" in data and data["updated_at"] is not None:
+                if isinstance(data["updated_at"], str):
+                    from upsonic.utils.dttm import to_epoch_s
+                    data["updated_at"] = to_epoch_s(data["updated_at"])
+            else:
+                data["updated_at"] = int(time.time())
+
+            key = generate_redis_key(self.db_prefix, "cultural_knowledge", cultural_knowledge.id)
+            
+            # Remove old index entries if record exists
+            existing_data = self.redis_client.get(key)
+            if existing_data:
+                old_record = deserialize_data(existing_data)
+                remove_index_entries(
+                    redis_client=self.redis_client,
+                    prefix=self.db_prefix,
+                    table_type="cultural_knowledge",
+                    record_id=cultural_knowledge.id,
+                    record_data=old_record,
+                    index_fields=CULTURAL_KNOWLEDGE_INDEX_FIELDS,
+                )
+
+            # Store the data
+            serialized_data = serialize_data(data)
+            if self.expire:
+                self.redis_client.setex(key, self.expire, serialized_data)
+            else:
+                self.redis_client.set(key, serialized_data)
+
+            # Create new index entries
+            create_index_entries(
+                redis_client=self.redis_client,
+                prefix=self.db_prefix,
+                table_type="cultural_knowledge",
+                record_id=cultural_knowledge.id,
+                record_data=data,
+                index_fields=CULTURAL_KNOWLEDGE_INDEX_FIELDS,
+                expire=self.expire,
+            )
+
+            if not deserialize:
+                return data
+            return CulturalKnowledge.from_dict(data)
+
+        except Exception as e:
+            _logger.error(f"Error upserting cultural knowledge: {e}")
+            raise e

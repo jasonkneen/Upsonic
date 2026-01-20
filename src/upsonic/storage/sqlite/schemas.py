@@ -40,6 +40,22 @@ USER_MEMORY_TABLE_SCHEMA: Dict[str, Dict[str, Any]] = {
 }
 
 
+CULTURAL_KNOWLEDGE_TABLE_SCHEMA: Dict[str, Dict[str, Any]] = {
+    "id": {"type": String, "primary_key": True, "nullable": False},
+    "name": {"type": String, "nullable": False, "index": True},
+    "summary": {"type": String, "nullable": True},
+    "content": {"type": String, "nullable": True},
+    "metadata": {"type": JSON, "nullable": True},
+    "notes": {"type": JSON, "nullable": True},
+    "categories": {"type": JSON, "nullable": True},
+    "input": {"type": String, "nullable": True},
+    "created_at": {"type": BigInteger, "nullable": True, "index": True},
+    "updated_at": {"type": BigInteger, "nullable": True, "index": True},
+    "agent_id": {"type": String, "nullable": True, "index": True},
+    "team_id": {"type": String, "nullable": True, "index": True},
+}
+
+
 def get_table_schema_definition(table_type: str) -> Dict[str, Dict[str, Any]]:
     """
     Get the schema definition for a given table type.
@@ -56,6 +72,7 @@ def get_table_schema_definition(table_type: str) -> Dict[str, Dict[str, Any]]:
     schemas: Dict[str, Dict[str, Dict[str, Any]]] = {
         "sessions": SESSION_TABLE_SCHEMA,
         "user_memories": USER_MEMORY_TABLE_SCHEMA,
+        "cultural_knowledge": CULTURAL_KNOWLEDGE_TABLE_SCHEMA,
     }
     
     if table_type not in schemas:
