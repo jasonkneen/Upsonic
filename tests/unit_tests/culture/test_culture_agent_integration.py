@@ -18,15 +18,15 @@ from upsonic.tasks.tasks import Task
 class TestAgentCultureInitialization:
     """Test Agent initialization with Culture."""
     
-    @patch('upsonic.agent.agent.Model')
-    def test_agent_with_culture(self, mock_model_class):
+    @patch('upsonic.models.infer_model')
+    def test_agent_with_culture(self, mock_infer_model):
         """Test Agent initialization with culture parameter."""
         from upsonic.agent.agent import Agent
         
         # Mock model to avoid API key requirement
         mock_model = Mock()
         mock_model.model_name = "openai/gpt-4o"
-        mock_model_class.from_string.return_value = mock_model
+        mock_infer_model.return_value = mock_model
         
         culture = Culture(description="You are a helpful assistant")
         agent = Agent("openai/gpt-4o", culture=culture)
@@ -35,30 +35,30 @@ class TestAgentCultureInitialization:
         assert agent._culture_manager is not None
         assert agent._culture_manager.culture == culture
     
-    @patch('upsonic.agent.agent.Model')
-    def test_agent_without_culture(self, mock_model_class):
+    @patch('upsonic.models.infer_model')
+    def test_agent_without_culture(self, mock_infer_model):
         """Test Agent initialization without culture."""
         from upsonic.agent.agent import Agent
         
         # Mock model to avoid API key requirement
         mock_model = Mock()
         mock_model.model_name = "openai/gpt-4o"
-        mock_model_class.from_string.return_value = mock_model
+        mock_infer_model.return_value = mock_model
         
         agent = Agent("openai/gpt-4o")
         
         assert agent._culture_input is None
         assert agent._culture_manager is None
     
-    @patch('upsonic.agent.agent.Model')
-    def test_agent_culture_manager_enabled(self, mock_model_class):
+    @patch('upsonic.models.infer_model')
+    def test_agent_culture_manager_enabled(self, mock_infer_model):
         """Test that CultureManager is enabled when culture is provided."""
         from upsonic.agent.agent import Agent
         
         # Mock model to avoid API key requirement
         mock_model = Mock()
         mock_model.model_name = "openai/gpt-4o"
-        mock_model_class.from_string.return_value = mock_model
+        mock_infer_model.return_value = mock_model
         
         culture = Culture(description="You are helpful")
         agent = Agent("openai/gpt-4o", culture=culture)
@@ -70,8 +70,8 @@ class TestAgentCultureSystemPromptInjection:
     """Test culture injection into system prompt."""
     
     @pytest.mark.asyncio
-    @patch('upsonic.agent.agent.Model')
-    async def test_system_prompt_includes_culture_when_add_system_prompt_true(self, mock_model_class):
+    @patch('upsonic.models.infer_model')
+    async def test_system_prompt_includes_culture_when_add_system_prompt_true(self, mock_infer_model):
         """Test that culture is added to system prompt when add_system_prompt=True."""
         from upsonic.agent.agent import Agent
         from upsonic.agent.context_managers.system_prompt_manager import SystemPromptManager
@@ -79,7 +79,7 @@ class TestAgentCultureSystemPromptInjection:
         # Mock model to avoid API key requirement
         mock_model = Mock()
         mock_model.model_name = "openai/gpt-4o"
-        mock_model_class.from_string.return_value = mock_model
+        mock_infer_model.return_value = mock_model
         
         culture = Culture(
             description="You are a 5-star hotel receptionist",
@@ -110,8 +110,8 @@ class TestAgentCultureSystemPromptInjection:
         assert "## Agent Culture Guidelines" in system_prompt
     
     @pytest.mark.asyncio
-    @patch('upsonic.agent.agent.Model')
-    async def test_system_prompt_excludes_culture_when_add_system_prompt_false(self, mock_model_class):
+    @patch('upsonic.models.infer_model')
+    async def test_system_prompt_excludes_culture_when_add_system_prompt_false(self, mock_infer_model):
         """Test that culture is NOT added when add_system_prompt=False."""
         from upsonic.agent.agent import Agent
         from upsonic.agent.context_managers.system_prompt_manager import SystemPromptManager
@@ -119,7 +119,7 @@ class TestAgentCultureSystemPromptInjection:
         # Mock model to avoid API key requirement
         mock_model = Mock()
         mock_model.model_name = "openai/gpt-4o"
-        mock_model_class.from_string.return_value = mock_model
+        mock_infer_model.return_value = mock_model
         
         culture = Culture(
             description="You are a 5-star hotel receptionist",
@@ -150,9 +150,9 @@ class TestAgentCultureSystemPromptInjection:
             assert "<CulturalKnowledge>" not in system_prompt
     
     @pytest.mark.asyncio
-    @patch('upsonic.agent.agent.Model')
+    @patch('upsonic.models.infer_model')
     @patch.object(CultureManager, '_extract_guidelines', new_callable=AsyncMock)
-    async def test_system_prompt_prepares_culture_if_not_prepared(self, mock_extract, mock_model_class):
+    async def test_system_prompt_prepares_culture_if_not_prepared(self, mock_extract, mock_infer_model):
         """Test that system prompt preparation triggers culture preparation."""
         from upsonic.agent.agent import Agent
         from upsonic.agent.context_managers.system_prompt_manager import SystemPromptManager
@@ -160,7 +160,7 @@ class TestAgentCultureSystemPromptInjection:
         # Mock model to avoid API key requirement
         mock_model = Mock()
         mock_model.model_name = "openai/gpt-4o"
-        mock_model_class.from_string.return_value = mock_model
+        mock_infer_model.return_value = mock_model
         
         # Mock culture extraction (async)
         mock_extract.return_value = {
@@ -189,8 +189,8 @@ class TestAgentCultureRepeatFunctionality:
     """Test culture repeat functionality in Agent."""
     
     @pytest.mark.asyncio
-    @patch('upsonic.agent.agent.Model')
-    async def test_handle_model_response_injects_culture_on_repeat(self, mock_model_class):
+    @patch('upsonic.models.infer_model')
+    async def test_handle_model_response_injects_culture_on_repeat(self, mock_infer_model):
         """Test that _handle_model_response injects culture when should_repeat returns True."""
         from upsonic.agent.agent import Agent
         from upsonic.messages import ModelResponse, ModelRequest, TextPart
@@ -198,7 +198,7 @@ class TestAgentCultureRepeatFunctionality:
         # Mock model to avoid API key requirement
         mock_model = Mock()
         mock_model.model_name = "openai/gpt-4o"
-        mock_model_class.from_string.return_value = mock_model
+        mock_infer_model.return_value = mock_model
         
         culture = Culture(
             description="You are helpful",
@@ -240,8 +240,8 @@ class TestAgentCultureRepeatFunctionality:
         assert result is not None
     
     @pytest.mark.asyncio
-    @patch('upsonic.agent.agent.Model')
-    async def test_handle_model_response_no_repeat_when_repeat_false(self, mock_model_class):
+    @patch('upsonic.models.infer_model')
+    async def test_handle_model_response_no_repeat_when_repeat_false(self, mock_infer_model):
         """Test that culture is not repeated when repeat=False."""
         from upsonic.agent.agent import Agent
         from upsonic.messages import ModelResponse, ModelRequest, TextPart
@@ -249,7 +249,7 @@ class TestAgentCultureRepeatFunctionality:
         # Mock model to avoid API key requirement
         mock_model = Mock()
         mock_model.model_name = "openai/gpt-4o"
-        mock_model_class.from_string.return_value = mock_model
+        mock_infer_model.return_value = mock_model
         
         culture = Culture(
             description="You are helpful",
@@ -287,9 +287,9 @@ class TestAgentCulturePreparationFlow:
     """Test culture preparation flow in Agent execution."""
     
     @pytest.mark.asyncio
-    @patch('upsonic.agent.agent.Model')
+    @patch('upsonic.models.infer_model')
     @patch.object(CultureManager, 'aprepare', new_callable=AsyncMock)
-    async def test_culture_preparation_during_agent_execution(self, mock_aprepare, mock_model_class):
+    async def test_culture_preparation_during_agent_execution(self, mock_aprepare, mock_infer_model):
         """Test that system prompt preparation triggers culture preparation."""
         from upsonic.agent.agent import Agent
         from upsonic.agent.context_managers.system_prompt_manager import SystemPromptManager
@@ -297,7 +297,7 @@ class TestAgentCulturePreparationFlow:
         # Mock model to avoid API key requirement
         mock_model = Mock()
         mock_model.model_name = "openai/gpt-4o"
-        mock_model_class.from_string.return_value = mock_model
+        mock_infer_model.return_value = mock_model
         
         culture = Culture(description="You are helpful", add_system_prompt=True)
         agent = Agent("openai/gpt-4o", culture=culture)
@@ -330,15 +330,15 @@ class TestAgentCulturePreparationFlow:
 class TestAgentCultureEdgeCases:
     """Test edge cases for Agent-Culture integration."""
     
-    @patch('upsonic.agent.agent.Model')
-    def test_agent_with_culture_disabled(self, mock_model_class):
+    @patch('upsonic.models.infer_model')
+    def test_agent_with_culture_disabled(self, mock_infer_model):
         """Test Agent with culture but CultureManager disabled."""
         from upsonic.agent.agent import Agent
         
         # Mock model to avoid API key requirement
         mock_model = Mock()
         mock_model.model_name = "openai/gpt-4o"
-        mock_model_class.from_string.return_value = mock_model
+        mock_infer_model.return_value = mock_model
         
         culture = Culture(description="You are helpful")
         agent = Agent("openai/gpt-4o", culture=culture)
@@ -349,8 +349,8 @@ class TestAgentCultureEdgeCases:
         assert agent._culture_manager.enabled is False
     
     @pytest.mark.asyncio
-    @patch('upsonic.agent.agent.Model')
-    async def test_agent_culture_with_empty_guidelines(self, mock_model_class):
+    @patch('upsonic.models.infer_model')
+    async def test_agent_culture_with_empty_guidelines(self, mock_infer_model):
         """Test Agent with culture that has empty extracted guidelines."""
         from upsonic.agent.agent import Agent
         from upsonic.agent.context_managers.system_prompt_manager import SystemPromptManager
@@ -358,7 +358,7 @@ class TestAgentCultureEdgeCases:
         # Mock model to avoid API key requirement
         mock_model = Mock()
         mock_model.model_name = "openai/gpt-4o"
-        mock_model_class.from_string.return_value = mock_model
+        mock_infer_model.return_value = mock_model
         
         culture = Culture(description="You are helpful", add_system_prompt=True)
         agent = Agent("openai/gpt-4o", culture=culture)
@@ -376,15 +376,15 @@ class TestAgentCultureEdgeCases:
         # System prompt should still exist (may or may not include culture)
         assert system_prompt is not None or system_prompt == ""
     
-    @patch('upsonic.agent.agent.Model')
-    def test_agent_culture_manager_initialization_parameters(self, mock_model_class):
+    @patch('upsonic.models.infer_model')
+    def test_agent_culture_manager_initialization_parameters(self, mock_infer_model):
         """Test that CultureManager is initialized with correct parameters from Agent."""
         from upsonic.agent.agent import Agent
         
         # Mock model to avoid API key requirement
         mock_model = Mock()
         mock_model.model_name = "openai/gpt-4o"
-        mock_model_class.from_string.return_value = mock_model
+        mock_infer_model.return_value = mock_model
         
         culture = Culture(description="You are helpful")
         agent = Agent(
@@ -410,15 +410,15 @@ class TestAgentCultureWithTaskExecution:
         # Should be in smoke tests instead
         pass
     
-    @patch('upsonic.agent.agent.Model')
-    def test_culture_format_in_system_prompt_structure(self, mock_model_class):
+    @patch('upsonic.models.infer_model')
+    def test_culture_format_in_system_prompt_structure(self, mock_infer_model):
         """Test that culture formatting follows expected structure."""
         from upsonic.agent.agent import Agent
         
         # Mock model to avoid API key requirement
         mock_model = Mock()
         mock_model.model_name = "openai/gpt-4o"
-        mock_model_class.from_string.return_value = mock_model
+        mock_infer_model.return_value = mock_model
         
         culture = Culture(description="You are a professional consultant", add_system_prompt=True)
         agent = Agent("openai/gpt-4o", culture=culture)

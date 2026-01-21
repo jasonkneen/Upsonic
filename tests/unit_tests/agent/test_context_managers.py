@@ -87,6 +87,7 @@ class MockAgent:
         self.company_url = None
         self.company_objective = None
         self.company_description = None
+        self._culture_manager = None  # Added for culture support
 
     def get_agent_id(self):
         return self.agent_id
@@ -632,8 +633,6 @@ class TestMemoryManager:
             "context_injection": "",
             "system_prompt_injection": "",
             "metadata_injection": "",
-            "culture_injection": "",
-            "cultural_knowledge_list": [],
         }
         assert manager._agent_run_output is None
 
@@ -647,8 +646,6 @@ class TestMemoryManager:
             "context_injection": "",
             "system_prompt_injection": "",
             "metadata_injection": "",
-            "culture_injection": "",
-            "cultural_knowledge_list": [],
         }
 
     def test_memory_manager_get_message_history(self):
