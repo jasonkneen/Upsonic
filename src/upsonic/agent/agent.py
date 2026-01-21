@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     from upsonic.run.events.events import AgentStreamEvent
     from upsonic.db.database import DatabaseBase
     from upsonic.models.model_selector import ModelRecommendation
-    from upsonic.culture.cultural_knowledge import CulturalKnowledge
+    from upsonic.culture.culture import Culture
     from upsonic.culture.manager import CultureManager
     from upsonic.run.requirements import RunRequirement
     from upsonic.session.agent import RunData
@@ -164,7 +164,7 @@ class Agent(BaseAgent):
         thinking_budget: Optional[int] = None,
         thinking_include_thoughts: Optional[bool] = None,
         reasoning_format: Optional[Literal["hidden", "raw", "parsed"]] = None,
-        cultural_knowledge: Optional[Union["CulturalKnowledge", str]] = None,
+        culture: Optional["Culture"] = None,
         # Agent metadata (passed to prompt)
         metadata: Optional[Dict[str, Any]] = None,
     ):
@@ -225,9 +225,8 @@ class Agent(BaseAgent):
             user_policy_feedback_loop: Maximum retry count for user policy feedback (default 1)
             agent_policy_feedback_loop: Maximum retry count for agent policy feedback (default 1)
             
-            cultural_knowledge: Cultural knowledge to inject into system prompt.
-                Can be a CulturalKnowledge instance or a string description.
-                If string, it will be converted to a CulturalKnowledge instance.
+            culture: Culture instance defining agent behavior and communication guidelines.
+                Includes description, add_system_prompt, repeat, and repeat_interval settings.
         """
         from upsonic.models import infer_model
         self.model = infer_model(model)
@@ -323,17 +322,17 @@ class Agent(BaseAgent):
         # Agent metadata (injected into prompts)
         self.metadata = metadata or {}
         
-        # Store the raw input and create CultureManager if needed
-        self._cultural_knowledge_input = cultural_knowledge
+        # Store culture and create CultureManager if needed
+        self._culture_input = culture
         self._culture_manager: Optional["CultureManager"] = None
-        if cultural_knowledge is not None:
+        if culture is not None:
             from upsonic.culture.manager import CultureManager
             self._culture_manager = CultureManager(
                 model=self.model_name,
                 debug=self.debug,
                 debug_level=self.debug_level,
             )
-            self._culture_manager.set_cultural_knowledge(cultural_knowledge)
+            self._culture_manager.set_culture(culture)
         
         # Initialize policy managers
         from upsonic.agent.policy_manager import PolicyManager
@@ -1650,10 +1649,39 @@ class Agent(BaseAgent):
         messages: List["ModelRequest"]
     ) -> "ModelResponse":
         """Handle model response including tool calls."""
-        from upsonic.messages import ToolCallPart, ToolReturnPart, TextPart, UserPromptPart, ModelRequest, ModelResponse
+        from upsonic.messages import ToolCallPart, TextPart, UserPromptPart, ModelRequest, ModelResponse
+        from upsonic._utils import now_utc
         
         if hasattr(self, '_tool_limit_reached') and self._tool_limit_reached:
             return response
+        
+        # Handle culture repeat logic
+        if self._culture_manager and self._culture_manager.enabled:
+            culture = self._culture_manager.culture
+            if culture and culture.repeat:
+                if self._culture_manager.should_repeat():
+                    # Ensure culture is prepared
+                    if not self._culture_manager.prepared:
+                        await self._culture_manager.aprepare()
+                    
+                    culture_formatted = self._culture_manager.format_for_system_prompt()
+                    if culture_formatted:
+                        # Create mock ModelRequest with culture guidelines
+                        culture_system_part = UserPromptPart(content=culture_formatted)
+                        culture_request = ModelRequest(parts=[culture_system_part])
+                        
+                        # Create mock ModelResponse acknowledging culture
+                        culture_response = ModelResponse(
+                            parts=[TextPart(content="Culture guidelines acknowledged.")],
+                            model_name=response.model_name if response else None,
+                            timestamp=now_utc(),
+                            usage=response.usage if response else None,
+                            provider_name=response.provider_name if response else None,
+                        )
+                        
+                        # Insert culture into messages before the current response
+                        messages.append(culture_request)
+                        messages.append(culture_response)
         
         tool_calls = [
             part for part in response.parts 

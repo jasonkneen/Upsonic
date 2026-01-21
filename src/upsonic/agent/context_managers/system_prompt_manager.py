@@ -213,11 +213,15 @@ class SystemPromptManager:
             system_injection = memory_handler.get_system_prompt_injection()
             if system_injection:
                 prompt_parts.append(system_injection)
-            
-            # Inject cultural knowledge from memory
-            culture_injection = memory_handler.get_culture_injection()
-            if culture_injection:
-                prompt_parts.append(culture_injection)
+        
+        # Inject culture from CultureManager (if enabled and add_system_prompt is True)
+        # Note: Culture must be prepared before this method is called (done in aprepare())
+        if self.agent._culture_manager and self.agent._culture_manager.enabled:
+            culture = self.agent._culture_manager.culture
+            if culture and culture.add_system_prompt and self.agent._culture_manager.prepared:
+                culture_formatted = self.agent._culture_manager.format_for_system_prompt()
+                if culture_formatted:
+                    prompt_parts.append(culture_formatted)
 
         if self.agent.system_prompt is not None:
             base_prompt = self.agent.system_prompt
@@ -327,7 +331,7 @@ class SystemPromptManager:
         if system_prompt:
             # Check if system prompt contains dynamic content markers
             has_user_profile = "<UserProfile>" in system_prompt
-            has_culture_context = "<CulturalKnowledge>" in system_prompt or "<CultureContext>" in system_prompt
+            has_culture_context = "<CulturalKnowledge>" in system_prompt
             
             # Always include if it has dynamic content that may have changed
             if has_user_profile or has_culture_context:
@@ -347,6 +351,12 @@ class SystemPromptManager:
         Args:
             memory_handler: Optional MemoryManager for memory and culture injection
         """
+        # Prepare culture if needed (async) - must be done before _build_system_prompt
+        if self.agent._culture_manager and self.agent._culture_manager.enabled:
+            if not self.agent._culture_manager.prepared:
+                await self.agent._culture_manager.aprepare()
+        
+        # Build system prompt (culture will be injected in _build_system_prompt if prepared)
         self.system_prompt = self._build_system_prompt(memory_handler)
     
     async def afinalize(self) -> None:

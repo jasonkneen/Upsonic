@@ -1,78 +1,66 @@
 """
-CultureManager for handling user-provided cultural knowledge.
+CultureManager for handling agent culture and behavior guidelines.
 
 This manager handles:
-- Accepting user-provided CulturalKnowledge instances or string descriptions
-- Using an Agent to create/refine cultural knowledge based on user input
-- Combining user input with stored cultural knowledge
-- Formatting cultural knowledge for system prompt injection
+- Accepting user-provided Culture instances
+- Using an Agent to extract structured guidelines from descriptions
+- Formatting culture guidelines for system prompt injection
+- Managing repeat intervals for culture injection
 
-Storage operations are handled by the Memory class, not CultureManager.
-
+Storage operations are NOT handled by CultureManager (removed from storage).
 """
+
 from __future__ import annotations
 
-import uuid
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 if TYPE_CHECKING:
-    from upsonic.culture.cultural_knowledge import CulturalKnowledge
+    from upsonic.culture.culture import Culture
     from upsonic.models import Model
 
-# System prompt for the cultural knowledge extraction agent
-CULTURE_EXTRACTION_SYSTEM_PROMPT = """You are a Cultural Knowledge Architect responsible for extracting and refining cultural knowledge from user inputs.
+# System prompt for the culture extraction agent
+CULTURE_EXTRACTION_SYSTEM_PROMPT = """You are a Culture Extraction Agent responsible for analyzing user descriptions and extracting structured behavioral guidelines.
 
 Your role is to:
-1. Analyze user-provided descriptions, instructions, or context
-2. Extract meaningful cultural principles, guidelines, and best practices
-3. Create or update CulturalKnowledge entries that capture:
-   - Name: A concise, specific title for the knowledge
-   - Summary: A one-line purpose or takeaway
-   - Content: Detailed principles, rules, or guidelines
-   - Categories: Relevant tags (e.g., 'engineering', 'communication', 'principles')
-   - Notes: Contextual notes, rationale, or examples
+1. Analyze user-provided descriptions of desired agent behavior
+2. Extract four key aspects of agent culture:
+   - Tone of Speech: How the agent should communicate (formal, friendly, professional, etc.)
+   - Topics I Shouldn't Talk About: Subjects the agent should avoid or decline
+   - Topics I Can Help With: Subjects the agent is knowledgeable and helpful about
+   - Things I Should Pay Attention To: Important considerations, principles, or guidelines
 
 Guidelines for extraction:
-- Focus on UNIVERSAL principles that benefit all agents, not user-specific preferences
-- Extract actionable guidelines, not just observations
-- Preserve the intent and context of the original input
-- Be specific and concrete, avoid vague generalizations
-- If updating existing knowledge, MERGE and ENHANCE rather than replace
-- Categories should be lowercase, hyphenated (e.g., 'code-review', 'customer-service')
-
-When given existing cultural knowledge:
-- Review and consider what's already captured
-- Add new insights without duplicating existing content
-- Update if new information contradicts or improves existing knowledge
-- Maintain consistency in naming and categorization
+- Be specific and actionable
+- Extract concrete guidelines, not vague suggestions
+- Preserve the intent and context of the original description
+- Format each section clearly and concisely
+- If a section doesn't apply, use "N/A" or leave it minimal
 """
 
 
 class CultureManager:
-    """Manager for cultural knowledge user input and formatting.
+    """Manager for agent culture and behavior guidelines.
     
     CultureManager handles:
-    1. Accepting user-provided CulturalKnowledge or string descriptions
-    2. Using an Agent to create/refine cultural knowledge from strings
-    3. Combining user input with stored cultural knowledge
-    4. Formatting for system prompt injection
-    
-    Storage operations are managed by the Memory class, NOT CultureManager.
-    
-    Usage:
-        # With explicit CulturalKnowledge
-        knowledge = CulturalKnowledge(
-            name="Code Review Standards",
-            content="Focus on maintainability, security, and performance"
-        )
-        manager = CultureManager(model="openai/gpt-4o")
-        manager.set_cultural_knowledge(knowledge)
+    1. Accepting user-provided Culture instances
+    2. Using an Agent to extract structured guidelines from descriptions
+    3. Formatting culture guidelines for system prompt injection
+    4. Managing repeat intervals for periodic culture injection
         
-        # With string description (Agent creates CulturalKnowledge)
+    Usage:
+        from upsonic.culture import Culture
+        
+        culture = Culture(
+            description="You are a 5-star hotel receptionist",
+            add_system_prompt=True,
+            repeat=False,
+            repeat_interval=5
+        )
+        
         manager = CultureManager(model="openai/gpt-4o")
-        manager.set_cultural_knowledge("I want my agent to be helpful and professional")
-        await manager.aprepare()  # This processes the string input
-    
+        manager.set_culture(culture)
+        await manager.aprepare()  # This processes the description
+        formatted = manager.format_for_system_prompt()
     """
     
     def __init__(
@@ -88,7 +76,7 @@ class CultureManager:
         Initialize the CultureManager.
         
         Args:
-            model: Model for cultural knowledge extraction
+            model: Model for culture extraction
             enabled: Whether culture management is enabled
             agent_id: Agent ID for culture context
             team_id: Team ID for culture context
@@ -102,138 +90,85 @@ class CultureManager:
         self.debug = debug
         self.debug_level = debug_level
         
-        # Current cultural knowledge (user-provided or extracted)
-        self._cultural_knowledge: Optional["CulturalKnowledge"] = None
+        # Current culture instance
+        self._culture: Optional["Culture"] = None
         
-        # Raw string input that needs processing (set by set_cultural_knowledge)
-        self._pending_string_input: Optional[str] = None
+        # Extracted culture guidelines (processed from description)
+        self._extracted_guidelines: Optional[Dict[str, str]] = None
         
-        # Whether the user input was a CulturalKnowledge instance (no processing needed)
-        self._is_instance_input: bool = False
-        
-        # Cultural knowledge loaded from storage (set by MemoryManager)
-        self._stored_knowledge: List["CulturalKnowledge"] = []
-        
-        # Track if knowledge was updated in this session
-        self._knowledge_updated: bool = False
-        
-        # Track if aprepare was called
+        # Track if culture was prepared
         self._prepared: bool = False
+        
+        # Track message count for repeat logic
+        self._message_count: int = 0
     
     @property
-    def cultural_knowledge(self) -> Optional["CulturalKnowledge"]:
-        """Get the current cultural knowledge."""
-        return self._cultural_knowledge
+    def culture(self) -> Optional["Culture"]:
+        """Get the current culture instance."""
+        return self._culture
     
     @property
-    def stored_knowledge(self) -> List["CulturalKnowledge"]:
-        """Get cultural knowledge loaded from storage."""
-        return self._stored_knowledge
-    
-    @stored_knowledge.setter
-    def stored_knowledge(self, value: List["CulturalKnowledge"]) -> None:
-        """Set stored knowledge (used by MemoryManager)."""
-        self._stored_knowledge = value
+    def extracted_guidelines(self) -> Optional[Dict[str, str]]:
+        """Get the extracted culture guidelines."""
+        return self._extracted_guidelines
     
     @property
-    def knowledge_updated(self) -> bool:
-        """Check if knowledge was updated in this session."""
-        return self._knowledge_updated
+    def prepared(self) -> bool:
+        """Check if culture has been prepared."""
+        return self._prepared
     
-    @property
-    def has_pending_input(self) -> bool:
-        """Check if there's a pending string input that needs processing."""
-        return self._pending_string_input is not None and not self._prepared
-    
-    def set_cultural_knowledge(
-        self,
-        knowledge: Union["CulturalKnowledge", str],
-    ) -> None:
+    def set_culture(self, culture: "Culture") -> None:
         """
-        Set cultural knowledge from user input.
-        
-        If a string is provided, it will be stored for later processing
-        by aprepare() which uses an Agent to extract structured knowledge.
-        
-        If a CulturalKnowledge instance is provided, it's used directly.
+        Set culture from user input.
         
         Args:
-            knowledge: CulturalKnowledge instance or string description
+            culture: Culture instance with description and settings
         """
-        from upsonic.culture.cultural_knowledge import CulturalKnowledge
-        
-        if isinstance(knowledge, str):
-            # Store the string for later processing in aprepare()
-            self._pending_string_input = knowledge
-            self._is_instance_input = False
-            # Also create a basic fallback in case aprepare() isn't called
-            self._cultural_knowledge = CulturalKnowledge(
-                id=str(uuid.uuid4()),
-                name="User Cultural Guidelines",
-                content=knowledge,
-                summary="User-provided cultural guidelines",
-                categories=["user-provided"],
-            )
-        else:
-            # Use provided CulturalKnowledge instance directly
-            if knowledge.id is None:
-                knowledge.id = str(uuid.uuid4())
-            self._cultural_knowledge = knowledge
-            self._pending_string_input = None
-            self._is_instance_input = True
-        
-        self._knowledge_updated = True
+        self._culture = culture
+        self._prepared = False
+        self._extracted_guidelines = None
     
     async def aprepare(self) -> None:
         """
-        Prepare cultural knowledge by processing any pending string input.
+        Prepare culture by extracting guidelines from description.
         
-        This method should be called after stored_knowledge is set by MemoryManager.
-        
-        If user provided a string:
-        - Calls acreate_cultural_knowledge() with stored knowledge as context
-        - Creates a properly structured CulturalKnowledge instance
-        
-        If user provided a CulturalKnowledge instance:
-        - No processing needed, uses directly
-        
-        After this, format_for_system_prompt() will combine user input + stored knowledge.
+        This method should be called after set_culture() to process
+        the description and extract structured guidelines.
         """
-        if self._prepared:
+        if self._prepared or not self._culture:
             return
         
         self._prepared = True
         
-        # If user provided a string, process it with an Agent
-        if self._pending_string_input and not self._is_instance_input:
-            await self._process_string_input(self._pending_string_input)
+        # Extract guidelines from description
+        await self._extract_guidelines(self._culture.description)
     
     def prepare(self) -> None:
         """Synchronous version of aprepare."""
         import asyncio
         try:
-            loop = asyncio.get_running_loop()
+            _ = asyncio.get_running_loop()
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as pool:
                 pool.submit(asyncio.run, self.aprepare()).result()
         except RuntimeError:
             asyncio.run(self.aprepare())
     
-    async def _process_string_input(self, message: str) -> Optional["CulturalKnowledge"]:
+    async def _extract_guidelines(self, description: str) -> Dict[str, str]:
         """
-        Process a string input into structured CulturalKnowledge using an Agent.
-        
-        This uses stored_knowledge as context for the extraction.
+        Extract structured guidelines from culture description using an Agent.
         
         Args:
-            message: User message describing desired cultural behaviors
+            description: User description of desired agent behavior
             
         Returns:
-            Created CulturalKnowledge instance
+            Dictionary with extracted guidelines:
+            - tone_of_speech
+            - topics_to_avoid
+            - topics_to_help
+            - things_to_pay_attention
         """
         from pydantic import BaseModel, Field
-        from typing import List as ListType, Optional as OptionalType
-        from upsonic.culture.cultural_knowledge import CulturalKnowledge
         from upsonic.utils.printing import info_log, warning_log
         
         if not self._model_spec:
@@ -242,46 +177,48 @@ class CultureManager:
                     "CultureManager: No model configured, using basic extraction",
                     "CultureManager"
                 )
-            # Keep the basic fallback that was already created
-            return self._cultural_knowledge
+            # Basic fallback
+            self._extracted_guidelines = {
+                "tone_of_speech": "Professional and helpful",
+                "topics_to_avoid": "N/A",
+                "topics_to_help": "General assistance",
+                "things_to_pay_attention": "User needs and preferences"
+            }
+            return self._extracted_guidelines
         
         # Define output schema for extraction
         class ExtractedCulture(BaseModel):
-            """Extracted cultural knowledge from user input."""
-            name: str = Field(..., description="Concise, specific title for the knowledge")
-            summary: str = Field(..., description="One-line purpose or takeaway")
-            content: str = Field(..., description="Detailed principles, rules, or guidelines")
-            categories: ListType[str] = Field(
-                default_factory=list,
-                description="Relevant tags (lowercase, hyphenated)"
+            """Extracted culture guidelines from user description."""
+            tone_of_speech: str = Field(
+                ...,
+                description="How the agent should communicate (formal, friendly, professional, etc.)"
             )
-            notes: OptionalType[ListType[str]] = Field(
-                default=None,
-                description="Contextual notes, rationale, or examples"
+            topics_to_avoid: str = Field(
+                ...,
+                description="Subjects the agent should avoid or decline to discuss"
             )
-        
-        # Build context with existing stored knowledge
-        context_parts: List[str] = []
-        
-        if self._stored_knowledge:
-            existing_str = "\n".join([
-                f"- {k.name}: {k.summary or ''}" 
-                for k in self._stored_knowledge[:5]
-            ])
-            context_parts.append(f"Existing Cultural Knowledge from Storage:\n{existing_str}")
-        
-        context_str = "\n\n".join(context_parts) if context_parts else "No existing cultural knowledge in storage."
+            topics_to_help: str = Field(
+                ...,
+                description="Subjects the agent is knowledgeable and helpful about"
+            )
+            things_to_pay_attention: str = Field(
+                ...,
+                description="Important considerations, principles, or guidelines the agent should follow"
+            )
         
         # Create extraction task
-        extraction_prompt = f"""Analyze the following user input and extract cultural knowledge.
+        extraction_prompt = f"""Analyze the following user description and extract structured culture guidelines.
 
-{context_str}
+User Description:
+{description}
 
-User Input:
-{message}
+Extract the four key aspects:
+1. Tone of Speech: How should the agent communicate?
+2. Topics I Shouldn't Talk About: What should the agent avoid?
+3. Topics I Can Help With: What is the agent knowledgeable about?
+4. Things I Should Pay Attention To: What principles should guide the agent?
 
-Extract the cultural knowledge as structured data. Focus on universal principles that benefit all agents.
-Consider the existing knowledge above and create complementary knowledge that enhances the overall culture.
+Provide specific, actionable guidelines for each aspect.
 """
         
         try:
@@ -302,180 +239,102 @@ Consider the existing knowledge above and create complementary knowledge that en
             
             result = await extractor.do_async(task)
             
-            if result and hasattr(result, 'name'):
-                # Create CulturalKnowledge from extracted data
-                self._cultural_knowledge = CulturalKnowledge(
-                    id=str(uuid.uuid4()),
-                    name=result.name,
-                    summary=result.summary,
-                    content=result.content,
-                    categories=result.categories,
-                    notes=result.notes,
-                    input=message,
-                    agent_id=self.agent_id,
-                    team_id=self.team_id,
-                )
-                
-                self._knowledge_updated = True
+            if result:
+                self._extracted_guidelines = {
+                    "tone_of_speech": result.tone_of_speech if result and hasattr(result, 'tone_of_speech') else "Professional and helpful",
+                    "topics_to_avoid": result.topics_to_avoid if result and hasattr(result, 'topics_to_avoid') else "N/A",
+                    "topics_to_help": result.topics_to_help if result and hasattr(result, 'topics_to_help') else "General assistance",
+                    "things_to_pay_attention": result.things_to_pay_attention if result and hasattr(result, 'things_to_pay_attention') else "User needs and preferences",
+                }
                 
                 if self.debug:
                     info_log(
-                        f"Extracted cultural knowledge: {self._cultural_knowledge.name}",
+                        "Extracted culture guidelines from description",
                         "CultureManager"
                     )
                 
-                return self._cultural_knowledge
+                return self._extracted_guidelines
             else:
                 if self.debug:
                     warning_log("Culture extraction returned no result, using basic fallback", "CultureManager")
-                # Keep the basic fallback
-                return self._cultural_knowledge
+                # Basic fallback
+                self._extracted_guidelines = {
+                    "tone_of_speech": "Professional and helpful",
+                    "topics_to_avoid": "N/A",
+                    "topics_to_help": "General assistance",
+                    "things_to_pay_attention": "User needs and preferences"
+                }
+                return self._extracted_guidelines
                 
         except Exception as e:
             if self.debug:
                 warning_log(f"Culture extraction failed: {e}, using basic fallback", "CultureManager")
-            # Keep the basic fallback
-            return self._cultural_knowledge
+            # Basic fallback
+            self._extracted_guidelines = {
+                "tone_of_speech": "Professional and helpful",
+                "topics_to_avoid": "N/A",
+                "topics_to_help": "General assistance",
+                "things_to_pay_attention": "User needs and preferences"
+            }
+            return self._extracted_guidelines
     
-    async def acreate_cultural_knowledge(
-        self,
-        message: str,
-        existing_knowledge: Optional[List["CulturalKnowledge"]] = None,
-    ) -> Optional["CulturalKnowledge"]:
+    def format_for_system_prompt(self) -> Optional[str]:
         """
-        Create cultural knowledge from a user message using an Agent.
-        
-        This method uses an LLM to analyze the user's message and extract
-        meaningful cultural knowledge that can be applied across agents.
-        
-        Args:
-            message: User message describing desired cultural behaviors
-            existing_knowledge: Optional list of existing knowledge for context
-            
-        Returns:
-            Created CulturalKnowledge instance
-        """
-        # If existing_knowledge is provided, temporarily set it as stored_knowledge
-        if existing_knowledge:
-            self._stored_knowledge = existing_knowledge
-        
-        self._pending_string_input = message
-        self._is_instance_input = False
-        
-        return await self._process_string_input(message)
-    
-    def create_cultural_knowledge(
-        self,
-        message: str,
-        existing_knowledge: Optional[List["CulturalKnowledge"]] = None,
-    ) -> Optional["CulturalKnowledge"]:
-        """Synchronous version of acreate_cultural_knowledge."""
-        import asyncio
-        try:
-            _ = asyncio.get_running_loop()
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                return pool.submit(
-                    asyncio.run,
-                    self.acreate_cultural_knowledge(message, existing_knowledge)
-                ).result()
-        except RuntimeError:
-            return asyncio.run(
-                self.acreate_cultural_knowledge(message, existing_knowledge)
-            )
-    
-    def get_combined_knowledge(self) -> List["CulturalKnowledge"]:
-        """
-        Get all cultural knowledge (user-provided + stored) for system prompt.
-        
-        ALWAYS combines user-provided knowledge with stored knowledge:
-        1. User-provided knowledge (string or instance) takes priority (listed first)
-        2. Stored knowledge is added after, avoiding duplicates by ID
-        
-        If no user input was provided but there's stored knowledge,
-        the stored knowledge is still returned.
+        Format culture guidelines for system prompt injection.
         
         Returns:
-            Combined list of CulturalKnowledge instances
+            Formatted string for system prompt wrapped in <CulturalKnowledge> tags, or None if no culture
         """
-        combined: List["CulturalKnowledge"] = []
-        
-        # Add user-provided knowledge first (higher priority)
-        if self._cultural_knowledge:
-            combined.append(self._cultural_knowledge)
-        
-        # Add stored knowledge (avoid duplicates by ID)
-        seen_ids = {k.id for k in combined if k.id}
-        for knowledge in self._stored_knowledge:
-            if knowledge.id and knowledge.id not in seen_ids:
-                combined.append(knowledge)
-                seen_ids.add(knowledge.id)
-        
-        return combined
-    
-    def format_for_system_prompt(
-        self,
-        max_length: int = 3000,
-    ) -> Optional[str]:
-        """
-        Format cultural knowledge for system prompt injection.
-        
-        Combines user-provided cultural knowledge with stored cultural knowledge
-        and formats it for injection into the system prompt.
-        
-        Args:
-            max_length: Maximum length of formatted output
-            
-        Returns:
-            Formatted string for system prompt, or None if empty
-        """
-        combined = self.get_combined_knowledge()
-        if not combined:
+        if not self._culture or not self._extracted_guidelines:
             return None
         
-        parts: List[str] = []
-        current_length = 0
+        guidelines = self._extracted_guidelines
         
-        for knowledge in combined:
-            entry_parts: List[str] = []
-            
-            if knowledge.name:
-                entry_parts.append(f"### {knowledge.name}")
-            
-            if knowledge.summary:
-                entry_parts.append(f"**Purpose:** {knowledge.summary}")
-            
-            if knowledge.content:
-                entry_parts.append(f"\n{knowledge.content}")
-            
-            if knowledge.categories:
-                entry_parts.append(f"\n*Tags: {', '.join(knowledge.categories)}*")
-            
-            if knowledge.notes:
-                notes_str = "\n".join(f"- {note}" for note in knowledge.notes[:3])
-                entry_parts.append(f"\n**Notes:**\n{notes_str}")
-            
-            entry = "\n".join(entry_parts)
-            entry_length = len(entry)
-            
-            if current_length + entry_length > max_length:
-                break
-            
-            parts.append(entry)
-            current_length += entry_length + 4  # +4 for separators
+        parts = []
+        parts.append("## Agent Culture Guidelines")
+        parts.append("")
         
-        if not parts:
-            return None
+        parts.append("### Tone of Speech")
+        parts.append(guidelines.get("tone_of_speech", "N/A"))
+        parts.append("")
         
-        formatted = "\n\n---\n\n".join(parts)
+        parts.append("### Topics I Shouldn't Talk About")
+        parts.append(guidelines.get("topics_to_avoid", "N/A"))
+        parts.append("")
         
-        instruction = (
-            "**Important:** You are not required to use all of the cultural knowledge provided below. "
-            "Select and apply only the cultural knowledge that is relevant and useful for the current task. "
-            "You may use one, multiple, or none of the cultural knowledge entries based on what best serves the task at hand.\n\n"
-        )
+        parts.append("### Topics I Can Help With")
+        parts.append(guidelines.get("topics_to_help", "N/A"))
+        parts.append("")
         
-        return f"<CulturalKnowledge>\n{instruction}{formatted}\n</CulturalKnowledge>"
+        parts.append("### Things I Should Pay Attention To")
+        parts.append(guidelines.get("things_to_pay_attention", "N/A"))
+        
+        content = "\n".join(parts)
+        return f"<CulturalKnowledge>\n{content}\n</CulturalKnowledge>"
+    
+    def should_repeat(self) -> bool:
+        """
+        Check if culture should be repeated based on message count and settings.
+        
+        Returns:
+            True if culture should be repeated, False otherwise
+        """
+        if not self._culture or not self._culture.repeat:
+            return False
+        
+        # Increment message count
+        self._message_count += 1
+        
+        # Check if we've reached the repeat interval
+        if self._message_count >= self._culture.repeat_interval:
+            self._message_count = 0
+            return True
+        
+        return False
+    
+    def reset_message_count(self) -> None:
+        """Reset the message count (useful for testing or manual control)."""
+        self._message_count = 0
     
     def to_dict(self) -> Dict[str, Any]:
         """
@@ -488,19 +347,19 @@ Consider the existing knowledge above and create complementary knowledge that en
             "enabled": self.enabled,
             "agent_id": self.agent_id,
             "team_id": self.team_id,
-            "knowledge_updated": self._knowledge_updated,
             "prepared": self._prepared,
+            "message_count": self._message_count,
         }
         
-        if self._cultural_knowledge:
-            result["cultural_knowledge"] = self._cultural_knowledge.to_dict()
+        if self._culture:
+            result["culture"] = self._culture.to_dict()
         else:
-            result["cultural_knowledge"] = None
+            result["culture"] = None
         
-        if self._stored_knowledge:
-            result["stored_knowledge"] = [k.to_dict() for k in self._stored_knowledge]
+        if self._extracted_guidelines:
+            result["extracted_guidelines"] = self._extracted_guidelines
         else:
-            result["stored_knowledge"] = []
+            result["extracted_guidelines"] = None
         
         return result
     
@@ -515,12 +374,12 @@ Consider the existing knowledge above and create complementary knowledge that en
         
         Args:
             data: Dictionary containing manager state
-            model: Model for cultural knowledge extraction
+            model: Model for culture extraction
             
         Returns:
             CultureManager instance
         """
-        from upsonic.culture.cultural_knowledge import CulturalKnowledge
+        from upsonic.culture.culture import Culture
         
         manager = cls(
             model=model,
@@ -529,18 +388,13 @@ Consider the existing knowledge above and create complementary knowledge that en
             team_id=data.get("team_id"),
         )
         
-        manager._knowledge_updated = data.get("knowledge_updated", False)
         manager._prepared = data.get("prepared", False)
+        manager._message_count = data.get("message_count", 0)
         
-        knowledge_data = data.get("cultural_knowledge")
-        if knowledge_data and isinstance(knowledge_data, dict):
-            manager._cultural_knowledge = CulturalKnowledge.from_dict(knowledge_data)
+        culture_data = data.get("culture")
+        if culture_data and isinstance(culture_data, dict):
+            manager._culture = Culture.from_dict(culture_data)
         
-        stored_data = data.get("stored_knowledge", [])
-        if stored_data:
-            manager._stored_knowledge = [
-                CulturalKnowledge.from_dict(k) if isinstance(k, dict) else k
-                for k in stored_data
-            ]
+        manager._extracted_guidelines = data.get("extracted_guidelines")
         
         return manager

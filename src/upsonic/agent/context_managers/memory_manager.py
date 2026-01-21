@@ -7,7 +7,6 @@ import asyncio
 if TYPE_CHECKING:
     from upsonic.storage.memory.memory import Memory
     from upsonic.run.agent.output import AgentRunOutput
-    from upsonic.culture.manager import CultureManager
 
 
 class MemoryManager:
@@ -17,15 +16,13 @@ class MemoryManager:
 
     This manager is responsible for:
     1. Preparing memory inputs before the LLM call (prepare_inputs_for_task)
-    2. Combining user-provided cultural knowledge with stored cultural knowledge
-    3. Saving the session after the run completes or pauses (save_session_async)
+    2. Saving the session after the run completes or pauses (save_session_async)
     """
 
     def __init__(
         self,
         memory: Optional["Memory"],
         agent_metadata: Optional[Dict[str, Any]] = None,
-        culture_manager: Optional["CultureManager"] = None,
     ):
         """
         Initializes the MemoryManager.
@@ -33,18 +30,14 @@ class MemoryManager:
         Args:
             memory: The configured Memory object from the parent agent.
             agent_metadata: Optional metadata dict from the Agent to inject into prompts.
-            culture_manager: Optional CultureManager for cultural knowledge handling.
         """
         self.memory = memory
         self.agent_metadata = agent_metadata or {}
-        self._culture_manager = culture_manager
         self._prepared_inputs: Dict[str, Any] = {
             "message_history": [],
             "context_injection": "",
             "system_prompt_injection": "",
-            "metadata_injection": "",
-            "culture_injection": "",
-            "cultural_knowledge_list": [],
+            "metadata_injection": ""
         }
         self._agent_run_output: Optional["AgentRunOutput"] = None
 
@@ -76,41 +69,8 @@ class MemoryManager:
         """
         return self._prepared_inputs.get("metadata_injection", "")
     
-    def get_culture_injection(self) -> str:
-        """
-        Provides the formatted cultural knowledge string for system prompt injection.
-        
-        This combines:
-        - User-provided cultural knowledge (from Agent parameter)
-        - Cultural knowledge from storage (loaded via Memory)
-        
-        Uses CultureManager.format_for_system_prompt() to combine and format.
-        
-        Returns:
-            Formatted cultural knowledge string, or empty string if not available.
-        """
-        # If we have a CultureManager, use it to get the combined & formatted culture
-        if self._culture_manager:
-            formatted = self._culture_manager.format_for_system_prompt()
-            return formatted or ""
-        
-        # Fallback to raw culture injection from memory
-        return self._prepared_inputs.get("culture_injection", "")
-    
-    def get_cultural_knowledges(self) -> List[Any]:
-        """
-        Provides the list of CulturalKnowledge instances loaded from storage.
-        
-        Returns:
-            List of CulturalKnowledge instances.
-        """
-        return self._prepared_inputs.get("cultural_knowledge_list", [])
-    
-    @property
-    def culture_manager(self) -> Optional["CultureManager"]:
-        """Get the CultureManager instance."""
-        return self._culture_manager
 
+    
     def set_run_output(self, run_output: "AgentRunOutput") -> None:
         """
         Set the AgentRunOutput for session save.
@@ -125,38 +85,13 @@ class MemoryManager:
         Prepare memory inputs before the LLM call.
         
         This method prepares message history, context injection, system prompt 
-        injection, metadata injection, and cultural knowledge from the memory module.
-        
-        If a CultureManager is provided:
-        1. Sets stored cultural knowledge from Memory on CultureManager
-        2. Calls CultureManager.aprepare() to process any pending string input:
-           - If user provided STRING: Uses Agent to extract structured CulturalKnowledge
-           - If user provided CulturalKnowledge instance: Uses directly
-        3. CultureManager.format_for_system_prompt() then combines user input + stored knowledge
+        injection, and metadata injection from the memory module.
         """
         if self.memory:
             self._prepared_inputs = await self.memory.prepare_inputs_for_task(
                 agent_metadata=self.agent_metadata
             )
-            
-            # If we have a CultureManager, set stored knowledge and prepare it
-            if self._culture_manager:
-                # Step 1: Set stored knowledge from Memory onto CultureManager
-                stored_knowledge = self._prepared_inputs.get("cultural_knowledge_list", [])
-                if stored_knowledge:
-                    self._culture_manager.stored_knowledge = stored_knowledge
-                
-                # Step 2: Process any pending string input
-                # If user provided string to Agent(cultural_knowledge="..."),
-                # this calls an Agent to extract structured CulturalKnowledge
-                # using stored knowledge as context
-                await self._culture_manager.aprepare()
-        else:
-            # No memory, but we may still have a CultureManager with user input
-            if self._culture_manager:
-                # Process pending string input even without stored knowledge
-                await self._culture_manager.aprepare()
-            
+
             if self.agent_metadata:
                 metadata_parts = []
                 for key, value in self.agent_metadata.items():

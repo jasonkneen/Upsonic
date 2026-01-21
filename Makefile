@@ -38,7 +38,7 @@ docker_restart: docker_down docker_up
 # Run all smoke tests
 smoke_tests: docker_up
 	@echo "🧪 Running smoke tests..."
-	@python3 -m pytest tests/smoke_tests -v --ignore=tests/smoke_tests/hitl/test_comprehensive_hitl.py --ignore=tests/smoke_tests/hitl/usage_durable_execution.py --ignore=tests/smoke_tests/test_culture.py --ignore=tests/smoke_tests/test_culture_integration.py
+	@python3 -m pytest tests/smoke_tests -v --ignore=tests/smoke_tests/hitl/test_comprehensive_hitl.py --ignore=tests/smoke_tests/hitl/usage_durable_execution.py
 	@echo "✅ Smoke tests completed"
 
 # Run only storage tests (requires docker)

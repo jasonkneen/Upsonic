@@ -820,13 +820,9 @@ class MessageBuildStep(Step):
             
             from upsonic.agent.context_managers import MemoryManager
             
-            # Get CultureManager from agent if available
-            culture_manager = getattr(agent, '_culture_manager', None)
-            
             memory_manager = MemoryManager(
                 memory=agent.memory,
                 agent_metadata=getattr(agent, 'metadata', None),
-                culture_manager=culture_manager,
             )
             
             # Register memory manager in pipeline registry
@@ -838,7 +834,13 @@ class MessageBuildStep(Step):
             
             historical_message_count = len(memory_manager.get_message_history())
             
-            has_culture = bool(memory_manager.get_culture_injection())
+            # Check if agent has culture enabled (culture is now handled in SystemPromptManager, not MemoryManager)
+            has_culture = bool(
+                getattr(agent, '_culture_manager', None) and 
+                getattr(agent._culture_manager, 'enabled', False) and
+                getattr(agent._culture_manager, 'culture', None) and
+                getattr(agent._culture_manager.culture, 'add_system_prompt', False)
+            )
             
             messages = await agent._build_model_request(
                 task,
@@ -846,6 +848,11 @@ class MessageBuildStep(Step):
                 None,
             )
             context.chat_history = messages
+            
+            # Mark the start of this run for message tracking
+            # This records the current chat_history length so new_messages() 
+            # knows where new messages from this run begin
+            context.start_new_run()
             
             if agent.debug and agent.debug_level >= 2:
                 from upsonic.utils.printing import debug_log_level2

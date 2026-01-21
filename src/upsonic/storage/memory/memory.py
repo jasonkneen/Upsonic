@@ -15,7 +15,6 @@ if TYPE_CHECKING:
     from upsonic.models import Model
     from upsonic.storage.memory.session.base import BaseSessionMemory
     from upsonic.storage.memory.user.base import BaseUserMemory
-    from upsonic.storage.memory.culture.base import BaseCultureMemory
     from upsonic.session.agent import RunData
     from upsonic.run.agent.output import AgentRunOutput
 
@@ -62,7 +61,6 @@ class Memory:
         full_session_memory: bool = False,
         summary_memory: bool = False,
         user_analysis_memory: bool = False,
-        culture_memory_enabled: bool = False,
         user_profile_schema: Optional[Type["BaseModel"]] = None,
         dynamic_user_profile: bool = False,
         num_last_messages: Optional[int] = None,
@@ -82,7 +80,6 @@ class Memory:
             full_session_memory: Enable chat history persistence
             summary_memory: Enable session summary generation
             user_analysis_memory: Enable user profile extraction
-            culture_memory_enabled: Enable cultural knowledge storage
             user_profile_schema: Pydantic model for user profile structure
             dynamic_user_profile: Generate profile schema dynamically
             num_last_messages: Limit on message turns to keep in history
@@ -100,7 +97,6 @@ class Memory:
         self.full_session_memory_enabled = full_session_memory
         self.summary_memory_enabled = summary_memory
         self.user_analysis_memory_enabled = user_analysis_memory
-        self.culture_memory_enabled = culture_memory_enabled
         self.num_last_messages = num_last_messages
         self.model = model
         self.debug = debug
@@ -139,17 +135,11 @@ class Memory:
         if user_analysis_memory:
             self._user_memory: Optional["BaseUserMemory"] = self._create_user_memory()
         
-        # Culture memory (same for all session types)
-        self._culture_memory: Optional["BaseCultureMemory"] = None
-        if culture_memory_enabled:
-            self._culture_memory: Optional["BaseCultureMemory"] = self._create_culture_memory()
-        
         if self.debug:
             info_log("Memory initialized with configuration:", "Memory")
             info_log(f"  - Full Session Memory: {self.full_session_memory_enabled}", "Memory")
             info_log(f"  - Summary Memory: {self.summary_memory_enabled}", "Memory")
             info_log(f"  - User Analysis Memory: {self.user_analysis_memory_enabled}", "Memory")
-            info_log(f"  - Culture Memory: {self.culture_memory_enabled}", "Memory")
             info_log(f"  - Session ID: {self.session_id}", "Memory")
             info_log(f"  - User ID: {self.user_id}", "Memory")
             info_log(f"  - Max Messages: {self.num_last_messages}", "Memory")
@@ -157,18 +147,6 @@ class Memory:
             info_log(f"  - User Memory Mode: {self.user_memory_mode}", "Memory")
             info_log(f"  - Dynamic Profile: {self.dynamic_user_profile}", "Memory")
             info_log(f"  - Model: {self.model}", "Memory")
-    
-    def _create_culture_memory(self) -> "BaseCultureMemory":
-        """Create culture memory instance."""
-        from upsonic.storage.memory.culture.culture import CultureMemory
-        
-        return CultureMemory(
-            storage=self.storage,
-            enabled=True,
-            model=self.model,
-            debug=self.debug,
-            debug_level=self.debug_level,
-        )
     
     def _create_user_memory(self) -> "BaseUserMemory":
         """Create user memory instance."""
@@ -190,11 +168,6 @@ class Memory:
     def user_memory(self) -> Optional["BaseUserMemory"]:
         """Get user memory instance."""
         return self._user_memory
-    
-    @property
-    def culture_memory(self) -> Optional["BaseCultureMemory"]:
-        """Get culture memory instance."""
-        return self._culture_memory
     
     def get_session_memory(self, session_type: "SessionType") -> Optional["BaseSessionMemory"]:
         """
@@ -280,8 +253,6 @@ class Memory:
             "context_injection": "",
             "system_prompt_injection": "",
             "metadata_injection": "",
-            "culture_injection": "",
-            "cultural_knowledge_list": [],
         }
         
         # Get session memory inputs
@@ -306,22 +277,6 @@ class Memory:
                 from upsonic.utils.printing import warning_log
                 warning_log(f"Failed to get user memory: {e}", "Memory")
         
-        # Get cultural knowledge (for system prompt injection)
-        if self._culture_memory:
-            try:
-                cultural_knowledge_list = await self._culture_memory.aget_all()
-                if cultural_knowledge_list:
-                    prepared_data["cultural_knowledge_list"] = cultural_knowledge_list
-                    # Format for injection
-                    culture_str = self._culture_memory.format_for_context(cultural_knowledge_list)
-                    if culture_str:
-                        prepared_data["culture_injection"] = f"<CulturalKnowledge>\n{culture_str}\n</CulturalKnowledge>"
-                    if self.debug:
-                        info_log(f"Loaded {len(cultural_knowledge_list)} cultural knowledge entries", "Memory")
-            except Exception as e:
-                from upsonic.utils.printing import warning_log
-                warning_log(f"Failed to get cultural knowledge: {e}", "Memory")
-        
         # Merge agent metadata
         if agent_metadata:
             agent_meta_parts = []
@@ -341,7 +296,6 @@ class Memory:
                 f"Prepared memory inputs: {len(prepared_data['message_history'])} messages, "
                 f"summary={bool(prepared_data['context_injection'])}, "
                 f"profile={bool(prepared_data['system_prompt_injection'])}, "
-                f"culture={bool(prepared_data['culture_injection'])}, "
                 f"metadata={bool(prepared_data['metadata_injection'])}",
                 "Memory"
             )
@@ -362,7 +316,6 @@ class Memory:
                     message_preview=message_preview,
                     has_summary=bool(prepared_data['context_injection']),
                     has_profile=bool(prepared_data['system_prompt_injection']),
-                    has_culture=bool(prepared_data['culture_injection']),
                     session_id=self.session_id,
                     user_id=self.user_id,
                 )
@@ -425,24 +378,6 @@ class Memory:
             except Exception as e:
                 if self.debug:
                     warning_log(f"Failed to analyze/update user memory: {e}", "Memory")
-        
-        # Save cultural knowledge if updated (from output) only for completed runs
-        if self._culture_memory and is_completed:
-            try:
-                # Check if output has cultural knowledge that was updated
-                if hasattr(output, 'cultural_knowledge') and output.cultural_knowledge is not None:
-                    await self._culture_memory.asave(
-                        cultural_knowledge=output.cultural_knowledge,
-                        agent_id=output.agent_id,
-                    )
-                    if self.debug:
-                        info_log(
-                            f"Saved cultural knowledge: {output.cultural_knowledge.name}",
-                            "Memory"
-                        )
-            except Exception as e:
-                if self.debug:
-                    warning_log(f"Failed to save cultural knowledge: {e}", "Memory")
         
         if self.debug:
             status_str = "completed" if is_completed else output.status.value
