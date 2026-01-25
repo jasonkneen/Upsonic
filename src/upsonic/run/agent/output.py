@@ -141,6 +141,7 @@ class AgentRunOutput:
     # --- Metadata ---
     metadata: Optional[Dict[str, Any]] = None
     session_state: Optional[Dict[str, Any]] = None
+
     
     # --- Execution state ---
     is_streaming: bool = False
@@ -1020,6 +1021,7 @@ class AgentRunOutput:
             current_step_result = StepResult.from_dict(current_step_result_data)
         else:
             current_step_result = current_step_result_data
+        
         
         return cls(
             run_id=data.get("run_id"),

@@ -1,9 +1,5 @@
 import pytest
-import os
-import tempfile
-from unittest.mock import patch, MagicMock
 from upsonic import Agent, Task
-from upsonic.tools import WebSearch, WebRead
 from pydantic import BaseModel
 
 
@@ -72,7 +68,7 @@ class TestMCPOutputMessages:
         )
         
         # Execute the basic database operations
-        result = database_agent.do(basic_task)
+        database_agent.do(basic_task)
         
         # Capture output
         captured = capsys.readouterr()
@@ -92,6 +88,3 @@ class TestMCPOutputMessages:
         # Check for tool usage summary or tool calls
         assert "Tool Usage Summary" in output or "Tool Calls" in output, \
             "Expected 'Tool Usage Summary' or 'Tool Calls' message not found in output"
-    
-    
-  

@@ -39,6 +39,22 @@ USER_MEMORY_SCHEMA: Final[Dict[str, Dict[str, Any]]] = {
     "updated_at": {"type": "integer"},
 }
 
+# Cultural knowledge table schema - stores CulturalKnowledge data
+CULTURAL_KNOWLEDGE_SCHEMA: Final[Dict[str, Dict[str, Any]]] = {
+    "id": {"type": "string", "primary_key": True},
+    "name": {"type": "string"},
+    "summary": {"type": "string"},
+    "content": {"type": "string"},
+    "metadata": {"type": "json"},
+    "notes": {"type": "json"},
+    "categories": {"type": "json"},
+    "input": {"type": "string"},
+    "created_at": {"type": "integer"},
+    "updated_at": {"type": "integer"},
+    "agent_id": {"type": "string"},
+    "team_id": {"type": "string"},
+}
+
 # Index fields for faster lookups
 SESSION_INDEX_FIELDS: Final[list[str]] = [
     "user_id",
@@ -54,3 +70,8 @@ USER_MEMORY_INDEX_FIELDS: Final[list[str]] = [
     "team_id",
 ]
 
+CULTURAL_KNOWLEDGE_INDEX_FIELDS: Final[list[str]] = [
+    "name",
+    "agent_id",
+    "team_id",
+]

@@ -807,8 +807,6 @@ class CultureUpdateEvent(AgentEvent):
     """
     Event emitted when cultural knowledge is updated.
     
-    Notice: Culture is an experimental feature and is subject to change.
-    
     Attributes:
         culture_enabled: Whether culture update is enabled
         extraction_triggered: Whether extraction was triggered

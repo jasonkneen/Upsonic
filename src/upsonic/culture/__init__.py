@@ -1,12 +1,10 @@
 """
 Culture module for Upsonic AI Agent Framework.
 
-This module provides cultural knowledge management capabilities that enable
-agents to share universal knowledge, principles, and best practices across
-all interactions. Unlike Memory (user-specific facts), Culture stores
-universal principles that benefit all agents.
+This module provides culture management capabilities that enable
+agents to follow specific behavioral guidelines, communication styles,
+and interaction principles defined by users.
 
-Notice: Culture is an experimental feature and is subject to change.
 """
 
 from __future__ import annotations
@@ -14,17 +12,17 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from .cultural_knowledge import CulturalKnowledge
+    from .culture import Culture
     from .manager import CultureManager
 
 
 def _get_culture_classes():
     """Lazy import of culture classes."""
-    from .cultural_knowledge import CulturalKnowledge
+    from .culture import Culture
     from .manager import CultureManager
     
     return {
-        'CulturalKnowledge': CulturalKnowledge,
+        'Culture': Culture,
         'CultureManager': CultureManager,
     }
 
@@ -42,6 +40,6 @@ def __getattr__(name: str) -> Any:
 
 
 __all__ = [
-    "CulturalKnowledge",
+    "Culture",
     "CultureManager",
 ]

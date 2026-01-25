@@ -2,15 +2,13 @@ import pytest
 from upsonic import Agent, Task, Team
 from pydantic import BaseModel
 
-#t
+
 class AnalysisResult(BaseModel):
-	summary: str
-	confidence: float
-	recommendations: list[str]
+    summary: str
+    confidence: float
+    recommendations: list[str]
 
 
-class TestTeam:
-	"""Test team functionality"""
 def test_team_without_mode(capsys):
     """Test basic team functionality WITHOUT mode paramete. Verifies if we can match task to agent"""
     researcher = Agent(
@@ -62,6 +60,7 @@ def test_team_without_mode(capsys):
     
 
 
+@pytest.mark.timeout(300)
 def test_team_with_mode(capsys):
     """Test team functionality WITH coordinate mode."""
     researcher = Agent(
@@ -196,7 +195,7 @@ def test_team_with_response_format(capsys):
         Task(
             description="Analyze the electric vehicle market data and provide structured results",
         ),
-		Task(
+        Task(
             description="Summarize the data and provide structured insights",
         )
     ]

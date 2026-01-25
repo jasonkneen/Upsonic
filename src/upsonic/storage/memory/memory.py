@@ -252,7 +252,7 @@ class Memory:
             "message_history": [],
             "context_injection": "",
             "system_prompt_injection": "",
-            "metadata_injection": ""
+            "metadata_injection": "",
         }
         
         # Get session memory inputs

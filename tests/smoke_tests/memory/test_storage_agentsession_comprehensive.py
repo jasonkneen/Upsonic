@@ -61,6 +61,61 @@ sys.stdout.reconfigure(line_buffering=True) if hasattr(sys.stdout, 'reconfigure'
 
 
 # ============================================================================
+# Storage Connection Helper Functions
+# ============================================================================
+
+def get_postgres_url() -> str:
+    """Get PostgreSQL URL from environment or use default from docker-compose."""
+    return os.getenv(
+        "POSTGRES_URL",
+        "postgresql://upsonic_test:test_password@localhost:5432/upsonic_test"
+    )
+
+
+def get_mongo_url() -> str:
+    """Get MongoDB URL from environment or use default from docker-compose."""
+    return os.getenv(
+        "MONGO_URL",
+        "mongodb://upsonic_test:test_password@localhost:27017"
+    )
+
+
+def get_redis_url() -> str:
+    """Get Redis URL from environment or use default from docker-compose."""
+    redis_url = os.getenv("REDIS_URL")
+    if redis_url:
+        return redis_url
+    
+    # Build URL from individual components
+    redis_host = os.getenv("REDIS_HOST", "localhost")
+    redis_port = os.getenv("REDIS_PORT", "6379")
+    redis_username = os.getenv("REDIS_USERNAME")
+    redis_password = os.getenv("REDIS_PASSWORD")
+    
+    # Default to localhost:6379 (docker-compose default)
+    if redis_username and redis_password:
+        return f"redis://{redis_username}:{redis_password}@{redis_host}:{redis_port}"
+    elif redis_password:
+        return f"redis://:{redis_password}@{redis_host}:{redis_port}"
+    else:
+        return f"redis://{redis_host}:{redis_port}"
+
+
+def get_redis_credentials() -> tuple[str, int, Optional[str], Optional[str]]:
+    """Get Redis credentials from environment or use docker-compose defaults.
+    
+    Returns:
+        Tuple of (host, port, username, password)
+    """
+    redis_host = os.getenv("REDIS_HOST", "localhost")
+    redis_port = int(os.getenv("REDIS_PORT", "6379"))
+    redis_username = os.getenv("REDIS_USERNAME")
+    redis_password = os.getenv("REDIS_PASSWORD")
+    
+    return redis_host, redis_port, redis_username, redis_password
+
+
+# ============================================================================
 # Helper Functions
 # ============================================================================
 
@@ -1651,40 +1706,6 @@ async def _run_nested_events_serialization():
 class TestRedisStorage:
     """Test RedisStorage with all AgentSession attributes."""
     
-    def _get_redis_credentials(self):
-        """Get Redis credentials from environment or use defaults."""
-        from pathlib import Path
-        
-        # Try to load .env file if it exists
-        env_file = Path(".env")
-        if env_file.exists():
-            with open(env_file, "r") as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith("#") and "=" in line:
-                        key, value = line.split("=", 1)
-                        key = key.strip()
-                        value = value.strip().strip('"').strip("'")
-                        if key.startswith("REDIS_"):
-                            os.environ[key] = value
-        
-        redis_host = os.getenv("REDIS_HOST", "localhost")
-        redis_port = int(os.getenv("REDIS_PORT", "6379"))
-        redis_username = os.getenv("REDIS_USERNAME")
-        redis_password = os.getenv("REDIS_PASSWORD")
-        
-        # Default to provided credentials if not in env
-        if not redis_username or redis_username == "default":
-            redis_username = "default"
-        if not redis_password:
-            redis_password = "BRQNS4m50j0WF2HJdEIqytsDUWWS2PFx"
-        if redis_host == "localhost":
-            redis_host = "redis-16626.c91.us-east-1-3.ec2.cloud.redislabs.com"
-        if redis_port == 6379:
-            redis_port = 16626
-            
-        return redis_host, redis_port, redis_username, redis_password
-    
     @pytest.mark.asyncio
     async def test_redis_all_attributes(self):
         """Test RedisStorage with all AgentSession attributes."""
@@ -1697,7 +1718,7 @@ class TestRedisStorage:
         
         storage = None
         try:
-            redis_host, redis_port, redis_username, redis_password = self._get_redis_credentials()
+            redis_host, redis_port, redis_username, redis_password = get_redis_credentials()
             
             from redis import Redis
             redis_client = Redis(
@@ -1802,7 +1823,7 @@ class TestMongoStorage:
             # Try to connect to local MongoDB
             db_name = f"test_upsonic_{uuid.uuid4().hex[:8]}"
             storage = MongoStorage(
-                db_url="mongodb://upsonic_test:test_password@localhost:27017",
+                db_url=get_mongo_url(),
                 db_name=db_name
             )
             from upsonic.session.base import SessionType
@@ -1934,7 +1955,7 @@ class TestPostgresStorage:
             
             # Connect to PostgreSQL with timeout
             storage = PostgresStorage(
-                db_url="postgresql://upsonic_test:test_password@localhost:5433/upsonic_test"
+                db_url=get_postgres_url()
             )
             from upsonic.session.base import SessionType
             

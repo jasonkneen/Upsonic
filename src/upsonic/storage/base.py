@@ -7,6 +7,7 @@ if TYPE_CHECKING:
     from upsonic.session.base import SessionType
     from upsonic.storage.schemas import UserMemory
     from upsonic.session.base import Session
+    from upsonic.culture.cultural_knowledge import CulturalKnowledge
 
 
 
@@ -22,6 +23,7 @@ class Storage(ABC):
         self,
         session_table: Optional[str] = None,
         user_memory_table: Optional[str] = None,
+        cultural_knowledge_table: Optional[str] = None,
         id: Optional[str] = None,
     ) -> None:
         """
@@ -35,7 +37,7 @@ class Storage(ABC):
         self.id: str = id or str(uuid4())
         self.session_table_name: str = session_table or "upsonic_sessions"
         self.user_memory_table_name: str = user_memory_table or "upsonic_user_memories"
-
+        self.cultural_knowledge_table_name: str = cultural_knowledge_table or "upsonic_cultural_knowledge"
     @abstractmethod
     def table_exists(self, table_name: str) -> bool:
         """
@@ -324,6 +326,119 @@ class Storage(ABC):
         """
         raise NotImplementedError
 
+    # --- Cultural Knowledge Methods ---
+
+    @abstractmethod
+    def delete_cultural_knowledge(self, id: str) -> None:
+        """
+        Delete cultural knowledge from the database.
+        
+        Args:
+            id: ID of the cultural knowledge to delete.
+        
+        Raises:
+            Exception: If an error occurs during deletion.
+        """
+        raise NotImplementedError
+
+    def delete_cultural_knowledges(self, ids: List[str]) -> int:
+        """
+        Delete multiple cultural knowledge entries from the database.
+        
+        Args:
+            ids: List of IDs to delete.
+        
+        Returns:
+            Number of records deleted.
+        
+        Note: Default implementation calls delete_cultural_knowledge for each ID.
+              Providers may override for optimized bulk deletion.
+        """
+        count = 0
+        for id in ids:
+            try:
+                self.delete_cultural_knowledge(id)
+                count += 1
+            except Exception:
+                pass
+        return count
+
+    @abstractmethod
+    def get_cultural_knowledge(
+        self,
+        id: str,
+        deserialize: bool = True,
+    ) -> Optional[Union["CulturalKnowledge", Dict[str, Any]]]:
+        """
+        Get cultural knowledge from the database.
+        
+        Args:
+            id: ID of the cultural knowledge to retrieve.
+            deserialize: If True, return CulturalKnowledge object. If False, return dict.
+        
+        Returns:
+            CulturalKnowledge object or dict if found, None otherwise.
+        
+        Raises:
+            Exception: If an error occurs during retrieval.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_all_cultural_knowledge(
+        self,
+        name: Optional[str] = None,
+        limit: Optional[int] = None,
+        page: Optional[int] = None,
+        sort_by: Optional[str] = None,
+        sort_order: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        team_id: Optional[str] = None,
+        deserialize: bool = True,
+    ) -> Union[List["CulturalKnowledge"], Tuple[List[Dict[str, Any]], int]]:
+        """
+        Get all cultural knowledge entries from the database.
+        
+        Args:
+            name: Filter by name.
+            limit: Maximum number of records to return.
+            page: Page number (1-indexed).
+            sort_by: Column to sort by.
+            sort_order: Sort order ('asc' or 'desc').
+            agent_id: Filter by agent ID.
+            team_id: Filter by team ID.
+            deserialize: If True, return list of CulturalKnowledge objects.
+                        If False, return tuple of (list of dicts, total count).
+        
+        Returns:
+            List of CulturalKnowledge objects or tuple of (list of dicts, total count).
+        
+        Raises:
+            Exception: If an error occurs during retrieval.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def upsert_cultural_knowledge(
+        self,
+        cultural_knowledge: "CulturalKnowledge",
+        deserialize: bool = True,
+    ) -> Optional[Union["CulturalKnowledge", Dict[str, Any]]]:
+        """
+        Insert or update cultural knowledge in the database.
+        
+        Args:
+            cultural_knowledge: The CulturalKnowledge instance to store.
+            deserialize: If True, return CulturalKnowledge object. If False, return dict.
+        
+        Returns:
+            The upserted CulturalKnowledge object or dict, or None if error occurs.
+        
+        Raises:
+            Exception: If an error occurs during upsert.
+        """
+        raise NotImplementedError
+
     # --- Utility Methods ---
 
     @abstractmethod
@@ -452,6 +567,7 @@ class AsyncStorage(ABC):
         self,
         session_table: Optional[str] = None,
         user_memory_table: Optional[str] = None,
+        cultural_knowledge_table: Optional[str] = None,
         id: Optional[str] = None,
     ) -> None:
         """
@@ -460,11 +576,13 @@ class AsyncStorage(ABC):
         Args:
             session_table: Name of the table to store sessions.
             user_memory_table: Name of the table to store user memories.
+            cultural_knowledge_table: Name of the table to store cultural knowledge.
             id: Unique identifier for this storage instance.
         """
         self.id: str = id or str(uuid4())
         self.session_table_name: str = session_table or "upsonic_sessions"
         self.user_memory_table_name: str = user_memory_table or "upsonic_user_memories"
+        self.cultural_knowledge_table_name: str = cultural_knowledge_table or "upsonic_cultural_knowledge"
 
     @abstractmethod
     async def table_exists(self, table_name: str) -> bool:
@@ -751,6 +869,119 @@ class AsyncStorage(ABC):
         
         Raises:
             ValueError: If user_ids is empty.
+        """
+        raise NotImplementedError
+
+    # --- Cultural Knowledge Methods (Async) ---
+
+    @abstractmethod
+    async def adelete_cultural_knowledge(self, id: str) -> None:
+        """
+        Delete cultural knowledge from the database (async).
+        
+        Args:
+            id: ID of the cultural knowledge to delete.
+        
+        Raises:
+            Exception: If an error occurs during deletion.
+        """
+        raise NotImplementedError
+
+    async def adelete_cultural_knowledges(self, ids: List[str]) -> int:
+        """
+        Delete multiple cultural knowledge entries from the database (async).
+        
+        Args:
+            ids: List of IDs to delete.
+        
+        Returns:
+            Number of records deleted.
+        
+        Note: Default implementation calls adelete_cultural_knowledge for each ID.
+              Providers may override for optimized bulk deletion.
+        """
+        count = 0
+        for id in ids:
+            try:
+                await self.adelete_cultural_knowledge(id)
+                count += 1
+            except Exception:
+                pass
+        return count
+
+    @abstractmethod
+    async def aget_cultural_knowledge(
+        self,
+        id: str,
+        deserialize: bool = True,
+    ) -> Optional[Union["CulturalKnowledge", Dict[str, Any]]]:
+        """
+        Get cultural knowledge from the database (async).
+        
+        Args:
+            id: ID of the cultural knowledge to retrieve.
+            deserialize: If True, return CulturalKnowledge object. If False, return dict.
+        
+        Returns:
+            CulturalKnowledge object or dict if found, None otherwise.
+        
+        Raises:
+            Exception: If an error occurs during retrieval.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def aget_all_cultural_knowledge(
+        self,
+        name: Optional[str] = None,
+        limit: Optional[int] = None,
+        page: Optional[int] = None,
+        sort_by: Optional[str] = None,
+        sort_order: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        team_id: Optional[str] = None,
+        deserialize: bool = True,
+    ) -> Union[List["CulturalKnowledge"], Tuple[List[Dict[str, Any]], int]]:
+        """
+        Get all cultural knowledge entries from the database (async).
+        
+        Args:
+            name: Filter by name.
+            limit: Maximum number of records to return.
+            page: Page number (1-indexed).
+            sort_by: Column to sort by.
+            sort_order: Sort order ('asc' or 'desc').
+            agent_id: Filter by agent ID.
+            team_id: Filter by team ID.
+            deserialize: If True, return list of CulturalKnowledge objects.
+                        If False, return tuple of (list of dicts, total count).
+        
+        Returns:
+            List of CulturalKnowledge objects or tuple of (list of dicts, total count).
+        
+        Raises:
+            Exception: If an error occurs during retrieval.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def aupsert_cultural_knowledge(
+        self,
+        cultural_knowledge: "CulturalKnowledge",
+        deserialize: bool = True,
+    ) -> Optional[Union["CulturalKnowledge", Dict[str, Any]]]:
+        """
+        Insert or update cultural knowledge in the database (async).
+        
+        Args:
+            cultural_knowledge: The CulturalKnowledge instance to store.
+            deserialize: If True, return CulturalKnowledge object. If False, return dict.
+        
+        Returns:
+            The upserted CulturalKnowledge object or dict, or None if error occurs.
+        
+        Raises:
+            Exception: If an error occurs during upsert.
         """
         raise NotImplementedError
 

@@ -1,4 +1,4 @@
-"""Common utility functions for storage implementations."""
+"""Common utility functions for storage operations."""
 from __future__ import annotations
 
 import json

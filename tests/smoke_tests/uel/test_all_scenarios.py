@@ -42,7 +42,7 @@ def assert_check(condition: bool, description: str) -> bool:
     else:
         FAIL_COUNT += 1
         print(f"  ❌ ASSERT FAIL: {description}")
-        return False
+        raise AssertionError(description)
 
 
 
@@ -146,8 +146,9 @@ EXPECTED = {
 import pytest
 
 @pytest.mark.parametrize("mode", MODES)
-def test_mode_scenarios(mode: str, debug: bool = False):
+def test_mode_scenarios(mode: str):
     """Test all scenarios for a given mode."""
+    debug = False
     header(f"MODE = '{mode}'")
     
     model = infer_model("openai/gpt-4o").add_memory(history=True, mode=mode, debug=debug)
@@ -259,7 +260,8 @@ def test_mode_scenarios(mode: str, debug: bool = False):
 
 
 
-def test_edge_cases(debug: bool = False):
+def test_edge_cases():
+    debug = False
     header("EDGE CASE TESTS")
     
     # Edge Case 1: Multi-chain RAG pattern

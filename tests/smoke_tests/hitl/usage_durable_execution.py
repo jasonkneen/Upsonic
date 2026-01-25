@@ -8,12 +8,14 @@ Note: HITL continuation (continue_run_async) only supports direct call mode.
 Streaming mode is not supported for continuation.
 """
 
+import pytest
 import asyncio
 import os
 from upsonic import Agent, Task
 from upsonic.db.database import SqliteDatabase
-from upsonic.run.base import RunStatus
 from upsonic.agent.pipeline.step import inject_error_into_step, clear_error_injection
+
+pytestmark = pytest.mark.timeout(300)
 
 
 def cleanup_db():
@@ -470,7 +472,88 @@ async def durable_error_in_tool_setup_step():
 
 
 # ============================================================================
-# TEST RUNNER
+# PYTEST TESTS
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_durable_direct_call_with_run_id_same_agent():
+    """Test: Direct Call with run_id - Same Agent (with injected error)"""
+    result = await durable_direct_call_with_run_id_same_agent()
+    assert result.is_complete, f"Expected complete, got {result.status}"
+
+
+@pytest.mark.asyncio
+async def test_durable_direct_call_with_task_same_agent():
+    """Test: Direct Call with task - Same Agent (with injected error)"""
+    result = await durable_direct_call_with_task_same_agent()
+    assert result.is_complete, f"Expected complete, got {result.status}"
+
+
+@pytest.mark.asyncio
+async def test_durable_direct_call_with_run_id_new_agent():
+    """Test: Direct Call with run_id - New Agent (with injected error)"""
+    result = await durable_direct_call_with_run_id_new_agent()
+    assert result.is_complete, f"Expected complete, got {result.status}"
+
+
+@pytest.mark.asyncio
+async def test_durable_direct_call_with_task_new_agent():
+    """Test: Direct Call with task - New Agent (with injected error)"""
+    result = await durable_direct_call_with_task_new_agent()
+    assert result.is_complete, f"Expected complete, got {result.status}"
+
+
+@pytest.mark.asyncio
+async def test_durable_with_retry_backoff():
+    """Test: Retry with exponential backoff - run_id (2 failures, 3 attempts)"""
+    result = await durable_with_retry_backoff()
+    assert result.is_complete, f"Expected complete, got {result.status}"
+
+
+@pytest.mark.asyncio
+async def test_durable_with_retry_backoff_task():
+    """Test: Retry with exponential backoff - task (2 failures, 3 attempts)"""
+    result = await durable_with_retry_backoff_task()
+    assert result.is_complete, f"Expected complete, got {result.status}"
+
+
+@pytest.mark.asyncio
+async def test_durable_with_status_check():
+    """Test: Check output status for error recovery - run_id"""
+    result = await durable_with_status_check()
+    assert result.is_complete, f"Expected complete, got {result.status}"
+
+
+@pytest.mark.asyncio
+async def test_durable_with_status_check_task():
+    """Test: Check output status for error recovery - task"""
+    result = await durable_with_status_check_task()
+    assert result.is_complete, f"Expected complete, got {result.status}"
+
+
+@pytest.mark.asyncio
+async def test_durable_cross_process_recovery():
+    """Test: Cross-process recovery - run_id (with injected error)"""
+    result = await durable_cross_process_recovery()
+    assert result.is_complete, f"Expected complete, got {result.status}"
+
+
+@pytest.mark.asyncio
+async def test_durable_cross_process_recovery_task():
+    """Test: Cross-process recovery - task (with injected error)"""
+    result = await durable_cross_process_recovery_task()
+    assert result.is_complete, f"Expected complete, got {result.status}"
+
+
+@pytest.mark.asyncio
+async def test_durable_error_in_tool_setup_step():
+    """Test: Error in tool setup step"""
+    result = await durable_error_in_tool_setup_step()
+    assert result.is_complete, f"Expected complete, got {result.status}"
+
+
+# ============================================================================
+# TEST RUNNER (for manual execution)
 # ============================================================================
 
 async def run_all_tests():

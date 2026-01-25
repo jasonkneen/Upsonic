@@ -33,11 +33,11 @@ if TYPE_CHECKING:
     from upsonic.agent.context_managers import (
         MemoryManager
     )
-    from upsonic.agent.context_managers.culture_manager_context import CultureContextManager
     from upsonic.graph.graph import State
     from upsonic.run.events.events import AgentStreamEvent
     from upsonic.db.database import DatabaseBase
     from upsonic.models.model_selector import ModelRecommendation
+    from upsonic.culture.culture import Culture
     from upsonic.culture.manager import CultureManager
     from upsonic.run.requirements import RunRequirement
     from upsonic.session.agent import RunData
@@ -56,7 +56,7 @@ else:
     ToolDefinition = "ToolDefinition"
     RequestUsage = "RequestUsage"
     MemoryManager = "MemoryManager"
-    CultureContextManager = "CultureContextManager"
+    CulturalKnowledge = "CulturalKnowledge"
     CultureManager = "CultureManager"
     State = "State"
     ModelRecommendation = "ModelRecommendation"
@@ -164,11 +164,7 @@ class Agent(BaseAgent):
         thinking_budget: Optional[int] = None,
         thinking_include_thoughts: Optional[bool] = None,
         reasoning_format: Optional[Literal["hidden", "raw", "parsed"]] = None,
-        # Cultural Knowledge (experimental)
-        culture_manager: Optional["CultureManager"] = None,
-        add_culture_to_context: bool = False,
-        update_cultural_knowledge: bool = False,
-        enable_agentic_culture: bool = False,
+        culture: Optional["Culture"] = None,
         # Agent metadata (passed to prompt)
         metadata: Optional[Dict[str, Any]] = None,
     ):
@@ -229,11 +225,8 @@ class Agent(BaseAgent):
             user_policy_feedback_loop: Maximum retry count for user policy feedback (default 1)
             agent_policy_feedback_loop: Maximum retry count for agent policy feedback (default 1)
             
-            # Cultural Knowledge (experimental):
-            culture_manager: CultureManager instance for cultural knowledge operations
-            add_culture_to_context: Add cultural knowledge to system prompt (default False)
-            update_cultural_knowledge: Extract cultural knowledge after runs (default False)
-            enable_agentic_culture: Give agent tools to update culture (default False)
+            culture: Culture instance defining agent behavior and communication guidelines.
+                Includes description, add_system_prompt, repeat, and repeat_interval settings.
         """
         from upsonic.models import infer_model
         self.model = infer_model(model)
@@ -326,40 +319,20 @@ class Agent(BaseAgent):
         
         self.canvas = canvas
         
-        self.add_culture_to_context = add_culture_to_context
-        self.update_cultural_knowledge = update_cultural_knowledge
-        self.enable_agentic_culture = enable_agentic_culture
-        
         # Agent metadata (injected into prompts)
         self.metadata = metadata or {}
         
-        # Auto-create CultureManager if culture features are enabled but no manager provided
-        if culture_manager:
-            self.culture_manager = culture_manager
-        elif add_culture_to_context or update_cultural_knowledge or enable_agentic_culture:
-            # We need a storage to create a CultureManager
-            # Use the memory's storage if available
-            if self.memory and self.memory.storage:
-                from upsonic.culture import CultureManager
-                self.culture_manager = CultureManager(
-                    storage=self.memory.storage,
-                    debug=debug,
-                )
-            else:
-                # Create an in-memory storage as fallback
-                from upsonic.storage.providers import InMemoryStorage
-                from upsonic.culture import CultureManager
-                self.culture_manager = CultureManager(
-                    storage=InMemoryStorage(),
-                    debug=debug,
-                )
-        else:
-            self.culture_manager = None
-        
-        # If agentic culture is enabled and we have a culture manager, register culture tools
-        if self.enable_agentic_culture and self.culture_manager:
-            culture_tools = self.culture_manager.get_culture_tools()
-            self.tools.extend(culture_tools)
+        # Store culture and create CultureManager if needed
+        self._culture_input = culture
+        self._culture_manager: Optional["CultureManager"] = None
+        if culture is not None:
+            from upsonic.culture.manager import CultureManager
+            self._culture_manager = CultureManager(
+                model=self.model_name,
+                debug=self.debug,
+                debug_level=self.debug_level,
+            )
+            self._culture_manager.set_culture(culture)
         
         # Initialize policy managers
         from upsonic.agent.policy_manager import PolicyManager
@@ -1224,7 +1197,6 @@ class Agent(BaseAgent):
         task: "Task", 
         memory_handler: Optional["MemoryManager"], 
         state: Optional["State"] = None,
-        culture_handler: Optional["CultureContextManager"] = None,
     ) -> List["ModelRequest"]:
         """Build the complete message history for the model request."""
         from upsonic.agent.context_managers import SystemPromptManager, ContextManager
@@ -1237,7 +1209,7 @@ class Agent(BaseAgent):
         system_prompt_manager = SystemPromptManager(self, task)
         context_manager = ContextManager(self, task, state)
         
-        async with system_prompt_manager.manage_system_prompt(memory_handler, culture_handler) as sp_handler, \
+        async with system_prompt_manager.manage_system_prompt(memory_handler) as sp_handler, \
                    context_manager.manage_context(memory_handler) as ctx_handler:
             
             if self.compression_strategy != "none" and ctx_handler:
@@ -1280,7 +1252,6 @@ class Agent(BaseAgent):
         current_input: Any, 
         temporary_message_history: List["ModelRequest"],
         state: Optional["State"] = None,
-        culture_handler: Optional["CultureContextManager"] = None,
     ) -> List["ModelRequest"]:
         """Build model request with custom input and message history for guardrail retries."""
         from upsonic.agent.context_managers import SystemPromptManager, ContextManager
@@ -1291,7 +1262,7 @@ class Agent(BaseAgent):
         system_prompt_manager = SystemPromptManager(self, task)
         context_manager = ContextManager(self, task, state)
         
-        async with system_prompt_manager.manage_system_prompt(memory_handler, culture_handler) as sp_handler, \
+        async with system_prompt_manager.manage_system_prompt(memory_handler) as sp_handler, \
                    context_manager.manage_context(memory_handler) as ctx_handler:
             
             user_part = UserPromptPart(content=current_input)
@@ -1678,10 +1649,39 @@ class Agent(BaseAgent):
         messages: List["ModelRequest"]
     ) -> "ModelResponse":
         """Handle model response including tool calls."""
-        from upsonic.messages import ToolCallPart, ToolReturnPart, TextPart, UserPromptPart, ModelRequest, ModelResponse
+        from upsonic.messages import ToolCallPart, TextPart, UserPromptPart, ModelRequest, ModelResponse
+        from upsonic._utils import now_utc
         
         if hasattr(self, '_tool_limit_reached') and self._tool_limit_reached:
             return response
+        
+        # Handle culture repeat logic
+        if self._culture_manager and self._culture_manager.enabled:
+            culture = self._culture_manager.culture
+            if culture and culture.repeat:
+                if self._culture_manager.should_repeat():
+                    # Ensure culture is prepared
+                    if not self._culture_manager.prepared:
+                        await self._culture_manager.aprepare()
+                    
+                    culture_formatted = self._culture_manager.format_for_system_prompt()
+                    if culture_formatted:
+                        # Create mock ModelRequest with culture guidelines
+                        culture_system_part = UserPromptPart(content=culture_formatted)
+                        culture_request = ModelRequest(parts=[culture_system_part])
+                        
+                        # Create mock ModelResponse acknowledging culture
+                        culture_response = ModelResponse(
+                            parts=[TextPart(content="Culture guidelines acknowledged.")],
+                            model_name=response.model_name if response else None,
+                            timestamp=now_utc(),
+                            usage=response.usage if response else None,
+                            provider_name=response.provider_name if response else None,
+                        )
+                        
+                        # Insert culture into messages before the current response
+                        messages.append(culture_request)
+                        messages.append(culture_response)
         
         tool_calls = [
             part for part in response.parts 
@@ -3001,7 +3001,7 @@ class Agent(BaseAgent):
             ToolSetupStep, MessageBuildStep,
             ModelExecutionStep, ResponseProcessingStep,
             ReflectionStep, CallManagementStep, TaskManagementStep,
-            MemorySaveStep, CultureUpdateStep,
+            MemorySaveStep,
             ReliabilityStep, AgentPolicyStep,
             CacheStorageStep, FinalizationStep
         )
@@ -3020,12 +3020,11 @@ class Agent(BaseAgent):
             ReflectionStep(),              # 10
             CallManagementStep(),          # 11 <-- Displays tool calls & usage
             TaskManagementStep(),          # 12
-            CultureUpdateStep(),           # 13
-            ReliabilityStep(),             # 14
-            AgentPolicyStep(),             # 15
-            CacheStorageStep(),            # 16
-            FinalizationStep(),            # 17
-            MemorySaveStep(),              # 18 <-- LAST: Saves AgentSession to storage
+            ReliabilityStep(),             # 13
+            AgentPolicyStep(),             # 14
+            CacheStorageStep(),            # 15
+            FinalizationStep(),            # 16
+            MemorySaveStep(),              # 17 <-- LAST: Saves AgentSession to storage
         ]
     
     def _get_step_index_by_name(self, step_name: str, is_streaming: bool = False) -> int:
@@ -3065,7 +3064,7 @@ class Agent(BaseAgent):
             InitializationStep, CacheCheckStep, UserPolicyStep,
             StorageConnectionStep, LLMManagerStep, ModelSelectionStep,
             ToolSetupStep, MessageBuildStep,
-            StreamModelExecutionStep, CultureUpdateStep,
+            StreamModelExecutionStep,
             AgentPolicyStep, CacheStorageStep,
             StreamMemoryMessageTrackingStep, StreamFinalizationStep
         )
@@ -3080,11 +3079,10 @@ class Agent(BaseAgent):
             ToolSetupStep(),                   # 6
             MessageBuildStep(),                # 7
             StreamModelExecutionStep(),        # 8 <-- External tool resumes here (tracks messages internally)
-            CultureUpdateStep(),               # 9
-            AgentPolicyStep(),                 # 10
-            CacheStorageStep(),                # 11
-            StreamFinalizationStep(),          # 12
-            StreamMemoryMessageTrackingStep(), # 13 <-- LAST: Saves AgentSession to storage
+            AgentPolicyStep(),                 # 9
+            CacheStorageStep(),                # 10
+            StreamFinalizationStep(),          # 11
+            StreamMemoryMessageTrackingStep(), # 12 <-- LAST: Saves AgentSession to storage
         ]
     
     def _create_full_pipeline_steps(self, is_streaming: bool = False) -> List[Any]:

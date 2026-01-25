@@ -8,6 +8,7 @@ Note: HITL continuation (continue_run_async) only supports direct call mode.
 Streaming mode is not supported for continuation.
 """
 
+import pytest
 import asyncio
 import os
 import time
@@ -16,6 +17,8 @@ from upsonic.tools import tool
 from upsonic.db.database import SqliteDatabase
 from upsonic.run.base import RunStatus
 from upsonic.run.cancel import cancel_run
+
+pytestmark = pytest.mark.timeout(300)
 
 
 def cleanup_db():
@@ -412,7 +415,67 @@ async def cancel_verify_resume_from_cutoff():
 
 
 # ============================================================================
-# TEST RUNNER
+# PYTEST TESTS
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_cancel_direct_call_with_run_id_same_agent():
+    """Test: Direct Call with run_id - Same Agent"""
+    result = await cancel_direct_call_with_run_id_same_agent()
+    assert result.is_complete, f"Expected complete, got {result.status}"
+
+
+@pytest.mark.asyncio
+async def test_cancel_direct_call_with_task_same_agent():
+    """Test: Direct Call with task - Same Agent"""
+    result = await cancel_direct_call_with_task_same_agent()
+    assert result.is_complete, f"Expected complete, got {result.status}"
+
+
+@pytest.mark.asyncio
+async def test_cancel_direct_call_with_run_id_new_agent():
+    """Test: Direct Call with run_id - New Agent (Cross-process)"""
+    result = await cancel_direct_call_with_run_id_new_agent()
+    assert result.is_complete, f"Expected complete, got {result.status}"
+
+
+@pytest.mark.asyncio
+async def test_cancel_direct_call_with_task_new_agent():
+    """Test: Direct Call with task - New Agent (Cross-process)"""
+    result = await cancel_direct_call_with_task_new_agent()
+    assert result.is_complete, f"Expected complete, got {result.status}"
+
+
+@pytest.mark.asyncio
+async def test_cancel_using_cancel_run_function():
+    """Test: Using cancel_run function directly"""
+    result = await cancel_using_cancel_run_function()
+    assert result.is_complete, f"Expected complete, got {result.status}"
+
+
+@pytest.mark.asyncio
+async def test_cancel_with_immediate_check():
+    """Test: Immediate cancellation with check"""
+    result = await cancel_with_immediate_check()
+    assert result.is_complete, f"Expected complete, got {result.status}"
+
+
+@pytest.mark.asyncio
+async def test_cancel_with_multiple_resume_attempts():
+    """Test: Multiple resume attempts"""
+    result = await cancel_with_multiple_resume_attempts()
+    assert result.is_complete, f"Expected complete, got {result.status}"
+
+
+@pytest.mark.asyncio
+async def test_cancel_verify_resume_from_cutoff():
+    """Test: Verify resumption from cut-off point (CRITICAL)"""
+    result = await cancel_verify_resume_from_cutoff()
+    assert result.is_complete, f"Expected complete, got {result.status}"
+
+
+# ============================================================================
+# TEST RUNNER (for manual execution)
 # ============================================================================
 
 async def run_all_tests():

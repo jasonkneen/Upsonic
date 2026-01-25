@@ -819,95 +819,78 @@ class MessageBuildStep(Step):
                 return step_result
             
             from upsonic.agent.context_managers import MemoryManager
-            from upsonic.agent.context_managers.culture_manager_context import CultureContextManager
             
-            memory_manager = MemoryManager(agent.memory, agent_metadata=getattr(agent, 'metadata', None))
+            memory_manager = MemoryManager(
+                memory=agent.memory,
+                agent_metadata=getattr(agent, 'metadata', None),
+            )
             
             # Register memory manager in pipeline registry
             if pipeline_manager:
                 pipeline_manager.set_manager('memory_manager', memory_manager)
             
-            culture_manager_obj = None
-            if agent.add_culture_to_context or agent.update_cultural_knowledge:
-                culture_manager_obj = CultureContextManager(
-                    culture_manager=agent.culture_manager,
-                    update_cultural_knowledge=agent.update_cultural_knowledge,
-                )
-            
+            # Prepare memory (loads messages, user profile, and cultural knowledge)
             await memory_manager.aprepare()
             
-            try:
-                if culture_manager_obj:
-                    await culture_manager_obj.aprepare()
+            historical_message_count = len(memory_manager.get_message_history())
+            
+            # Check if agent has culture enabled (culture is now handled in SystemPromptManager, not MemoryManager)
+            has_culture = bool(
+                getattr(agent, '_culture_manager', None) and 
+                getattr(agent._culture_manager, 'enabled', False) and
+                getattr(agent._culture_manager, 'culture', None) and
+                getattr(agent._culture_manager.culture, 'add_system_prompt', False)
+            )
+            
+            messages = await agent._build_model_request(
+                task,
+                memory_manager,
+                None,
+            )
+            context.chat_history = messages
+            
+            # Mark the start of this run for message tracking
+            # This records the current chat_history length so new_messages() 
+            # knows where new messages from this run begin
+            context.start_new_run()
+            
+            if agent.debug and agent.debug_level >= 2:
+                from upsonic.utils.printing import debug_log_level2
+                from upsonic.utils.messages import analyze_model_request_messages
+                message_details, total_parts = analyze_model_request_messages(messages)
                 
-                try:
-                    # Get historical message count BEFORE building messages
-                    # This is the count of messages loaded from memory (not including new user request)
-                    historical_message_count = len(memory_manager.get_message_history())
+                debug_log_level2(
+                    "Messages built",
+                    "MessageBuildStep",
+                    debug=agent.debug,
+                    debug_level=agent.debug_level,
+                    message_count=len(messages),
+                    total_parts=total_parts,
+                    message_details=message_details,
+                    has_memory=historical_message_count > 0,
+                    historical_message_count=historical_message_count,
+                    has_culture=has_culture,
+                    task_description=task.description[:300] if task else None
+                )
+                
+            has_system = False
+            has_memory = historical_message_count > 0
+            from upsonic.messages import ModelRequest, SystemPromptPart
+            if messages:
+                first_msg = messages[0]
+                if isinstance(first_msg, ModelRequest):
+                    has_system = any(isinstance(p, SystemPromptPart) for p in first_msg.parts)
                     
-                    if culture_manager_obj:
-                        messages = await agent._build_model_request(
-                            task,
-                            memory_manager,
-                            None,
-                            culture_manager_obj if agent.add_culture_to_context else None,
-                        )
-                    else:
-                        messages = await agent._build_model_request(
-                            task,
-                            memory_manager,
-                            None,
-                        )
-                    context.chat_history = messages
-                    
-                    # Mark the start of this run by recording the HISTORICAL message count
-                    # This ensures new messages include: user request + model response(s)
-                    # The boundary should be at the end of historical messages, not current chat_history length
-                    context._run_boundaries.append(historical_message_count)
-                    
-                    if agent.debug and agent.debug_level >= 2:
-                        from upsonic.utils.printing import debug_log_level2
-                        from upsonic.utils.messages import analyze_model_request_messages
-                        message_details, total_parts = analyze_model_request_messages(messages)
-                        
-                        debug_log_level2(
-                            "Messages built",
-                            "MessageBuildStep",
-                            debug=agent.debug,
-                            debug_level=agent.debug_level,
-                            message_count=len(messages),
-                            total_parts=total_parts,
-                            message_details=message_details,
-                            has_memory=historical_message_count > 0,
-                            historical_message_count=historical_message_count,
-                            has_culture=culture_manager_obj is not None,
-                            task_description=task.description[:300] if task else None
-                        )
-                    
-                    has_system = False
-                    has_memory = historical_message_count > 0
-                    from upsonic.messages import ModelRequest, SystemPromptPart
-                    if messages:
-                        first_msg = messages[0]
-                        if isinstance(first_msg, ModelRequest):
-                            has_system = any(isinstance(p, SystemPromptPart) for p in first_msg.parts)
-                    
-                    if context.is_streaming:
-                        from upsonic.utils.agent.events import ayield_messages_built_event
-                        async for event in ayield_messages_built_event(
-                            run_id=context.run_id or "",
-                            message_count=len(messages),
-                            has_system_prompt=has_system,
-                            has_memory_messages=has_memory,
-                            is_continuation=False
-                        ):
-                            context.events.append(event)
-                finally:
-                    if culture_manager_obj:
-                        await culture_manager_obj.afinalize()
-            finally:
-                # Note: memory_manager.afinalize() is NOT called here - it will be called in MemorySaveStep
-                pass
+            if context.is_streaming:
+                from upsonic.utils.agent.events import ayield_messages_built_event
+                async for event in ayield_messages_built_event(
+                    run_id=context.run_id or "",
+                    message_count=len(messages),
+                    has_system_prompt=has_system,
+                    has_memory_messages=has_memory,
+                    is_continuation=False
+                ):
+                    context.events.append(event)
             
             step_result = StepResult(
                 name=self.name,
@@ -1864,186 +1847,6 @@ class MemorySaveStep(Step):
             raise
 
 
-class CultureUpdateStep(Step):
-    """
-    Update cultural knowledge after agent execution.
-    
-    This step runs after model execution and memory tracking to extract
-    and store cultural knowledge from the conversation.
-    
-    Notice: Culture is an experimental feature and is subject to change.
-    """
-    
-    @property
-    def name(self) -> str:
-        return "culture_update"
-    
-    @property
-    def description(self) -> str:
-        return "Update cultural knowledge"
-    
-    async def execute(self, context: "AgentRunOutput", task: "Task", agent: "Agent", model: "Model", step_number: int, pipeline_manager: Optional[Any] = None) -> StepResult:
-        """Update cultural knowledge using CultureManager."""
-        from upsonic.run.cancel import raise_if_cancelled
-        from upsonic.exceptions import RunCancelledException
-        from upsonic.run.events.events import CultureUpdateEvent
-        
-        start_time = time.time()
-        step_result: Optional[StepResult] = None
-        
-        try:
-            if agent and hasattr(agent, 'run_id') and agent.run_id:
-                raise_if_cancelled(agent.run_id)
-            
-            if not agent.update_cultural_knowledge or not agent.culture_manager:
-                if context.is_streaming:
-                    event = CultureUpdateEvent(
-                        run_id=context.run_id,
-                        culture_enabled=False,
-                        extraction_triggered=False,
-                        knowledge_updated=False
-                    )
-                    context.events.append(event)
-                step_result = StepResult(
-                    name=self.name,
-                    step_number=step_number,
-                    status=StepStatus.COMPLETED,
-                    message="Culture update not enabled",
-                    execution_time=time.time() - start_time,
-                )
-                return step_result
-            
-            if hasattr(task, '_cached_result') and task._cached_result:
-                step_result = StepResult(
-                    name=self.name,
-                    step_number=step_number,
-                    status=StepStatus.COMPLETED,
-                    message="Skipped due to cache hit",
-                    execution_time=time.time() - start_time,
-                )
-                return step_result
-            if hasattr(task, '_policy_blocked') and task._policy_blocked:
-                step_result = StepResult(
-                    name=self.name,
-                    step_number=step_number,
-                    status=StepStatus.COMPLETED,
-                    message="Skipped due to policy block",
-                    execution_time=time.time() - start_time,
-                )
-                return step_result
-            
-            user_input = None
-            if task and task.description:
-                user_input = task.description
-            
-            if not user_input:
-                if context.is_streaming:
-                    event = CultureUpdateEvent(
-                        run_id=context.run_id,
-                        culture_enabled=True,
-                        extraction_triggered=False,
-                        knowledge_updated=False
-                    )
-                    context.events.append(event)
-                step_result = StepResult(
-                    name=self.name,
-                    step_number=step_number,
-                    status=StepStatus.COMPLETED,
-                    message="No user input for culture extraction",
-                    execution_time=time.time() - start_time,
-                )
-                return step_result
-            
-            try:
-                if agent.debug and agent.debug_level >= 2:
-                    from upsonic.utils.printing import debug_log_level2
-                    debug_log_level2(
-                        "Culture extraction starting",
-                        "CultureUpdateStep",
-                        debug=agent.debug,
-                        debug_level=agent.debug_level,
-                        user_input=user_input[:500],
-                        culture_manager_debug=getattr(agent.culture_manager, 'debug', False),
-                        model_name=getattr(agent.culture_manager, '_model_spec', None) if agent.culture_manager else None
-                    )
-                
-                await agent.culture_manager.acreate_cultural_knowledge(
-                    message=user_input
-                )
-                
-                knowledge_updated = agent.culture_manager.knowledge_updated
-                
-                if agent.debug and agent.debug_level >= 2:
-                    from upsonic.utils.printing import debug_log_level2
-                    debug_log_level2(
-                        "Culture extraction completed",
-                        "CultureUpdateStep",
-                        debug=agent.debug,
-                        debug_level=agent.debug_level,
-                        knowledge_updated=knowledge_updated,
-                        user_input=user_input[:500]
-                    )
-                
-                if context.is_streaming:
-                    event = CultureUpdateEvent(
-                        run_id=context.run_id,
-                        culture_enabled=True,
-                        extraction_triggered=True,
-                        knowledge_updated=knowledge_updated
-                    )
-                    context.events.append(event)
-                step_result = StepResult(
-                    name=self.name,
-                    step_number=step_number,
-                    status=StepStatus.COMPLETED,
-                    message=f"Culture extraction completed, updated={knowledge_updated}",
-                    execution_time=time.time() - start_time,
-                )
-                return step_result
-                
-            except Exception as culture_error_exc:
-                from upsonic.utils.printing import culture_error
-                culture_error(f"Culture extraction failed: {culture_error_exc}", debug=agent.culture_manager.debug)
-                
-                if context.is_streaming:
-                    event = CultureUpdateEvent(
-                        run_id=context.run_id,
-                        culture_enabled=True,
-                        extraction_triggered=True,
-                        knowledge_updated=False
-                    )
-                    context.events.append(event)
-                step_result = StepResult(
-                    name=self.name,
-                    step_number=step_number,
-                    status=StepStatus.COMPLETED,
-                    message=f"Culture extraction failed (non-fatal): {culture_error_exc}",
-                    execution_time=time.time() - start_time,
-                )
-                return step_result
-            
-        except RunCancelledException as e:
-            step_result = StepResult(
-                name=self.name,
-                step_number=step_number,
-                status=StepStatus.CANCELLED,
-                message=str(e)[:500],
-                execution_time=time.time() - start_time,
-            )
-            raise
-            
-        except Exception as e:
-            step_result = StepResult(
-                name=self.name,
-                step_number=step_number,
-                status=StepStatus.ERROR,
-                message=str(e)[:500],
-                execution_time=time.time() - start_time,
-            )
-            raise
-        finally:
-            if step_result:
-                self._finalize_step_result(step_result, context)
             
 class ReliabilityStep(Step):
     """Apply reliability layer processing."""

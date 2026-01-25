@@ -87,6 +87,7 @@ class MockAgent:
         self.company_url = None
         self.company_objective = None
         self.company_description = None
+        self._culture_manager = None  # Added for culture support
 
     def get_agent_id(self):
         return self.agent_id

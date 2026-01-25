@@ -12,11 +12,14 @@ Run with: python test_debug_all.py
 """
 
 import asyncio
+import pytest
 from upsonic import Agent, Chat, Team, Task
 from upsonic.agent.deepagent import DeepAgent
 from upsonic import Graph
 
 
+@pytest.mark.asyncio
+@pytest.mark.timeout(300)
 async def test_all_debug_levels():
     """Test all classes with both debug levels."""
     print("\n" + "=" * 80)
@@ -165,7 +168,7 @@ async def test_all_debug_levels():
         debug_level=1
     )
     graph1.add(Task("What is 6 + 6?"))
-    graph_result1 = await graph1.run()
+    graph_result1 = await graph1.run_async()
     print(f"Result: {graph_result1}")
     
     print("\n" + "=" * 80)
@@ -183,7 +186,7 @@ async def test_all_debug_levels():
         debug_level=2
     )
     graph2.add(Task("What is 6 + 6?"))
-    graph_result2 = await graph2.run()
+    graph_result2 = await graph2.run_async()
     print(f"Result: {graph_result2}")
     
     print("\n" + "=" * 80)

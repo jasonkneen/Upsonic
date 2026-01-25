@@ -3,7 +3,7 @@ import pytest
 import json
 import time
 from unittest.mock import AsyncMock, MagicMock, patch, Mock
-from typing import List, Dict, Any, Optional, Type
+from typing import List, Dict, Any, Optional, Type, Tuple, Union
 from pydantic import BaseModel, Field
 
 from upsonic.storage.memory.memory import Memory
@@ -24,6 +24,7 @@ class MockStorage(Storage):
         super().__init__()
         self._sessions: Dict[str, Any] = {}
         self._user_memories: Dict[str, Any] = {}
+        self._cultural_knowledge: Dict[str, Any] = {}
         # Support _data attribute for test compatibility
         self._data: Dict[tuple, Any] = {}
     
@@ -126,6 +127,97 @@ class MockStorage(Storage):
     def clear_all(self) -> None:
         self._sessions.clear()
         self._user_memories.clear()
+        self._cultural_knowledge.clear()
+    
+    def delete_cultural_knowledge(self, id: str) -> None:
+        if id in self._cultural_knowledge:
+            del self._cultural_knowledge[id]
+    
+    def get_cultural_knowledge(
+        self,
+        id: str,
+        deserialize: bool = True,
+    ) -> Optional[Union[Any, Dict[str, Any]]]:
+        cultural_knowledge = self._cultural_knowledge.get(id)
+        if cultural_knowledge is None:
+            return None
+        if deserialize:
+            return cultural_knowledge
+        if hasattr(cultural_knowledge, 'model_dump'):
+            return cultural_knowledge.model_dump()
+        if hasattr(cultural_knowledge, 'dict'):
+            return cultural_knowledge.dict()
+        if isinstance(cultural_knowledge, dict):
+            return cultural_knowledge
+        return {}
+    
+    def get_all_cultural_knowledge(
+        self,
+        name: Optional[str] = None,
+        limit: Optional[int] = None,
+        page: Optional[int] = None,
+        sort_by: Optional[str] = None,
+        sort_order: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        team_id: Optional[str] = None,
+        deserialize: bool = True,
+    ) -> Union[List[Any], Tuple[List[Dict[str, Any]], int]]:
+        results = list(self._cultural_knowledge.values())
+        
+        if name:
+            results = [ck for ck in results if getattr(ck, 'name', None) == name]
+        if agent_id:
+            results = [ck for ck in results if getattr(ck, 'agent_id', None) == agent_id]
+        if team_id:
+            results = [ck for ck in results if getattr(ck, 'team_id', None) == team_id]
+        
+        total_count = len(results)
+        
+        if sort_by:
+            reverse = sort_order == 'desc' if sort_order else False
+            results.sort(key=lambda x: getattr(x, sort_by, ''), reverse=reverse)
+        
+        if page and limit:
+            offset = (page - 1) * limit
+            results = results[offset:offset + limit]
+        elif limit:
+            results = results[:limit]
+        
+        if deserialize:
+            return results
+        else:
+            serialized = []
+            for ck in results:
+                if hasattr(ck, 'model_dump'):
+                    serialized.append(ck.model_dump())
+                elif hasattr(ck, 'dict'):
+                    serialized.append(ck.dict())
+                elif isinstance(ck, dict):
+                    serialized.append(ck)
+                else:
+                    serialized.append({})
+            return (serialized, total_count)
+    
+    def upsert_cultural_knowledge(
+        self,
+        cultural_knowledge: Any,
+        deserialize: bool = True,
+    ) -> Optional[Union[Any, Dict[str, Any]]]:
+        if cultural_knowledge is None:
+            return None
+        id = getattr(cultural_knowledge, 'id', None)
+        if not id:
+            raise ValueError("cultural_knowledge.id required")
+        self._cultural_knowledge[id] = cultural_knowledge
+        if deserialize:
+            return cultural_knowledge
+        if hasattr(cultural_knowledge, 'model_dump'):
+            return cultural_knowledge.model_dump()
+        if hasattr(cultural_knowledge, 'dict'):
+            return cultural_knowledge.dict()
+        if isinstance(cultural_knowledge, dict):
+            return cultural_knowledge
+        return {}
 
 
 class MockModel:

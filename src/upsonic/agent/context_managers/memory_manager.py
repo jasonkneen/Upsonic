@@ -19,7 +19,11 @@ class MemoryManager:
     2. Saving the session after the run completes or pauses (save_session_async)
     """
 
-    def __init__(self, memory: Optional["Memory"], agent_metadata: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self,
+        memory: Optional["Memory"],
+        agent_metadata: Optional[Dict[str, Any]] = None,
+    ):
         """
         Initializes the MemoryManager.
 
@@ -64,7 +68,9 @@ class MemoryManager:
         This includes both agent-level metadata and session-level metadata.
         """
         return self._prepared_inputs.get("metadata_injection", "")
+    
 
+    
     def set_run_output(self, run_output: "AgentRunOutput") -> None:
         """
         Set the AgentRunOutput for session save.
@@ -85,7 +91,7 @@ class MemoryManager:
             self._prepared_inputs = await self.memory.prepare_inputs_for_task(
                 agent_metadata=self.agent_metadata
             )
-        else:
+
             if self.agent_metadata:
                 metadata_parts = []
                 for key, value in self.agent_metadata.items():

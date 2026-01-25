@@ -8,11 +8,14 @@ Note: HITL continuation (continue_run_async) only supports direct call mode.
 Streaming mode is not supported for continuation.
 """
 
+import pytest
 import asyncio
 import os
 from upsonic import Agent, Task
 from upsonic.tools import tool
 from upsonic.db.database import SqliteDatabase
+
+pytestmark = pytest.mark.timeout(300)
 
 
 def cleanup_db():
@@ -542,6 +545,98 @@ async def external_cross_process_handling():
     print(f"Final result: {result.output}")
     return result
 
+
+# ============================================================================
+# PYTEST TESTS
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_external_direct_call_with_run_id_same_agent():
+    """Test: Direct Call with run_id - Same Agent"""
+    result = await external_direct_call_with_run_id_same_agent()
+    assert result.is_complete, f"Expected complete, got {result.status}"
+
+
+@pytest.mark.asyncio
+async def test_external_direct_call_with_task_same_agent():
+    """Test: Direct Call with task - Same Agent"""
+    result = await external_direct_call_with_task_same_agent()
+    assert result.is_complete, f"Expected complete, got {result.status}"
+
+
+@pytest.mark.asyncio
+async def test_external_direct_call_with_run_id_new_agent():
+    """Test: Direct Call with run_id - New Agent (Cross-process)"""
+    result = await external_direct_call_with_run_id_new_agent()
+    assert result.is_complete, f"Expected complete, got {result.status}"
+
+
+@pytest.mark.asyncio
+async def test_external_direct_call_with_task_new_agent():
+    """Test: Direct Call with task - New Agent (Cross-process)"""
+    result = await external_direct_call_with_task_new_agent()
+    assert result.is_complete, f"Expected complete, got {result.status}"
+
+
+@pytest.mark.asyncio
+async def test_external_with_executor_callback():
+    """Test: Using external_tool_executor parameter with run_id"""
+    result = await external_with_executor_callback()
+    assert result.is_complete, f"Expected complete, got {result.status}"
+
+
+@pytest.mark.asyncio
+async def test_external_with_executor_callback_task():
+    """Test: Using external_tool_executor parameter with task"""
+    result = await external_with_executor_callback_task()
+    assert result.is_complete, f"Expected complete, got {result.status}"
+
+
+@pytest.mark.asyncio
+async def test_external_multiple_tools_direct_call():
+    """Test: Multiple External Tools - Direct Call with run_id"""
+    result = await external_multiple_tools_direct_call()
+    assert result.is_complete, f"Expected complete, got {result.status}"
+
+
+@pytest.mark.asyncio
+async def test_external_multiple_tools_direct_call_task():
+    """Test: Multiple External Tools - Direct Call with task"""
+    result = await external_multiple_tools_direct_call_task()
+    assert result.is_complete, f"Expected complete, got {result.status}"
+
+
+@pytest.mark.asyncio
+async def test_external_multiple_tools_with_executor():
+    """Test: Multiple External Tools - With Executor (run_id)"""
+    result = await external_multiple_tools_with_executor()
+    assert result.is_complete, f"Expected complete, got {result.status}"
+
+
+@pytest.mark.asyncio
+async def test_external_multiple_tools_with_executor_task():
+    """Test: Multiple External Tools - With Executor (task)"""
+    result = await external_multiple_tools_with_executor_task()
+    assert result.is_complete, f"Expected complete, got {result.status}"
+
+
+@pytest.mark.asyncio
+async def test_external_cross_process_handling():
+    """Test: Cross-process External Tool Handling (run_id)"""
+    result = await external_cross_process_handling()
+    assert result.is_complete, f"Expected complete, got {result.status}"
+
+
+@pytest.mark.asyncio
+async def test_external_cross_process_handling_task():
+    """Test: Cross-process External Tool Handling (task)"""
+    result = await external_cross_process_handling_task()
+    assert result.is_complete, f"Expected complete, got {result.status}"
+
+
+# ============================================================================
+# TEST RUNNER (for manual execution)
+# ============================================================================
 
 async def run_all_tests():
     """Run all external tool execution test variants."""
