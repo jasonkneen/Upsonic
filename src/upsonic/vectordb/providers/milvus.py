@@ -11,14 +11,12 @@ A comprehensive, high-level implementation supporting:
 
 import asyncio
 import json
-import uuid
 from hashlib import md5
 from typing import Any, Dict, List, Optional, Union, Literal
 
 try:
     from pymilvus import (
         AsyncMilvusClient,
-        MilvusClient,
         DataType,
         AnnSearchRequest,
         RRFRanker,
@@ -27,7 +25,6 @@ try:
     _MILVUS_AVAILABLE = True
 except ImportError:
     AsyncMilvusClient = None  # type: ignore
-    MilvusClient = None  # type: ignore
     DataType = None  # type: ignore
     AnnSearchRequest = None  # type: ignore
     RRFRanker = None  # type: ignore
@@ -92,8 +89,7 @@ class MilvusProvider(BaseVectorDBProvider):
         self.provider_description = config.provider_description
         self.provider_id = config.provider_id or self._generate_provider_id()
         
-        # Client instances (lazy initialization)
-        self._sync_client: Optional[MilvusClient] = None
+        # Client instance (lazy initialization)
         self._async_client: Optional[AsyncMilvusClient] = None
         
         # Connection state
@@ -113,21 +109,14 @@ class MilvusProvider(BaseVectorDBProvider):
     # ============================================================================
 
     @property
-    def _client(self) -> MilvusClient:
-        """Get or create synchronous Milvus client."""
-        if self._sync_client is None:
-            info_log("Creating synchronous Milvus client", context="MilvusProvider")
-            
-            # Build connection parameters
-            conn_params = self._build_connection_params()
-            self._sync_client = MilvusClient(**conn_params)
-            
-        return self._sync_client
+    def _client(self) -> AsyncMilvusClient:
+        """Get or create asynchronous Milvus client (alias for _aclient for base class compatibility)."""
+        return self._aclient
     
     @_client.setter
-    def _client(self, value: Optional[MilvusClient]):
+    def _client(self, value: Optional[AsyncMilvusClient]):
         """Allow setting _client (for base class compatibility)."""
-        self._sync_client = value
+        self._async_client = value
 
     @property
     def _aclient(self) -> AsyncMilvusClient:
@@ -213,7 +202,7 @@ class MilvusProvider(BaseVectorDBProvider):
             return
         
         try:
-            # Close clients if they exist
+            # Close async client if it exists
             if self._async_client:
                 try:
                     # Use timeout to prevent hanging
@@ -225,14 +214,6 @@ class MilvusProvider(BaseVectorDBProvider):
                 finally:
                     self._async_client = None
             
-            if self._sync_client:
-                try:
-                    self._sync_client.close()
-                except Exception as e:
-                    error_log(f"Error closing sync client: {e}", context="MilvusProvider")
-                finally:
-                    self._sync_client = None
-            
             # Small delay to allow embedded server to clean up
             await asyncio.sleep(0.1)
             
@@ -243,9 +224,12 @@ class MilvusProvider(BaseVectorDBProvider):
 
     async def is_ready(self) -> bool:
         """Check if Milvus is ready and responsive."""
+        # First check if we have an explicit connection
+        if not self._is_connected or self._async_client is None:
+            return False
         try:
             # Try to list collections as a health check
-            _ = await self._aclient.list_collections()
+            _ = await self._async_client.list_collections()
             return True
         except Exception as e:
             logger.debug(f"Milvus health check failed: {e}")
@@ -256,7 +240,7 @@ class MilvusProvider(BaseVectorDBProvider):
     async def collection_exists(self) -> bool:
         """Check if collection exists."""
         try:
-            return self._client.has_collection(self._config.collection_name)
+            return await self._aclient.has_collection(self._config.collection_name)
         except Exception as e:
             logger.debug(f"Error checking collection existence: {e}")
             return False
@@ -292,7 +276,7 @@ class MilvusProvider(BaseVectorDBProvider):
 
     async def _create_dense_collection(self) -> None:
         """Create collection with dense vectors only."""
-        schema = self._client.create_schema(
+        schema = self._aclient.create_schema(
             auto_id=False,
             enable_dynamic_field=True,  # Allow dynamic metadata fields
         )
@@ -326,7 +310,6 @@ class MilvusProvider(BaseVectorDBProvider):
         )
         
         # content
-        content_config = indexed_fields_config.get("content", {"type": "text"})
         schema.add_field(
             field_name="content",
             datatype=DataType.VARCHAR,
@@ -344,7 +327,7 @@ class MilvusProvider(BaseVectorDBProvider):
         )
         
         # Prepare index parameters
-        index_params = self._client.prepare_index_params()
+        index_params = self._aclient.prepare_index_params()
         
         # Add vector index
         vector_index_params = self._build_vector_index_params()
@@ -381,7 +364,7 @@ class MilvusProvider(BaseVectorDBProvider):
 
     async def _create_hybrid_collection(self) -> None:
         """Create collection with both dense and sparse vectors."""
-        schema = self._client.create_schema(
+        schema = self._aclient.create_schema(
             auto_id=False,
             enable_dynamic_field=True,
         )
@@ -434,7 +417,7 @@ class MilvusProvider(BaseVectorDBProvider):
         )
         
         # Prepare index parameters
-        index_params = self._client.prepare_index_params()
+        index_params = self._aclient.prepare_index_params()
         
         # Dense vector index
         vector_index_params = self._build_vector_index_params()
@@ -1148,6 +1131,7 @@ class MilvusProvider(BaseVectorDBProvider):
                 'metadata': metadata,
             },
             vector=vector,
+            text=entity.get('content', ''),
         )
 
 

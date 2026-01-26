@@ -1419,14 +1419,23 @@ class WeaviateProvider(BaseVectorDBProvider):
                 updated_properties = current_properties.copy()
 
                 # Handle nested metadata updates
-                if "metadata" in updated_properties and isinstance(
-                    updated_properties["metadata"], dict
-                ):
-                    updated_properties["metadata"].update(metadata)
-                else:
-                    if "metadata" not in updated_properties:
-                        updated_properties["metadata"] = {}
-                    updated_properties["metadata"].update(metadata)
+                # Metadata is stored as JSON string in Weaviate, so parse it first
+                existing_metadata = {}
+                if "metadata" in updated_properties:
+                    metadata_str = updated_properties["metadata"]
+                    if isinstance(metadata_str, str):
+                        try:
+                            existing_metadata = json.loads(metadata_str)
+                        except json.JSONDecodeError:
+                            existing_metadata = {}
+                    elif isinstance(metadata_str, dict):
+                        existing_metadata = metadata_str
+                
+                # Merge with new metadata
+                existing_metadata.update(metadata)
+                
+                # Serialize back to JSON string
+                updated_properties["metadata"] = json.dumps(existing_metadata) if existing_metadata else "{}"
 
                 # Update the object
                 await collection_obj.data.update(

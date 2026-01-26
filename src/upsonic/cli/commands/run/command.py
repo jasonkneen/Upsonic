@@ -122,7 +122,13 @@ def run_command(host: str = "0.0.0.0", port: int = 8000) -> int:
         if not hasattr(agent_module, "main"):
             print_error(f"main function not found in {agent_py_file}")
             return 1
-        main_func = agent_module.main
+        
+        # Prefer amain if it exists, otherwise use main
+        import inspect
+        if hasattr(agent_module, "amain") and inspect.iscoroutinefunction(agent_module.amain):
+            main_func = agent_module.amain
+        else:
+            main_func = agent_module.main
 
         # Build inputs_schema list from config
         input_schema_dict = config_data.get("input_schema", {}).get("inputs", {}) or {}
@@ -180,8 +186,12 @@ def run_command(host: str = "0.0.0.0", port: int = 8000) -> int:
                     form_data = await request.form()
                     inputs = {k: v for k, v in form_data.items() if v is not None}
                 
-                # Call main function
-                result = await main_func(inputs)
+                # Call main function - handle both sync and async
+                import inspect
+                if inspect.iscoroutinefunction(main_func):
+                    result = await main_func(inputs)
+                else:
+                    result = main_func(inputs)
                 return JSONResponse(content=result)
                 
             except Exception as e:

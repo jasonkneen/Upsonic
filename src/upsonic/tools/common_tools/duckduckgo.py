@@ -74,6 +74,10 @@ def duckduckgo_search_tool(duckduckgo_client: DDGS | None = None, max_results: i
         duckduckgo_client: The DuckDuckGo search client.
         max_results: The maximum number of results. If None, returns results only from the first response.
     """
+    # Ensure max_results is properly typed as int (handles string inputs from API/JSON)
+    if max_results is not None:
+        max_results = int(max_results)
+    
     if not _DDGS_AVAILABLE:
         from upsonic.utils.printing import import_error
         import_error(
