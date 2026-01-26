@@ -1,51 +1,119 @@
+<div align="center">
 
-# What is Upsonic
-Upsonic is the AI Agent Development Framework and AgentOS that used by the fintech and banks.
+<img src="https://github.com/user-attachments/assets/fbe7219f-55bc-4748-ac4a-dd2fb2b8d9e5" width="600" />
 
+# Upsonic
 
-<img src="https://github.com/user-attachments/assets/fbe7219f-55bc-4748-ac4a-dd2fb2b8d9e5" />
+**Production-Ready AI Agent Framework with Safety First**
 
-<br/>
-<br/>
+[![PyPI version](https://badge.fury.io/py/upsonic.svg)](https://badge.fury.io/py/upsonic)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENCE)
+[![Python Version](https://img.shields.io/pypi/pyversions/upsonic.svg)](https://pypi.org/project/upsonic/)
+[![GitHub stars](https://img.shields.io/github/stars/Upsonic/Upsonic.svg?style=social&label=Star)](https://github.com/Upsonic/Upsonic)
+[![GitHub issues](https://img.shields.io/github/issues/Upsonic/Upsonic.svg)](https://github.com/Upsonic/Upsonic/issues)
+[![Documentation](https://img.shields.io/badge/docs-upsonic.ai-brightgreen.svg)](https://docs.upsonic.ai)
 
-## Upsonic Framework
+[Documentation](https://docs.upsonic.ai) • [Quickstart](https://docs.upsonic.ai/get-started/quickstart) • [Examples](https://docs.upsonic.ai/examples)
 
-You can use the Upsonic Framework to build safety-first AI Agents or teams with Memory, KnowledgeBase, OCR, Human in the Loop, tools and MCP Support. The Upsonic framework orchestrates all of the operations with its pipeline architecture.
+</div>
 
-You are able to create complex and basic agents in one unified system. Our development process is based on what our community wants. Currently we are doubling down on Safety Engine and OCR capabilities.
+---
+
+## Overview
+
+Upsonic is an open-source AI agent development framework that makes building production-ready agents simple, safe, and scalable. Whether you're building your first agent or orchestrating complex multi-agent systems, Upsonic provides everything you need in one unified framework.
+
+Built by the community, for the community. We listen to what you need and prioritize features based on real-world use cases. Currently, we're focused on **Safety Engine** and **OCR capabilities**, two critical features for production workloads.
+
+## Key Features
+
+- **Safety Engine**: Built-in policy engine to ensure your agents follow company guidelines and compliance requirements
+- **OCR Support**: Unified interface for local and cloud OCR providers with document processing capabilities
+- **Memory Management**: Give your agents context and long-term memory with flexible storage backends
+- **Multi-Agent Teams**: Build collaborative agent systems with sequential and parallel execution modes
+- **Tool Integration**: Extensive tool support including MCP, custom tools, and human-in-the-loop workflows
+- **Production Ready**: Designed for enterprise deployment with comprehensive monitoring and metrics
+
+## Installation
+
+Install Upsonic using uv:
 
 ```bash
-pip install upsonic
-
+uv pip install upsonic
+# pip install upsonic
 ```
 
+### Basic Agent
+
+Create your first agent in just a few lines of code:
+
 ```python
-from upsonic import Task, Agent
+from upsonic import Agent, Task
 
-task = Task("Who developed you?")
+agent = Agent(model="openai/gpt-4o", name="Stock Analyst Agent")
 
-agent = Agent(name="Coder", model="openai/gpt-5-mini")
+task = Task(description="Analyze the current market trends")
 
 agent.print_do(task)
 ```
 
-[Docs](https://docs.upsonic.ai/get-started/introduction), [Guides](https://docs.upsonic.ai/guides/1-create-a-task)
+### Agent with Tools
 
-<br/>
-<br/>
+Enhance your agent with tools for real-world tasks:
+
+```python
+from upsonic import Agent, Task
+from upsonic.tools.common_tools import YFinanceTools
+
+agent = Agent(model="openai/gpt-4o", name="Stock Analyst Agent")
+
+task = Task(
+    description="Give me a summary about tesla stock with tesla car models",
+    tools=[YFinanceTools()]
+)
+
+agent.print_do(task)
+```
+
+### Agent with Memory
+
+Add memory to make your agent remember past conversations:
+
+```python
+from upsonic import Agent, Task
+from upsonic.storage import Memory, InMemoryStorage
+
+memory = Memory(
+    storage=InMemoryStorage(),
+    session_id="session_001",
+    full_session_memory=True
+)
+
+agent = Agent(model="openai/gpt-4o", memory=memory)
+
+task1 = Task(description="My name is John")
+agent.print_do(task1)
+
+task2 = Task(description="What is my name?")
+agent.print_do(task2)  # Agent remembers: "Your name is John"
+```
+
+For more examples, see the [Quickstart Guide](https://docs.upsonic.ai/get-started/quickstart) and [Documentation](https://docs.upsonic.ai).
 
 
-## Why Upsonic?
-
-At Upsonic, we don't just build features in isolation. We listen to our community and prioritize what matters most to you. Right now, that means doubling down on Safety and OCR capabilities: two areas our users have made clear are critical for production workloads.
-
-And of course, we've got you covered on the fundamentals. Upsonic ships with all the core features you'd expect from a modern framework, so you're never trading off functionality for innovation.
-
-TL;DR: We're focused on what you need (Safety + OCR), while delivering everything you expect.
+## Core Capabilities
 
 ### Safety Engine
 
-**It's our most differentiating feature in the competition.** In the current development cycle of agents, the main problem is being sure about safety. There are lots of wrong ways and potential problems that go against your company policy. So we made a feature where you can create policies, put them on your agents, and track them. This way you'll see your safety policies enforced on your agents. And it's an LLM-agnostic feature, so you can use your policies on any agent once you create them.
+Safety isn't an afterthought in Upsonic. It's built into the core. Create reusable policies, attach them to any agent, and ensure compliance across your entire system. The Safety Engine is LLM-agnostic and production-ready from day one.
+
+Key capabilities include:
+- Pre-built policies for common safety requirements (PII blocking, content filtering, etc.)
+- Custom policy creation for your specific compliance needs
+- Real-time monitoring and enforcement
+- Detailed audit logs for compliance reporting
+
+**Example:**
 
 ```python
 from upsonic import Agent, Task
@@ -64,39 +132,63 @@ result = agent.do(task)
 print(result)
 ```
 
-[Concept Docs](https://docs.upsonic.ai/concepts/safety-engine/overview)
+Learn more: [Safety Engine Documentation](https://docs.upsonic.ai/concepts/safety-engine/overview)
 
+### OCR and Document Processing
 
-## OCR
+Upsonic provides a unified interface for working with multiple OCR providers, both local and cloud-based. This eliminates the complexity of integrating different OCR services and allows you to switch providers without changing your code.
 
-In our framework, we directly support many local and cloud OCR providers to speed up this process. This way, developers don't need to struggle with the OCR step anymore. You can directly use all OCRs from one unified interface.
+Supported providers include:
+- Cloud providers (Google Vision, AWS Textract, Azure Computer Vision)
+- Local providers (Tesseract, EasyOCR, PaddleOCR)
+- Specialized document processors (DocTR, Surya)
 
-[Concept Docs](https://docs.upsonic.ai/concepts/ocr/overview)
+Learn more: [OCR Documentation](https://docs.upsonic.ai/concepts/ocr/overview)
 
-<br/>
-<br/>
+## Upsonic AgentOS
 
-# Upsonic AgentOS
+AgentOS is an optional deployment and management platform that takes your agents from development to production. It provides enterprise-grade infrastructure for deploying, monitoring, and scaling your AI agents.
 
-AgentOS is a deployment and management platform for your AI Agents. You can click on the buttons to deploy production-ready and stable agent projects. The most important points are:
+**Key Features:**
 
-- **K8s-based FastAPI runtime**: Upsonic AgentOS turns your agents into microservices by design. So you can integrate your agents into any of your systems easily, scalably, isolated and securely.
-- **Metric Dashboard**: We have an integrated metric system. Every agent transaction and LLM costs are saved. So you have great visibility of your daily, monthly and yearly agent costs, tokens and other metrics.
-- **Available for On-premise**: You can deploy the entire AgentOS platform on your local infrastructure.
+- **Kubernetes-based FastAPI Runtime**: Deploy your agents as isolated, scalable microservices with enterprise-grade reliability
+- **Comprehensive Metrics Dashboard**: Track every agent transaction, LLM costs, token usage, and performance metrics for complete visibility
+- **Self-Hosted Deployment**: Deploy the entire AgentOS platform on your own infrastructure with full control over your data and operations
+- **One-Click Deployment**: Go from code to production with automated deployment pipelines
 
-<img width="3024" height="1590" alt="image" src="https://github.com/user-attachments/assets/42fceaca-2dec-4496-ab67-4b9067caca42" />
+<img width="3024" height="1590" alt="AgentOS Dashboard" src="https://github.com/user-attachments/assets/42fceaca-2dec-4496-ab67-4b9067caca42" />
 
+## Documentation and Resources
 
+- **[Documentation](https://docs.upsonic.ai)** - Complete guides and API reference
+- **[Quickstart Guide](https://docs.upsonic.ai/get-started/quickstart)** - Get started in 5 minutes
+- **[Examples](https://docs.upsonic.ai/examples)** - Real-world examples and use cases
+- **[API Reference](https://docs.upsonic.ai/reference)** - Detailed API documentation
 
-<br/>
-<br/>
+## Community and Support
 
+- **[Issue Tracker](https://github.com/Upsonic/Upsonic/issues)** - Report bugs and request features
+- **[Changelog](https://docs.upsonic.ai/changelog)** - See what's new in each release
 
+## Use Cases
 
-## Your Complete AI Agent Infrastructure
+Upsonic is used by fintech companies, banks, and developers worldwide to build production-grade AI agents for:
 
-Together, the Upsonic Framework and AgentOS provide everything a financial institution needs to build, deploy, and manage production-grade AI agents. From development to deployment, from local testing to enterprise-scale operations, from single agents to complex multi-agent systems. Upsonic delivers the complete infrastructure for your AI agent initiatives.
+- Document analysis and processing
+- Customer service automation
+- Financial analysis and reporting
+- Compliance monitoring
+- Research and data gathering
+- Multi-agent workflows
 
-Whether you're a fintech startup building your first intelligent automation or an established bank deploying agents across multiple business units, Upsonic provides the end-to-end tooling to bring your AI agent vision to life safely, efficiently, and at scale.
+## License
 
-[Website](https://upsonic.ai/)
+Upsonic is released under the MIT License. See [LICENCE](LICENCE) for details.
+
+## Contributing
+
+We welcome contributions from the community! Please read our contributing guidelines and code of conduct before submitting pull requests.
+
+---
+
+**Learn more at [upsonic.ai](https://upsonic.ai)**
