@@ -92,7 +92,6 @@ class TestMilvusKnowledgeBaseIntegration:
         try:
             if provider._is_connected:
                 provider._async_client = None
-                provider._sync_client = None
                 provider._is_connected = False
         except Exception:
             pass
@@ -125,7 +124,6 @@ class TestMilvusKnowledgeBaseIntegration:
             if provider._is_connected:
                 # Force cleanup - set to None to prevent resource leaks
                 provider._async_client = None
-                provider._sync_client = None
                 provider._is_connected = False
         except Exception:
             pass
@@ -146,8 +144,7 @@ class TestMilvusKnowledgeBaseIntegration:
         """Test MilvusProvider initialization."""
         assert milvus_provider._config == milvus_config
         assert not milvus_provider._is_connected
-        # MilvusProvider uses _sync_client and _async_client, not _collection
-        assert milvus_provider._sync_client is None
+        # MilvusProvider uses _async_client, not _sync_client
         assert milvus_provider._async_client is None
     
     @pytest.mark.skipif(sys.platform == "win32", reason="milvus-lite not available on Windows")
@@ -171,7 +168,6 @@ class TestMilvusKnowledgeBaseIntegration:
         
         await milvus_provider.disconnect()
         assert not milvus_provider._is_connected
-        assert milvus_provider._sync_client is None
         assert milvus_provider._async_client is None
     
     @pytest.mark.skipif(sys.platform == "win32", reason="milvus-lite not available on Windows")
@@ -504,7 +500,6 @@ class TestMilvusKnowledgeBaseIntegration:
                     await milvus_provider.disconnect()
                 except Exception:
                     milvus_provider._async_client = None
-                    milvus_provider._sync_client = None
                     milvus_provider._is_connected = False
     
     def test_milvus_distance_metrics(self, milvus_provider):
