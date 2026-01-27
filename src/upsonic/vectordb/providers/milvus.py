@@ -73,7 +73,7 @@ class MilvusProvider(BaseVectorDBProvider):
             from upsonic.utils.printing import import_error
             import_error(
                 package_name="pymilvus",
-                install_command='pip install "upsonic[rag]"',
+                install_command='pip install "upsonic[milvus]"',
                 feature_name="Milvus vector database provider"
             )
         

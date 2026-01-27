@@ -32,7 +32,7 @@ class JSONLoader(BaseLoader):
             from upsonic.utils.printing import import_error
             import_error(
                 package_name="jq",
-                install_command='pip install "upsonic[loaders]"',
+                install_command='pip install "upsonic[json-loader]"',
                 feature_name="JSON loader"
             )
         super().__init__(config)

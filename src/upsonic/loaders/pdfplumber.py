@@ -59,14 +59,14 @@ class PdfPlumberLoader(BaseLoader):
             from upsonic.utils.printing import import_error
             import_error(
                 package_name="pdfplumber",
-                install_command='pip install "upsonic[loaders]"',
+                install_command='pip install "upsonic[pdfplumber-loader]"',
                 feature_name="pdfplumber PDF loader"
             )
         if config.extraction_mode in ("ocr_only", "hybrid") and not _RAPIDOCR_AVAILABLE:
             from upsonic.utils.printing import import_error
             import_error(
                 package_name="rapidocr-onnxruntime",
-                install_command='pip install "upsonic[loaders]"',
+                install_command='pip install "upsonic[pdfplumber-loader]"',
                 feature_name="PDF OCR functionality"
             )
         super().__init__(config)

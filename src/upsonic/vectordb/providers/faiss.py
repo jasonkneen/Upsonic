@@ -79,7 +79,7 @@ class FaissProvider(BaseVectorDBProvider):
             from upsonic.utils.printing import import_error
             import_error(
                 package_name="faiss-cpu",
-                install_command='pip install "upsonic[rag]"',
+                install_command='pip install "upsonic[faiss]"',
                 feature_name="FAISS vector database provider"
             )
 
@@ -87,7 +87,7 @@ class FaissProvider(BaseVectorDBProvider):
             from upsonic.utils.printing import import_error
             import_error(
                 package_name="numpy",
-                install_command='pip install "upsonic[embeddings]"',
+                install_command='pip install "upsonic[faiss]"',
                 feature_name="FAISS vector database provider"
             )
 
@@ -410,6 +410,12 @@ class FaissProvider(BaseVectorDBProvider):
             final_payload['document_id'] = document_id
         if metadata:
             final_payload['metadata'] = metadata
+        
+        # Preserve all other fields from original payload (except those already handled)
+        excluded_keys = {'content_id', 'content', 'document_name', 'document_id', 'metadata', 'text'}
+        for key, value in payload.items():
+            if key not in excluded_keys:
+                final_payload[key] = value
         
         return final_payload
 
@@ -935,10 +941,17 @@ class FaissProvider(BaseVectorDBProvider):
 
             if final_similarity_threshold is None or score >= final_similarity_threshold:
                 text = payload.get("content", "") if payload else ""
+                # Reconstruct vector from FAISS index
+                try:
+                    vector = self._index.reconstruct(int(faiss_id)).tolist()
+                except Exception as e:
+                    debug_log(f"Failed to reconstruct vector for faiss_id {faiss_id}: {e}", context="FaissVectorDB")
+                    vector = None
                 results.append(VectorSearchResult(
                     id=content_id,
                     score=score,
                     payload=payload,
+                    vector=vector,
                     text=text
                 ))
         

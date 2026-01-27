@@ -8123,8 +8123,17 @@ dependencies = [
 chroma = [
     { name = "chromadb", marker = "python_full_version < '3.14'" },
 ]
+csv-loader = [
+    { name = "aiofiles" },
+]
 custom-tools = [
     { name = "slack-sdk" },
+]
+docling-loader = [
+    { name = "docling" },
+]
+docx-loader = [
+    { name = "python-docx" },
 ]
 embeddings = [
     { name = "aiohttp" },
@@ -8145,11 +8154,24 @@ embeddings = [
     { name = "torch" },
     { name = "transformers" },
 ]
+faiss = [
+    { name = "faiss-cpu" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple/" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.0", source = { registry = "https://pypi.org/simple/" }, marker = "python_full_version >= '3.11'" },
+]
 gmail-interface = [
     { name = "fastapi" },
     { name = "google-api-python-client" },
     { name = "google-auth-httplib2" },
     { name = "google-auth-oauthlib" },
+]
+html-loader = [
+    { name = "aiohttp" },
+    { name = "beautifulsoup4" },
+    { name = "requests" },
+]
+json-loader = [
+    { name = "jq" },
 ]
 loaders = [
     { name = "aiofiles" },
@@ -8168,6 +8190,10 @@ loaders = [
     { name = "pyyaml" },
     { name = "rapidocr-onnxruntime", marker = "python_full_version < '3.13'" },
     { name = "requests" },
+]
+markdown-loader = [
+    { name = "markdown-it-py" },
+    { name = "python-frontmatter" },
 ]
 mem0-storage = [
     { name = "mem0ai" },
@@ -8204,6 +8230,19 @@ ocr = [
     { name = "pytesseract" },
     { name = "rapidocr-onnxruntime", marker = "python_full_version < '3.13'" },
 ]
+pdf-loader = [
+    { name = "pypdf" },
+    { name = "rapidocr-onnxruntime", marker = "python_full_version < '3.13'" },
+]
+pdfplumber-loader = [
+    { name = "pdfplumber" },
+    { name = "rapidocr-onnxruntime", marker = "python_full_version < '3.13'" },
+]
+pgvector = [
+    { name = "pgvector" },
+    { name = "psycopg" },
+    { name = "sqlalchemy" },
+]
 pinecone = [
     { name = "pinecone" },
     { name = "pinecone-text", marker = "python_full_version < '3.14'" },
@@ -8214,6 +8253,10 @@ postgres-storage = [
     { name = "psycopg", extra = ["binary"] },
     { name = "psycopg2-binary" },
     { name = "sqlalchemy" },
+]
+pymupdf-loader = [
+    { name = "pymupdf" },
+    { name = "rapidocr-onnxruntime", marker = "python_full_version < '3.13'" },
 ]
 qdrant = [
     { name = "qdrant-client" },
@@ -8244,6 +8287,9 @@ storage = [
     { name = "pymongo" },
     { name = "redis" },
     { name = "sqlalchemy" },
+]
+text-loader = [
+    { name = "aiofiles" },
 ]
 tools = [
     { name = "beautifulsoup4" },
@@ -8280,6 +8326,13 @@ web = [
     { name = "python-multipart" },
     { name = "uvicorn" },
 ]
+xml-loader = [
+    { name = "lxml" },
+]
+yaml-loader = [
+    { name = "jq" },
+    { name = "pyyaml" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -8292,9 +8345,12 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiofiles", marker = "extra == 'csv-loader'", specifier = ">=24.1.0" },
     { name = "aiofiles", marker = "extra == 'loaders'", specifier = ">=24.1.0" },
+    { name = "aiofiles", marker = "extra == 'text-loader'", specifier = ">=24.1.0" },
     { name = "aiohttp", specifier = ">=3.12.15" },
     { name = "aiohttp", marker = "extra == 'embeddings'", specifier = ">=3.12.15" },
+    { name = "aiohttp", marker = "extra == 'html-loader'", specifier = ">=3.12.15" },
     { name = "aiohttp", marker = "extra == 'loaders'", specifier = ">=3.12.15" },
     { name = "aiosqlite", marker = "extra == 'sqlite-storage'", specifier = ">=0.21.0" },
     { name = "anthropic", marker = "extra == 'embeddings'", specifier = ">=0.69.0" },
@@ -8306,6 +8362,7 @@ requires-dist = [
     { name = "azure-core", marker = "extra == 'models'", specifier = ">=1.35.1" },
     { name = "azure-identity", marker = "extra == 'embeddings'", specifier = ">=1.25.0" },
     { name = "azure-identity", marker = "extra == 'models'", specifier = ">=1.25.0" },
+    { name = "beautifulsoup4", marker = "extra == 'html-loader'", specifier = ">=4.14.2" },
     { name = "beautifulsoup4", marker = "extra == 'loaders'", specifier = ">=4.14.2" },
     { name = "beautifulsoup4", marker = "extra == 'tools'", specifier = ">=4.14.2" },
     { name = "boto3", marker = "extra == 'embeddings'", specifier = ">=1.40.45" },
@@ -8319,8 +8376,10 @@ requires-dist = [
     { name = "cohere", marker = "extra == 'models'", specifier = ">=5.18.0" },
     { name = "ddgs", marker = "extra == 'tools'", specifier = ">=9.10.0" },
     { name = "detoxify", marker = "extra == 'safety-engine'", specifier = ">=0.5.2" },
+    { name = "docling", marker = "extra == 'docling-loader'", specifier = ">=2.55.1" },
     { name = "docling", marker = "extra == 'loaders'", specifier = ">=2.55.1" },
     { name = "easyocr", marker = "extra == 'ocr'", specifier = ">=1.7.2" },
+    { name = "faiss-cpu", marker = "extra == 'faiss'", specifier = ">=1.12.0" },
     { name = "faiss-cpu", marker = "extra == 'vectordb'", specifier = ">=1.12.0" },
     { name = "fastapi", marker = "extra == 'gmail-interface'" },
     { name = "fastapi", marker = "extra == 'slack-interface'", specifier = ">=0.128.0" },
@@ -8342,10 +8401,14 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "httpx", marker = "extra == 'models'", specifier = ">=0.28.1" },
     { name = "huggingface-hub", marker = "extra == 'embeddings'", specifier = ">=0.34.4" },
+    { name = "jq", marker = "extra == 'json-loader'", specifier = ">=1.10.0" },
     { name = "jq", marker = "extra == 'loaders'", specifier = ">=1.10.0" },
+    { name = "jq", marker = "extra == 'yaml-loader'", specifier = ">=1.10.0" },
     { name = "llmlingua", marker = "extra == 'tools'", specifier = ">=0.2.2" },
     { name = "lxml", marker = "extra == 'loaders'", specifier = ">=4.9.1" },
+    { name = "lxml", marker = "extra == 'xml-loader'", specifier = ">=4.9.1" },
     { name = "markdown-it-py", marker = "extra == 'loaders'", specifier = ">=4.0.0" },
+    { name = "markdown-it-py", marker = "extra == 'markdown-loader'", specifier = ">=4.0.0" },
     { name = "mcp", extras = ["cli"], specifier = "==1.9.4" },
     { name = "mem0ai", marker = "extra == 'mem0-storage'", specifier = ">=0.1.116" },
     { name = "mistralai", marker = "extra == 'models'", specifier = ">=1.9.11" },
@@ -8353,6 +8416,7 @@ requires-dist = [
     { name = "mypy-boto3-bedrock-runtime", marker = "extra == 'models'", specifier = ">=1.40.41" },
     { name = "nest-asyncio", specifier = ">=1.6.0" },
     { name = "numpy", marker = "extra == 'embeddings'", specifier = ">=2.2.6" },
+    { name = "numpy", marker = "extra == 'faiss'", specifier = ">=2.2.6" },
     { name = "onnxruntime", marker = "python_full_version < '3.14' and extra == 'embeddings'", specifier = ">=1.22.1" },
     { name = "openai", specifier = ">=2.2.0" },
     { name = "openai", marker = "extra == 'embeddings'", specifier = ">=2.1.0" },
@@ -8362,6 +8426,8 @@ requires-dist = [
     { name = "pandas", marker = "extra == 'tools'", specifier = ">=2.3.2" },
     { name = "pdf2image", marker = "extra == 'ocr'", specifier = ">=1.17.0" },
     { name = "pdfplumber", marker = "extra == 'loaders'", specifier = ">=0.11.7" },
+    { name = "pdfplumber", marker = "extra == 'pdfplumber-loader'", specifier = ">=0.11.7" },
+    { name = "pgvector", marker = "extra == 'pgvector'", specifier = ">=0.4.1" },
     { name = "pgvector", marker = "extra == 'vectordb'", specifier = ">=0.4.1" },
     { name = "pillow", marker = "extra == 'loaders'", specifier = ">=11.3.0" },
     { name = "pillow", marker = "extra == 'ocr'", specifier = ">=11.3.0" },
@@ -8371,6 +8437,7 @@ requires-dist = [
     { name = "pinecone-text", marker = "python_full_version < '3.14' and extra == 'vectordb'", specifier = ">=0.11.0" },
     { name = "protobuf", specifier = ">=5.27.2,<6.0.0" },
     { name = "psutil", specifier = "==6.1.1" },
+    { name = "psycopg", marker = "extra == 'pgvector'", specifier = ">=3.2.9" },
     { name = "psycopg", marker = "extra == 'vectordb'", specifier = ">=3.2.9" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres-storage'", specifier = ">=3.2.9" },
     { name = "psycopg2-binary", marker = "extra == 'postgres-storage'", specifier = ">=2.9.10" },
@@ -8380,21 +8447,30 @@ requires-dist = [
     { name = "pymilvus", extras = ["milvus-lite"], marker = "extra == 'vectordb'", specifier = ">=2.6.1" },
     { name = "pymongo", marker = "extra == 'mongo-storage'", specifier = ">=4.9.0" },
     { name = "pymupdf", marker = "extra == 'loaders'", specifier = ">=1.26.4" },
+    { name = "pymupdf", marker = "extra == 'pymupdf-loader'", specifier = ">=1.26.4" },
     { name = "pypdf", marker = "extra == 'loaders'", specifier = ">=6.1.1" },
+    { name = "pypdf", marker = "extra == 'pdf-loader'", specifier = ">=6.1.1" },
     { name = "pytesseract", marker = "extra == 'ocr'", specifier = ">=0.3.13" },
+    { name = "python-docx", marker = "extra == 'docx-loader'", specifier = ">=1.2.0" },
     { name = "python-docx", marker = "extra == 'loaders'", specifier = ">=1.2.0" },
     { name = "python-dotenv", specifier = ">=1.0.1" },
     { name = "python-frontmatter", marker = "extra == 'loaders'", specifier = ">=1.1.0" },
+    { name = "python-frontmatter", marker = "extra == 'markdown-loader'", specifier = ">=1.1.0" },
     { name = "python-multipart", marker = "extra == 'web'", specifier = ">=0.0.20" },
     { name = "pyyaml", marker = "extra == 'loaders'", specifier = ">=6.0.2" },
+    { name = "pyyaml", marker = "extra == 'yaml-loader'", specifier = ">=6.0.2" },
     { name = "qdrant-client", marker = "extra == 'qdrant'", specifier = ">=1.12.1" },
     { name = "qdrant-client", marker = "extra == 'vectordb'", specifier = ">=1.12.1" },
     { name = "rapidocr-onnxruntime", marker = "python_full_version < '3.13' and extra == 'loaders'", specifier = ">=1.4.4" },
     { name = "rapidocr-onnxruntime", marker = "python_full_version < '3.13' and extra == 'ocr'", specifier = ">=1.4.4" },
+    { name = "rapidocr-onnxruntime", marker = "python_full_version < '3.13' and extra == 'pdf-loader'", specifier = ">=1.4.4" },
+    { name = "rapidocr-onnxruntime", marker = "python_full_version < '3.13' and extra == 'pdfplumber-loader'", specifier = ">=1.4.4" },
+    { name = "rapidocr-onnxruntime", marker = "python_full_version < '3.13' and extra == 'pymupdf-loader'", specifier = ">=1.4.4" },
     { name = "redis", marker = "extra == 'redis-storage'", specifier = ">=5.2.1" },
     { name = "reportlab", marker = "extra == 'vectordb'", specifier = ">=4.1.0" },
     { name = "requests", specifier = ">=2.32.5" },
     { name = "requests", marker = "extra == 'embeddings'", specifier = ">=2.32.5" },
+    { name = "requests", marker = "extra == 'html-loader'", specifier = ">=2.32.5" },
     { name = "requests", marker = "extra == 'loaders'", specifier = ">=2.32.5" },
     { name = "rich", specifier = ">=13.9.4" },
     { name = "scikit-learn", marker = "extra == 'vectordb'", specifier = ">=1.4.0" },
@@ -8402,6 +8478,7 @@ requires-dist = [
     { name = "sentry-sdk", extras = ["opentelemetry"], specifier = ">=2.35.0" },
     { name = "slack-sdk", marker = "extra == 'custom-tools'", specifier = ">=3.38.0" },
     { name = "slack-sdk", marker = "extra == 'slack-interface'", specifier = ">=3.39.0" },
+    { name = "sqlalchemy", marker = "extra == 'pgvector'", specifier = ">=2.0.44" },
     { name = "sqlalchemy", marker = "extra == 'postgres-storage'", specifier = ">=2.0.42" },
     { name = "sqlalchemy", marker = "extra == 'sqlite-storage'", specifier = ">=2.0.42" },
     { name = "sqlalchemy", marker = "extra == 'vectordb'", specifier = ">=2.0.44" },
@@ -8423,7 +8500,7 @@ requires-dist = [
     { name = "weaviate-client", marker = "extra == 'weaviate'", specifier = ">=4.16.9" },
     { name = "yfinance", marker = "extra == 'tools'", specifier = ">=0.2.66" },
 ]
-provides-extras = ["chroma", "qdrant", "milvus", "weaviate", "pinecone", "vectordb", "sqlite-storage", "redis-storage", "postgres-storage", "mongo-storage", "mem0-storage", "storage", "models", "embeddings", "loaders", "tools", "web", "ocr", "custom-tools", "gmail-interface", "safety-engine", "slack-interface"]
+provides-extras = ["chroma", "qdrant", "milvus", "weaviate", "pinecone", "faiss", "pgvector", "vectordb", "sqlite-storage", "redis-storage", "postgres-storage", "mongo-storage", "mem0-storage", "storage", "models", "embeddings", "csv-loader", "docling-loader", "docx-loader", "html-loader", "json-loader", "markdown-loader", "pdf-loader", "pdfplumber-loader", "pymupdf-loader", "text-loader", "xml-loader", "yaml-loader", "loaders", "tools", "web", "ocr", "custom-tools", "gmail-interface", "safety-engine", "slack-interface"]
 
 [package.metadata.requires-dev]
 dev = [

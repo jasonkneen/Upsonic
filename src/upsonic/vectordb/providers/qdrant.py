@@ -74,7 +74,7 @@ class QdrantProvider(BaseVectorDBProvider):
             from upsonic.utils.printing import import_error
             import_error(
                 package_name="qdrant-client",
-                install_command='pip install "upsonic[rag]"',
+                install_command='pip install "upsonic[qdrant]"',
                 feature_name="Qdrant vector database provider"
             )
 

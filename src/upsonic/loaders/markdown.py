@@ -46,14 +46,14 @@ class MarkdownLoader(BaseLoader):
             from upsonic.utils.printing import import_error
             import_error(
                 package_name="python-frontmatter",
-                install_command='pip install "upsonic[loaders]"',
+                install_command='pip install "upsonic[markdown-loader]"',
                 feature_name="Markdown loader"
             )
         if not _MARKDOWN_IT_AVAILABLE:
             from upsonic.utils.printing import import_error
             import_error(
                 package_name="markdown-it-py",
-                install_command='pip install "upsonic[loaders]"',
+                install_command='pip install "upsonic[markdown-loader]"',
                 feature_name="Markdown loader"
             )
         super().__init__(config)

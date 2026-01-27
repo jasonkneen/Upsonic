@@ -37,7 +37,7 @@ class XMLLoader(BaseLoader):
             from upsonic.utils.printing import import_error
             import_error(
                 package_name="lxml",
-                install_command='pip install "upsonic[loaders]"',
+                install_command='pip install "upsonic[xml-loader]"',
                 feature_name="XML loader"
             )
         super().__init__(config)

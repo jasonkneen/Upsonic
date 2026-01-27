@@ -106,7 +106,7 @@ class WeaviateProvider(BaseVectorDBProvider):
             from upsonic.utils.printing import import_error
             import_error(
                 package_name="weaviate-client",
-                install_command='pip install "upsonic[rag]"',
+                install_command='pip install "upsonic[weaviate]"',
                 feature_name="Weaviate vector database provider"
             )
         

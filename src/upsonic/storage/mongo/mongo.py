@@ -25,12 +25,6 @@ except ImportError:
     ReturnDocument = None  # type: ignore
     ReplaceOne = None  # type: ignore
 
-if not PYMONGO_AVAILABLE:
-    raise ImportError(
-        "`pymongo` is not installed. "
-        "Please install it using `pip install -U pymongo`"
-    )
-
 from upsonic.storage.base import Storage
 from upsonic.storage.mongo.utils import (
     apply_pagination,
@@ -95,6 +89,14 @@ class MongoStorage(Storage):
             ValueError: If neither db_url nor db_client is provided.
             ImportError: If pymongo is not installed.
         """
+        if not PYMONGO_AVAILABLE:
+            from upsonic.utils.printing import import_error
+            import_error(
+                package_name="pymongo",
+                install_command='pip install "upsonic[mongo-storage]"',
+                feature_name="MongoDB storage provider"
+            )
+        
         super().__init__(
             session_table=session_collection,
             user_memory_table=user_memory_collection,

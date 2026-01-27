@@ -20,10 +20,17 @@ try:
     from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
     from sqlalchemy.schema import Index
 except ImportError:
-    raise ImportError(
-        "`sqlalchemy` not installed. Please install it using "
-        "`pip install sqlalchemy asyncpg`"
-    )
+    Column = None  # type: ignore
+    MetaData = None  # type: ignore
+    Table = None  # type: ignore
+    func = None  # type: ignore
+    select = None  # type: ignore
+    text = None  # type: ignore
+    postgresql = None  # type: ignore
+    AsyncEngine = None  # type: ignore
+    async_sessionmaker = None  # type: ignore
+    create_async_engine = None  # type: ignore
+    Index = None  # type: ignore
 
 from upsonic.storage.base import AsyncStorage
 from upsonic.storage.postgres.schemas import get_table_schema_definition
@@ -102,6 +109,14 @@ class AsyncPostgresStorage(AsyncStorage):
             ValueError: If neither db_url nor db_engine is provided.
             ImportError: If sqlalchemy or asyncpg is not installed.
         """
+        if Column is None or AsyncEngine is None:
+            from upsonic.utils.printing import import_error
+            import_error(
+                package_name="sqlalchemy asyncpg",
+                install_command='pip install "upsonic[postgres-storage]"',
+                feature_name="PostgreSQL async storage provider"
+            )
+        
         super().__init__(
             session_table=session_table,
             user_memory_table=user_memory_table,

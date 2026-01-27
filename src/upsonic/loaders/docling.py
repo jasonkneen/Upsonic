@@ -78,9 +78,11 @@ class DoclingLoader(BaseLoader):
         if config is None:
             config = DoclingLoaderConfig()
         if not DOCLING_AVAILABLE:
-            raise ImportError(
-                "The docling package is required to use DoclingLoader. "
-                "Please install it using: pip install docling"
+            from upsonic.utils.printing import import_error
+            import_error(
+                package_name="docling",
+                install_command='pip install "upsonic[docling-loader]"',
+                feature_name="Docling loader"
             )
         
         super().__init__(config)

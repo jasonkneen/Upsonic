@@ -1,5 +1,7 @@
 import warnings
 import importlib
+import os
+from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
@@ -14,7 +16,15 @@ __version__ = "0.1.0"
 
 _lazy_imports = {}
 
-load_dotenv()
+# Load .env file from current working directory (where user runs their script)
+# This ensures .env is found even when package is installed in site-packages
+cwd = Path(os.getcwd())
+env_path = cwd / ".env"
+if env_path.exists():
+    load_dotenv(env_path, override=False)
+else:
+    # Fallback: search from current directory upwards (default behavior)
+    load_dotenv(override=False)
 
 def _lazy_import(module_name: str, class_name: str = None):
     """Lazy import function to defer heavy imports until actually needed."""
