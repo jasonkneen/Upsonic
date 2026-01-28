@@ -50,7 +50,7 @@ class PyMuPDFLoader(BaseLoader):
             from upsonic.utils.printing import import_error
             import_error(
                 package_name="pymupdf",
-                install_command='pip install "upsonic[loaders]"',
+                install_command='pip install "upsonic[pymupdf-loader]"',
                 feature_name="PyMuPDF loader"
             )
         super().__init__(config)
@@ -60,7 +60,7 @@ class PyMuPDFLoader(BaseLoader):
             from upsonic.utils.printing import import_error
             import_error(
                 package_name="rapidocr-onnxruntime",
-                install_command='pip install "upsonic[loaders]"',
+                install_command='pip install "upsonic[pymupdf-loader]"',
                 feature_name="PyMuPDF OCR functionality"
             )
 

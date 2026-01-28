@@ -17,9 +17,18 @@ try:
     from sqlalchemy.orm import scoped_session, sessionmaker
     from sqlalchemy.schema import Index
 except ImportError:
-    raise ImportError(
-        "`sqlalchemy` not installed. Please install it using `pip install sqlalchemy`"
-    )
+    Column = None  # type: ignore
+    MetaData = None  # type: ignore
+    Table = None  # type: ignore
+    func = None  # type: ignore
+    select = None  # type: ignore
+    text = None  # type: ignore
+    sqlite = None  # type: ignore
+    Engine = None  # type: ignore
+    create_engine = None  # type: ignore
+    scoped_session = None  # type: ignore
+    sessionmaker = None  # type: ignore
+    Index = None  # type: ignore
 
 from upsonic.storage.base import Storage
 from upsonic.storage.schemas import UserMemory
@@ -84,6 +93,14 @@ class SqliteStorage(Storage):
         Raises:
             ImportError: If sqlalchemy is not installed.
         """
+        if Column is None or Engine is None:
+            from upsonic.utils.printing import import_error
+            import_error(
+                package_name="sqlalchemy",
+                install_command='pip install "upsonic[sqlite-storage]"',
+                feature_name="SQLite storage provider"
+            )
+        
         super().__init__(
             session_table=session_table,
             user_memory_table=user_memory_table,

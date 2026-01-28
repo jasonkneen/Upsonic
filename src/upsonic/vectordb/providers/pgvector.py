@@ -114,7 +114,7 @@ class PgVectorProvider(BaseVectorDBProvider):
             from upsonic.utils.printing import import_error
             import_error(
                 package_name="sqlalchemy psycopg pgvector",
-                install_command='pip install "upsonic[rag]"',
+                install_command='pip install "upsonic[pgvector]"',
                 feature_name="PGVector vector database provider"
             )
         
@@ -1137,11 +1137,14 @@ class PgVectorProvider(BaseVectorDBProvider):
                         # Order by distance
                         stmt = stmt.order_by('distance')
                         
-                        # Apply similarity threshold if provided
-                        if final_similarity_threshold is not None:
+                        # Apply similarity threshold if provided and > 0
+                        # threshold=0 means "no threshold", accept any result
+                        if final_similarity_threshold is not None and final_similarity_threshold > 0.0:
                             # Convert similarity to distance based on metric
                             max_distance = self._similarity_to_distance(final_similarity_threshold)
-                            stmt = stmt.where(distance_col <= max_distance)
+                            # Only apply filter if it's a valid finite value
+                            if max_distance != float('inf') and max_distance != float('-inf'):
+                                stmt = stmt.where(distance_col <= max_distance)
                         
                         # Limit results
                         stmt = stmt.limit(top_k)
@@ -1426,13 +1429,30 @@ class PgVectorProvider(BaseVectorDBProvider):
         
         rows = await asyncio.to_thread(_search)
         
-        # Convert to VectorSearchResult
+        # Collect raw scores for normalization
+        raw_scores = [float(row.hybrid_score) for row in rows]
+        
+        # Normalize scores to [0, 1] range
+        if raw_scores:
+            max_score = max(raw_scores)
+            min_score = min(raw_scores)
+            score_range = max_score - min_score
+        
+        # Convert to VectorSearchResult with normalized scores
         results = []
-        for row in rows:
+        for i, row in enumerate(rows):
+            if score_range > 0:
+                normalized_score = (raw_scores[i] - min_score) / score_range
+            else:
+                normalized_score = 1.0 if raw_scores else 0.0
+            
+            # Clamp to [0, 1] for safety
+            normalized_score = max(0.0, min(1.0, normalized_score))
+            
             results.append(
                 VectorSearchResult(
                     id=row.content_id,
-                    score=float(row.hybrid_score),
+                    score=normalized_score,
                     payload=self._row_to_payload(row),
                     vector=list(row.embedding) if row.embedding is not None else None,
                     text=row.content
@@ -1489,6 +1509,21 @@ class PgVectorProvider(BaseVectorDBProvider):
             if doc_id in text_ranks:
                 score += 1.0 / (k + text_ranks[doc_id])
             rrf_scores[doc_id] = score
+        
+        # Normalize RRF scores to [0, 1] range using min-max normalization
+        # This preserves ranking order while ensuring scores are in valid range
+        if rrf_scores:
+            max_score = max(rrf_scores.values())
+            min_score = min(rrf_scores.values())
+            score_range = max_score - min_score
+            if score_range > 0:
+                rrf_scores = {
+                    doc_id: (score - min_score) / score_range 
+                    for doc_id, score in rrf_scores.items()
+                }
+            else:
+                # All scores are the same, normalize to 1.0
+                rrf_scores = {doc_id: 1.0 for doc_id in rrf_scores}
         
         # Sort by RRF score
         sorted_ids = sorted(rrf_scores.keys(), key=lambda x: rrf_scores[x], reverse=True)
@@ -1573,28 +1608,51 @@ class PgVectorProvider(BaseVectorDBProvider):
     def _distance_to_similarity(self, distance: float) -> float:
         """Convert distance to similarity score (0-1 range)."""
         if self._config.distance_metric == DistanceMetric.DOT_PRODUCT:
-            # Inner product: higher is better, normalize to 0-1
-            return (distance + 1.0) / 2.0
-        else:
+            # Inner product: higher is better
+            # Use sigmoid normalization to map any range to [0, 1]
+            # This preserves ranking order and handles any input range
+            import math
+            return 1.0 / (1.0 + math.exp(-distance))
+        elif self._config.distance_metric == DistanceMetric.COSINE:
+            # Cosine distance: 0 = identical, 2 = opposite
+            # Convert to similarity: 1 - (distance / 2)
+            return max(0.0, min(1.0, 1.0 - (distance / 2.0)))
+        else:  # EUCLIDEAN
             # Distance metrics: lower is better, invert
             return 1.0 / (1.0 + distance)
 
     def _similarity_to_distance(self, similarity: float) -> float:
-        """Convert similarity score to distance."""
+        """Convert similarity score to distance threshold."""
+        import math
+        
+        # Edge case: similarity <= 0 means "no threshold" - return infinity
+        if similarity <= 0.0:
+            return float('inf')
+        
         if self._config.distance_metric == DistanceMetric.DOT_PRODUCT:
-            # Reverse the normalization
-            return (similarity * 2.0) - 1.0
-        else:
+            # Reverse sigmoid: distance = -ln(1/similarity - 1)
+            if similarity >= 1.0:
+                return float('inf')  # All results match
+            return -math.log((1.0 / similarity) - 1.0)
+        elif self._config.distance_metric == DistanceMetric.COSINE:
+            # Reverse: distance = (1 - similarity) * 2
+            return (1.0 - similarity) * 2.0
+        else:  # EUCLIDEAN
             # Reverse the inversion
             return (1.0 / similarity) - 1.0
 
     def _distance_to_similarity_expression(self, distance_col):
-        """Create a SQL expression to convert distance to similarity."""
+        """Create a SQL expression to convert distance to similarity (always 0-1 range)."""
         if self._config.distance_metric == DistanceMetric.DOT_PRODUCT:
-            # Normalize inner product to 0-1
-            return (distance_col + 1.0) / 2.0
-        else:
-            # Invert distance
+            # Use sigmoid normalization: 1 / (1 + exp(-x))
+            # This maps any input range to [0, 1] while preserving ranking
+            return 1.0 / (1.0 + func.exp(-distance_col))
+        elif self._config.distance_metric == DistanceMetric.COSINE:
+            # Cosine distance is in [0, 2], convert to similarity [0, 1]
+            # Use GREATEST and LEAST for clamping
+            return func.greatest(0.0, func.least(1.0, 1.0 - (distance_col / 2.0)))
+        else:  # EUCLIDEAN
+            # Invert distance: 1 / (1 + distance)
             return 1.0 / (1.0 + distance_col)
 
     def _process_text_query(self, query: str) -> str:
@@ -1663,17 +1721,19 @@ class PgVectorProvider(BaseVectorDBProvider):
             f"ef_construction={config.ef_construction}"
         )
         
+        # DDL statements don't support bind parameters, use direct formatting
+        # Values are validated integers from HNSWIndexConfig, safe to format directly
+        m_val = int(config.m)
+        ef_val = int(config.ef_construction)
+        
         create_sql = text(
             f'CREATE INDEX "{self._vector_index_name}" '
             f'ON {self.schema_name}.{self.table_name} '
             f'USING hnsw (embedding {distance_op}) '
-            f'WITH (m = :m, ef_construction = :ef_construction);'
+            f'WITH (m = {m_val}, ef_construction = {ef_val});'
         )
         
-        session.execute(
-            create_sql,
-            {'m': config.m, 'ef_construction': config.ef_construction}
-        )
+        session.execute(create_sql)
 
     def _create_ivfflat_index(self, session: Session, distance_op: str) -> None:
         """Create IVFFlat index."""
@@ -1684,14 +1744,18 @@ class PgVectorProvider(BaseVectorDBProvider):
         
         logger.debug(f"Creating IVFFlat index with lists={num_lists}")
         
+        # DDL statements don't support bind parameters, use direct formatting
+        # Value is validated integer, safe to format directly
+        lists_val = int(num_lists)
+        
         create_sql = text(
             f'CREATE INDEX "{self._vector_index_name}" '
             f'ON {self.schema_name}.{self.table_name} '
             f'USING ivfflat (embedding {distance_op}) '
-            f'WITH (lists = :lists);'
+            f'WITH (lists = {lists_val});'
         )
         
-        session.execute(create_sql, {'lists': num_lists})
+        session.execute(create_sql)
 
     def _calculate_ivfflat_lists(self, session: Session) -> int:
         """
@@ -1737,15 +1801,17 @@ class PgVectorProvider(BaseVectorDBProvider):
                 with self._session_factory() as session:
                     with session.begin():
                         logger.debug("Creating GIN index for full-text search")
+                        # DDL statements don't support bind parameters
+                        # Language is a configuration string, safe to format directly
+                        language = self._config.content_language
+                        # Sanitize language to only allow alphanumeric and underscore
+                        safe_language = ''.join(c for c in language if c.isalnum() or c == '_')
                         create_sql = text(
                             f'CREATE INDEX "{self._gin_index_name}" '
                             f'ON {self.schema_name}.{self.table_name} '
-                            f'USING GIN (to_tsvector(:language, content));'
+                            f"USING GIN (to_tsvector('{safe_language}', content));"
                         )
-                        session.execute(
-                            create_sql,
-                            {'language': self._config.content_language}
-                        )
+                        session.execute(create_sql)
             
             await asyncio.to_thread(_create)
             logger.info(f"Created GIN index '{self._gin_index_name}'")

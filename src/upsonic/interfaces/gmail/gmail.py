@@ -2,7 +2,7 @@ import asyncio
 import os
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Header, status
+from fastapi import APIRouter, HTTPException, Header, Query, status
 
 from upsonic.interfaces.base import Interface
 from upsonic.interfaces.gmail.schemas import CheckEmailsResponse, AgentEmailResponse
@@ -80,7 +80,7 @@ class GmailInterface(Interface):
 
         @router.post("/check", response_model=CheckEmailsResponse, summary="Check and Process Emails")
         async def check_emails(
-            count: int = 10,
+            count: int = Query(3, ge=1, description="Maximum number of emails to process"),
             x_upsonic_gmail_secret: Optional[str] = Header(None, alias="X-Upsonic-Gmail-Secret")
         ):
             """

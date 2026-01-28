@@ -30,6 +30,10 @@ class BaseVectorDBProvider(ABC):
     - Seamless integration with modern async frameworks
     - Consistency across all provider implementations
     """
+    
+    # Class-level persistent event loop for sync operations
+    _sync_loop: Optional[asyncio.AbstractEventLoop] = None
+    _sync_loop_thread: Optional[Any] = None
 
     def __init__(self, config: Union[BaseVectorDBConfig, Dict[str, Any]]):
         """
@@ -43,19 +47,30 @@ class BaseVectorDBProvider(ABC):
         self._client: Any = None
         self._async_client: Any = None
         self._is_connected: bool = False
+        # Instance-level event loop for sync operations
+        self._instance_sync_loop: Optional[asyncio.AbstractEventLoop] = None
 
         self.name = self._config.provider_name
         self.description = self._config.provider_description
         self.id = self._config.provider_id or self._generate_provider_id()
         info_log(f"Initializing {self.__class__.__name__} for collection '{self._config.collection_name}'.", context="BaseVectorDBProvider")
     
+    def _get_sync_loop(self) -> asyncio.AbstractEventLoop:
+        """Get or create a persistent event loop for sync operations."""
+        if self._instance_sync_loop is None or self._instance_sync_loop.is_closed():
+            self._instance_sync_loop = asyncio.new_event_loop()
+        return self._instance_sync_loop
+    
     def _run_async_from_sync(self, awaitable: Awaitable[T]) -> T:
         """
-        Executes an awaitable from a synchronous method, managing the event loop intelligently.
+        Executes an awaitable from a synchronous method, using a persistent event loop.
         
-        This helper method handles the case where there's already a running event loop
-        (e.g., in Jupyter notebooks or async frameworks) by running the coroutine in a
-        separate thread with a new event loop.
+        This helper method uses a persistent event loop for sync operations to ensure
+        async clients (like AsyncMilvusClient) remain bound to the same loop across
+        multiple sync method calls.
+        
+        When there's already a running event loop (e.g., in Jupyter notebooks or 
+        async frameworks), it runs the coroutine in a separate thread.
         
         Args:
             awaitable: The coroutine or other awaitable object to run.
@@ -66,12 +81,17 @@ class BaseVectorDBProvider(ABC):
         try:
             loop = asyncio.get_running_loop()
             # There's a running event loop, need to run in a separate thread
-            with ThreadPoolExecutor() as executor:
-                future = executor.submit(asyncio.run, awaitable)
+            # Use a dedicated thread with its own persistent loop
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                def run_in_thread() -> T:
+                    thread_loop = self._get_sync_loop()
+                    return thread_loop.run_until_complete(awaitable)
+                future = executor.submit(run_in_thread)
                 return future.result()
         except RuntimeError:
-            # No running event loop, safe to use asyncio.run()
-            return asyncio.run(awaitable)
+            # No running event loop, use persistent instance loop
+            loop = self._get_sync_loop()
+            return loop.run_until_complete(awaitable)
 
     @abstractmethod
     async def connect(self) -> None:

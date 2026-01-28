@@ -206,9 +206,11 @@ class AsyncMem0Storage(AsyncStorage):
         try:
             from mem0 import AsyncMemory, AsyncMemoryClient
         except ImportError:
-            raise ImportError(
-                "mem0 library is not installed. Please install it using "
-                "`pip install mem0ai`"
+            from upsonic.utils.printing import import_error
+            import_error(
+                package_name="mem0ai",
+                install_command='pip install "upsonic[mem0-storage]"',
+                feature_name="Mem0 async storage provider"
             )
         
         # 2. Create AsyncMemoryClient if api_key provided (or from env)

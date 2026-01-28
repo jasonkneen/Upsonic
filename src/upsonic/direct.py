@@ -359,6 +359,10 @@ class Direct:
         
         model = self._prepare_model()
         
+        # Ensure price_id is set for cost tracking
+        task.price_id_ = None
+        _ = task.price_id  # This will auto-generate if None
+        
         # Get response format name
         response_format_name = "str"
         if task.response_format and task.response_format != str:
@@ -377,6 +381,7 @@ class Direct:
             )
         
         start_time = time.time()
+        task.start_time = int(start_time)
         
         try:
             # Build messages from task (pass state for Graph context support)
@@ -394,20 +399,37 @@ class Direct:
             )
             
             end_time = time.time()
+            task.end_time = int(end_time)
             
             # Extract output
             result = self._extract_output(response, task)
             
-            # Show completion message with metrics
+            # Set task response
+            task._response = result
+            
+            # Get usage information
+            usage = {
+                'input_tokens': response.usage.input_tokens if hasattr(response, 'usage') and response.usage else 0,
+                'output_tokens': response.usage.output_tokens if hasattr(response, 'usage') and response.usage else 0
+            }
+            
+            # Track usage in price_id_summary via call_end
+            from upsonic.utils.printing import call_end
+            call_end(
+                result=result,
+                model=model,
+                response_format=task.response_format if task.response_format is not None else str,
+                start_time=start_time,
+                end_time=end_time,
+                usage=usage,
+                tool_usage=[],
+                debug=False,
+                price_id=task.price_id
+            )
+            
+            # Show completion message with metrics (optional, for display)
             if show_output:
                 from upsonic.utils.printing import direct_completed
-                
-                # Get usage information
-                usage = {
-                    'input_tokens': response.usage.input_tokens if hasattr(response, 'usage') and response.usage else 0,
-                    'output_tokens': response.usage.output_tokens if hasattr(response, 'usage') and response.usage else 0
-                }
-                
                 direct_completed(
                     result=result,
                     model=model,

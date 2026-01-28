@@ -38,18 +38,8 @@ except ImportError:
 try:
     from pymongo import ReturnDocument, ReplaceOne
 except ImportError:
-    raise ImportError(
-        "`pymongo` not installed. Please install it using `pip install -U pymongo`"
-    )
-
-# Ensure at least one async library is available
-if not MOTOR_AVAILABLE and not PYMONGO_ASYNC_AVAILABLE:
-    raise ImportError(
-        "Neither `motor` nor PyMongo async is installed. "
-        "Please install one of them using:\n"
-        "  - `pip install -U 'pymongo>=4.9'` (recommended)\n"
-        "  - `pip install -U motor` (legacy)\n"
-    )
+    ReturnDocument = None  # type: ignore
+    ReplaceOne = None  # type: ignore
 
 from upsonic.storage.base import AsyncStorage
 from upsonic.storage.mongo.utils import (
@@ -196,6 +186,22 @@ class AsyncMongoStorage(AsyncStorage):
                        or if db_client type is unsupported.
             ImportError: If neither motor nor pymongo async is installed.
         """
+        if not PYMONGO_ASYNC_AVAILABLE:
+            from upsonic.utils.printing import import_error
+            import_error(
+                package_name="pymongo",
+                install_command='pip install "upsonic[mongo-storage]"',
+                feature_name="MongoDB async storage provider"
+            )
+        
+        if not MOTOR_AVAILABLE and not PYMONGO_ASYNC_AVAILABLE:
+            from upsonic.utils.printing import import_error
+            import_error(
+                package_name="pymongo or motor",
+                install_command='pip install "upsonic[mongo-storage]"',
+                feature_name="MongoDB async storage provider"
+            )
+        
         super().__init__(
             session_table=session_collection,
             user_memory_table=user_memory_collection,

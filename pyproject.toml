@@ -4,7 +4,8 @@ version = "0.70.0"
 description = "Agent Framework For Fintech"
 readme = "README.md"
 authors = [
-    { name = "Onur ULUSOY", email = "onur@upsonic.co" }
+    { name = "Onur ULUSOY", email = "onur@upsonic.co" },
+    { name = "Dogan Keskin", email = "dogan@upsonic.co" }
 ]
 requires-python = ">=3.10"
 dependencies = [
@@ -33,6 +34,31 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+chroma = [
+    "chromadb>=1.0.20; python_version < '3.14'",
+]
+qdrant = [
+    "qdrant-client>=1.12.1",
+]
+milvus = [
+    "pymilvus>=2.6.1",
+]
+weaviate = [
+    "weaviate-client>=4.16.9",
+]
+pinecone = [
+    "pinecone>=7.3.0",
+    "pinecone-text>=0.11.0; python_version < '3.14'",
+]
+faiss = [
+    "faiss-cpu>=1.12.0",
+    "numpy>=2.2.6",
+]
+pgvector = [
+    "psycopg>=3.2.9",
+    "pgvector>=0.4.1",
+    "sqlalchemy>=2.0.44",
+]
 vectordb = [
     "chromadb>=1.0.20; python_version < '3.14'",
     "faiss-cpu>=1.12.0",
@@ -49,16 +75,35 @@ vectordb = [
     "pinecone-text>=0.11.0; python_version < '3.14'",
 ]
 
-storage = [
+sqlite-storage = [
+    "sqlalchemy>=2.0.42",
     "aiosqlite>=0.21.0",
-    "asyncpg>=0.30.0",
     "greenlet>=3.2.3",
-    "motor>=3.7.1",
+]
+redis-storage = [
+    "redis>=5.2.1",
+]
+postgres-storage = [
+    "sqlalchemy>=2.0.42",
     "psycopg2-binary>=2.9.10",
     "psycopg[binary]>=3.2.9",
+    "asyncpg>=0.30.0",
+    "greenlet>=3.2.3",
+]
+mongo-storage = [
+    "pymongo>=4.9.0",
+    "motor>=3.7.1",
+]
+mem0-storage = [
     "mem0ai>=0.1.116",
-    "redis>=5.2.1",
-    "sqlalchemy>=2.0.42",
+]
+
+storage = [
+    "upsonic[sqlite-storage]",
+    "upsonic[redis-storage]",
+    "upsonic[postgres-storage]",
+    "upsonic[mongo-storage]",
+    "upsonic[mem0-storage]",
 ]
 models = [
     "anthropic>=0.69.0",
@@ -95,6 +140,49 @@ embeddings = [
     "torch>=2.8.0",
     "transformers>=4.57.0",
 ]
+csv-loader = [
+    "aiofiles>=24.1.0",
+]
+docling-loader = [
+    "docling>=2.55.1",
+]
+docx-loader = [
+    "python-docx>=1.2.0",
+]
+html-loader = [
+    "aiohttp>=3.12.15",
+    "beautifulsoup4>=4.14.2",
+    "requests>=2.32.5",
+]
+json-loader = [
+    "jq>=1.10.0",
+]
+markdown-loader = [
+    "markdown-it-py>=4.0.0",
+    "python-frontmatter>=1.1.0",
+]
+pdf-loader = [
+    "pypdf>=6.1.1",
+    "rapidocr-onnxruntime>=1.4.4; python_version < '3.13'",
+]
+pdfplumber-loader = [
+    "pdfplumber>=0.11.7",
+    "rapidocr-onnxruntime>=1.4.4; python_version < '3.13'",
+]
+pymupdf-loader = [
+    "pymupdf>=1.26.4",
+    "rapidocr-onnxruntime>=1.4.4; python_version < '3.13'",
+]
+text-loader = [
+    "aiofiles>=24.1.0",
+]
+xml-loader = [
+    "lxml>=4.9.1",
+]
+yaml-loader = [
+    "jq>=1.10.0",
+    "pyyaml>=6.0.2",
+]
 loaders = [
     "aiofiles>=24.1.0",
     "aiohttp>=3.12.15",
@@ -124,6 +212,7 @@ tools = [
 ]
 web = [
     "celery>=5.5.3",
+    "fastapi",
     "python-multipart>=0.0.20",
     "uvicorn>=0.35.0",
 ]
@@ -139,8 +228,18 @@ ocr = [
 custom-tools = [
     "slack-sdk>=3.38.0",
 ]
+gmail-interface = [
+    "fastapi",
+    "google-api-python-client",
+    "google-auth-httplib2",
+    "google-auth-oauthlib",
+]
 safety-engine = [
     "detoxify>=0.5.2",
+]
+slack-interface = [
+    "fastapi>=0.128.0",
+    "slack-sdk>=3.39.0",
 ]
 
 [project.scripts]

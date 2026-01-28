@@ -92,7 +92,7 @@ class ChromaProvider(BaseVectorDBProvider):
             from upsonic.utils.printing import import_error
             import_error(
                 package_name="chromadb",
-                install_command='pip install "upsonic[rag]"',
+                install_command='pip install "upsonic[chroma]"',
                 feature_name="ChromaDB vector database provider"
             )
         

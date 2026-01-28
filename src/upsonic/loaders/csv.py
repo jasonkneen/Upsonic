@@ -34,7 +34,7 @@ class CSVLoader(BaseLoader):
             from upsonic.utils.printing import import_error
             import_error(
                 package_name="aiofiles",
-                install_command='pip install "upsonic[loaders]"',
+                install_command='pip install "upsonic[csv-loader]"',
                 feature_name="CSV loader"
             )
         super().__init__(config)

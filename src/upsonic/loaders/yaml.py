@@ -45,14 +45,14 @@ class YAMLLoader(BaseLoader):
             from upsonic.utils.printing import import_error
             import_error(
                 package_name="pyyaml",
-                install_command='pip install "upsonic[loaders]"',
+                install_command='pip install "upsonic[yaml-loader]"',
                 feature_name="YAML loader"
             )
         if not _JQ_AVAILABLE:
             from upsonic.utils.printing import import_error
             import_error(
                 package_name="jq",
-                install_command='pip install "upsonic[loaders]"',
+                install_command='pip install "upsonic[yaml-loader]"',
                 feature_name="YAML loader"
             )
         super().__init__(config)

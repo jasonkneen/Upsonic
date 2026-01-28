@@ -38,7 +38,7 @@ class TextLoader(BaseLoader):
             from upsonic.utils.printing import import_error
             import_error(
                 package_name="aiofiles",
-                install_command='pip install "upsonic[loaders]"',
+                install_command='pip install "upsonic[text-loader]"',
                 feature_name="text loader"
             )
         super().__init__(config)

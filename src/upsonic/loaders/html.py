@@ -51,21 +51,21 @@ class HTMLLoader(BaseLoader):
             from upsonic.utils.printing import import_error
             import_error(
                 package_name="aiohttp",
-                install_command='pip install "upsonic[loaders]"',
+                install_command='pip install "upsonic[html-loader]"',
                 feature_name="HTML loader"
             )
         if not _REQUESTS_AVAILABLE:
             from upsonic.utils.printing import import_error
             import_error(
                 package_name="requests",
-                install_command='pip install "upsonic[loaders]"',
+                install_command='pip install "upsonic[html-loader]"',
                 feature_name="HTML loader"
             )
         if not _BS4_AVAILABLE:
             from upsonic.utils.printing import import_error
             import_error(
                 package_name="beautifulsoup4",
-                install_command='pip install "upsonic[loaders]"',
+                install_command='pip install "upsonic[html-loader]"',
                 feature_name="HTML loader"
             )
         super().__init__(config)

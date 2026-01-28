@@ -54,8 +54,15 @@ from dotenv import load_dotenv
 import sentry_sdk
 from sentry_sdk.integrations.logging import LoggingIntegration
 
-# Load environment variables
-load_dotenv()
+# Load environment variables from current working directory (where user runs their script)
+# This ensures .env is found even when package is installed in site-packages
+cwd = Path(os.getcwd())
+env_path = cwd / ".env"
+if env_path.exists():
+    load_dotenv(env_path, override=False)
+else:
+    # Fallback: search from current directory upwards (default behavior)
+    load_dotenv(override=False)
 
 # Log level mapping
 LOG_LEVELS = {

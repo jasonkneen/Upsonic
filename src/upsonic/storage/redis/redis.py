@@ -127,10 +127,13 @@ class RedisStorage(Storage):
             try:
                 from redis import Redis
             except ImportError:
-                raise ImportError(
-                    "`redis` package not installed. "
-                    "Please install it using `pip install redis`"
+                from upsonic.utils.printing import import_error
+                import_error(
+                    package_name="redis",
+                    install_command='pip install "upsonic[redis-storage]"',
+                    feature_name="Redis storage provider"
                 )
+                raise  # This will never be reached, but for type checking
             self.redis_client = Redis.from_url(db_url, decode_responses=True)
         else:
             raise ValueError("Either redis_client or db_url must be provided")

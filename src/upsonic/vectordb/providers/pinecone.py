@@ -94,7 +94,7 @@ class PineconeProvider(BaseVectorDBProvider):
             from upsonic.utils.printing import import_error
             import_error(
                 package_name="pinecone",
-                install_command='pip install "upsonic[rag]"',
+                install_command='pip install "upsonic[pinecone]"',
                 feature_name="Pinecone vector database provider"
             )
 

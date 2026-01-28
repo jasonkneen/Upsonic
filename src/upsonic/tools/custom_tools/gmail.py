@@ -86,11 +86,48 @@ def authenticate(func):
     return wrapper
 
 
+def extract_email_address(email_string: str) -> str:
+    """
+    Extract the actual email address from a potentially formatted string.
+    
+    Handles formats like:
+    - "Display Name" <user@example.com>
+    - Display Name <user@example.com>
+    - user@example.com
+    
+    Args:
+        email_string: The email string which may contain a display name
+        
+    Returns:
+        The extracted email address
+    """
+    email_string = email_string.strip()
+    
+    # Try to extract email from angle brackets: "Name" <email> or Name <email>
+    angle_bracket_match = re.search(r'<([^>]+)>', email_string)
+    if angle_bracket_match:
+        return angle_bracket_match.group(1).strip()
+    
+    # No angle brackets, assume the whole string is the email
+    return email_string
+
+
 def validate_email(email: str) -> bool:
-    """Validate email format."""
-    email = email.strip()
+    """
+    Validate email format.
+    
+    Handles both plain emails and emails with display names.
+    
+    Args:
+        email: Email string (can include display name)
+        
+    Returns:
+        True if valid email format, False otherwise
+    """
+    # Extract the actual email address first
+    extracted_email = extract_email_address(email)
     pattern = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
-    return bool(re.match(pattern, email))
+    return bool(re.match(pattern, extracted_email))
 
 
 class GmailTools:
@@ -226,7 +263,7 @@ class GmailTools:
                     flow = InstalledAppFlow.from_client_secrets_file(str(creds_file), self.scopes)
                 else:
                     flow = InstalledAppFlow.from_client_config(client_config, self.scopes)
-                self.creds = flow.run_local_server(port=self.port)
+                self.creds = flow.run_local_server(port=self.port or 8080)
 
             # Save the credentials for future use
             if self.creds and self.creds.valid:

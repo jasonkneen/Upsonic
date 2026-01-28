@@ -37,7 +37,7 @@ class DOCXLoader(BaseLoader):
             from upsonic.utils.printing import import_error
             import_error(
                 package_name="python-docx",
-                install_command='pip install "upsonic[loaders]"',
+                install_command='pip install "upsonic[docx-loader]"',
                 feature_name="DOCX loader"
             )
         super().__init__(config)

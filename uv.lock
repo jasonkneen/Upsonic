@@ -246,6 +246,15 @@ wheels = [
 ]
 
 [[package]]
+name = "annotated-doc"
+version = "0.0.4"
+source = { registry = "https://pypi.org/simple/" }
+sdist = { url = "https://files.pythonhosted.org/packages/57/ba/046ceea27344560984e26a590f90bc7f4a75b06701f653222458922b558c/annotated_doc-0.0.4.tar.gz", hash = "sha256:fbcda96e87e9c92ad167c2e53839e57503ecfda18804ea28102353485033faa4", size = 7288, upload-time = "2025-11-10T22:07:42.062Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1e/d3/26bf1008eb3d2daa8ef4cacc7f3bfdc11818d111f7e2d0201bc6e3b49d45/annotated_doc-0.0.4-py3-none-any.whl", hash = "sha256:571ac1dc6991c450b25a9c2d84a3705e2ae7a53467b5d111c24fa8baabbed320", size = 5303, upload-time = "2025-11-10T22:07:40.673Z" },
+]
+
+[[package]]
 name = "annotated-types"
 version = "0.7.0"
 source = { registry = "https://pypi.org/simple/" }
@@ -1487,6 +1496,21 @@ wheels = [
 ]
 
 [[package]]
+name = "fastapi"
+version = "0.128.0"
+source = { registry = "https://pypi.org/simple/" }
+dependencies = [
+    { name = "annotated-doc" },
+    { name = "pydantic" },
+    { name = "starlette" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/52/08/8c8508db6c7b9aae8f7175046af41baad690771c9bcde676419965e338c7/fastapi-0.128.0.tar.gz", hash = "sha256:1cc179e1cef10a6be60ffe429f79b829dce99d8de32d7acb7e6c8dfdf7f2645a", size = 365682, upload-time = "2025-12-27T15:21:13.714Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5c/05/5cbb59154b093548acd0f4c7c474a118eda06da25aa75c616b72d8fcd92a/fastapi-0.128.0-py3-none-any.whl", hash = "sha256:aebd93f9716ee3b4f4fcfe13ffb7cf308d99c9f3ab5622d8877441072561582d", size = 103094, upload-time = "2025-12-27T15:21:12.154Z" },
+]
+
+[[package]]
 name = "fastavro"
 version = "1.12.1"
 source = { registry = "https://pypi.org/simple/" }
@@ -1832,6 +1856,38 @@ wheels = [
 ]
 
 [[package]]
+name = "google-api-core"
+version = "2.29.0"
+source = { registry = "https://pypi.org/simple/" }
+dependencies = [
+    { name = "google-auth" },
+    { name = "googleapis-common-protos" },
+    { name = "proto-plus" },
+    { name = "protobuf" },
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0d/10/05572d33273292bac49c2d1785925f7bc3ff2fe50e3044cf1062c1dde32e/google_api_core-2.29.0.tar.gz", hash = "sha256:84181be0f8e6b04006df75ddfe728f24489f0af57c96a529ff7cf45bc28797f7", size = 177828, upload-time = "2026-01-08T22:21:39.269Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/77/b6/85c4d21067220b9a78cfb81f516f9725ea6befc1544ec9bd2c1acd97c324/google_api_core-2.29.0-py3-none-any.whl", hash = "sha256:d30bc60980daa36e314b5d5a3e5958b0200cb44ca8fa1be2b614e932b75a3ea9", size = 173906, upload-time = "2026-01-08T22:21:36.093Z" },
+]
+
+[[package]]
+name = "google-api-python-client"
+version = "2.188.0"
+source = { registry = "https://pypi.org/simple/" }
+dependencies = [
+    { name = "google-api-core" },
+    { name = "google-auth" },
+    { name = "google-auth-httplib2" },
+    { name = "httplib2" },
+    { name = "uritemplate" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a8/d7/14613c7efbab5b428b400961f5dbac46ad9e019c44e1f3fd14d67c33111c/google_api_python_client-2.188.0.tar.gz", hash = "sha256:5c469db6614f071009e3e5bb8b6aeeccae3beb3647fa9c6cd97f0d551edde0b6", size = 14302906, upload-time = "2026-01-13T22:15:13.747Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/33/67/a99a7d79d7a37a67cb8008f1d7dcedc46d29c6df5063aeb446112afd4aa4/google_api_python_client-2.188.0-py3-none-any.whl", hash = "sha256:3cad1b68f9d48b82b93d77927e8370a6f43f33d97848242601f14a93a1c70ef5", size = 14870005, upload-time = "2026-01-13T22:15:11.345Z" },
+]
+
+[[package]]
 name = "google-auth"
 version = "2.46.0"
 source = { registry = "https://pypi.org/simple/" }
@@ -1848,6 +1904,32 @@ wheels = [
 [package.optional-dependencies]
 requests = [
     { name = "requests" },
+]
+
+[[package]]
+name = "google-auth-httplib2"
+version = "0.3.0"
+source = { registry = "https://pypi.org/simple/" }
+dependencies = [
+    { name = "google-auth" },
+    { name = "httplib2" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d5/ad/c1f2b1175096a8d04cf202ad5ea6065f108d26be6fc7215876bde4a7981d/google_auth_httplib2-0.3.0.tar.gz", hash = "sha256:177898a0175252480d5ed916aeea183c2df87c1f9c26705d74ae6b951c268b0b", size = 11134, upload-time = "2025-12-15T22:13:51.825Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/99/d5/3c97526c8796d3caf5f4b3bed2b05e8a7102326f00a334e7a438237f3b22/google_auth_httplib2-0.3.0-py3-none-any.whl", hash = "sha256:426167e5df066e3f5a0fc7ea18768c08e7296046594ce4c8c409c2457dd1f776", size = 9529, upload-time = "2025-12-15T22:13:51.048Z" },
+]
+
+[[package]]
+name = "google-auth-oauthlib"
+version = "1.2.4"
+source = { registry = "https://pypi.org/simple/" }
+dependencies = [
+    { name = "google-auth" },
+    { name = "requests-oauthlib" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/90/dd/211f27c1e927e2292c2a71d5df1a2aaf261ce50ba7d50848c6ee24e20970/google_auth_oauthlib-1.2.4.tar.gz", hash = "sha256:3ca93859c6cc9003c8e12b2a0868915209d7953f05a70f4880ab57d57e56ee3e", size = 21185, upload-time = "2026-01-15T22:03:10.027Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/84/21/fb96db432d187b07756e62971c4d89bdef70259e4cfa76ee32bcc0ac97d1/google_auth_oauthlib-1.2.4-py3-none-any.whl", hash = "sha256:0e922eea5f2baacaf8867febb782e46e7b153236c21592ed76ab3ddb77ffd772", size = 19193, upload-time = "2026-01-15T22:03:09.046Z" },
 ]
 
 [[package]]
@@ -1876,7 +1958,7 @@ name = "googleapis-common-protos"
 version = "1.72.0"
 source = { registry = "https://pypi.org/simple/" }
 dependencies = [
-    { name = "protobuf", marker = "python_full_version < '3.14'" },
+    { name = "protobuf" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/e5/7b/adfd75544c415c487b33061fe7ae526165241c1ea133f9a9125a56b39fd8/googleapis_common_protos-1.72.0.tar.gz", hash = "sha256:e55a601c1b32b52d7a3e65f43563e2aa61bcd737998ee672ac9b951cd49319f5", size = 147433, upload-time = "2025-11-06T18:29:24.087Z" }
 wheels = [
@@ -2099,6 +2181,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/06/94/82699a10bca87a5556c9c59b5963f2d039dbd239f25bc2a63907a05a14cb/httpcore-1.0.9.tar.gz", hash = "sha256:6e34463af53fd2ab5d807f399a9b45ea31c3dfa2276f15a2c3f00afff6e176e8", size = 85484, upload-time = "2025-04-24T22:06:22.219Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7e/f5/f66802a942d491edb555dd61e3a9961140fd64c90bce1eafd741609d334d/httpcore-1.0.9-py3-none-any.whl", hash = "sha256:2d400746a40668fc9dec9810239072b40b4484b640a8c38fd654a024c7a1bf55", size = 78784, upload-time = "2025-04-24T22:06:20.566Z" },
+]
+
+[[package]]
+name = "httplib2"
+version = "0.31.2"
+source = { registry = "https://pypi.org/simple/" }
+dependencies = [
+    { name = "pyparsing" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c1/1f/e86365613582c027dda5ddb64e1010e57a3d53e99ab8a72093fa13d565ec/httplib2-0.31.2.tar.gz", hash = "sha256:385e0869d7397484f4eab426197a4c020b606edd43372492337c0b4010ae5d24", size = 250800, upload-time = "2026-01-23T11:04:44.165Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2f/90/fd509079dfcab01102c0fdd87f3a9506894bc70afcf9e9785ef6b2b3aff6/httplib2-0.31.2-py3-none-any.whl", hash = "sha256:dbf0c2fa3862acf3c55c078ea9c0bc4481d7dc5117cae71be9514912cf9f8349", size = 91099, upload-time = "2026-01-23T11:04:42.78Z" },
 ]
 
 [[package]]
@@ -4782,6 +4876,18 @@ wheels = [
 ]
 
 [[package]]
+name = "proto-plus"
+version = "1.27.0"
+source = { registry = "https://pypi.org/simple/" }
+dependencies = [
+    { name = "protobuf" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/01/89/9cbe2f4bba860e149108b683bc2efec21f14d5f7ed6e25562ad86acbc373/proto_plus-1.27.0.tar.gz", hash = "sha256:873af56dd0d7e91836aee871e5799e1c6f1bda86ac9a983e0bb9f0c266a568c4", size = 56158, upload-time = "2025-12-16T13:46:25.729Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cd/24/3b7a0818484df9c28172857af32c2397b6d8fcd99d9468bd4684f98ebf0a/proto_plus-1.27.0-py3-none-any.whl", hash = "sha256:1baa7f81cf0f8acb8bc1f6d085008ba4171eaf669629d1b6d1673b21ed1c0a82", size = 50205, upload-time = "2025-12-16T13:46:24.76Z" },
+]
+
+[[package]]
 name = "protobuf"
 version = "5.29.5"
 source = { registry = "https://pypi.org/simple/" }
@@ -5628,6 +5734,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pyparsing"
+version = "3.3.2"
+source = { registry = "https://pypi.org/simple/" }
+sdist = { url = "https://files.pythonhosted.org/packages/f3/91/9c6ee907786a473bf81c5f53cf703ba0957b23ab84c264080fb5a450416f/pyparsing-3.3.2.tar.gz", hash = "sha256:c777f4d763f140633dcb6d8a3eda953bf7a214dc4eff598413c070bcdc117cbc", size = 6851574, upload-time = "2026-01-21T03:57:59.36Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/10/bd/c038d7cc38edc1aa5bf91ab8068b63d4308c66c4c8bb3cbba7dfbc049f9c/pyparsing-3.3.2-py3-none-any.whl", hash = "sha256:850ba148bd908d7e2411587e247a1e4f0327839c40e2e5e6d05a007ecc69911d", size = 122781, upload-time = "2026-01-21T03:57:55.912Z" },
+]
+
+[[package]]
 name = "pypdf"
 version = "6.5.0"
 source = { registry = "https://pypi.org/simple/" }
@@ -6294,8 +6409,8 @@ name = "requests-oauthlib"
 version = "2.0.0"
 source = { registry = "https://pypi.org/simple/" }
 dependencies = [
-    { name = "oauthlib", marker = "python_full_version < '3.14'" },
-    { name = "requests", marker = "python_full_version < '3.14'" },
+    { name = "oauthlib" },
+    { name = "requests" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/42/f2/05f29bc3913aea15eb670be136045bf5c5bbf4b99ecb839da9b422bb2c85/requests-oauthlib-2.0.0.tar.gz", hash = "sha256:b3dffaebd884d8cd778494369603a9e7b58d29111bf6b41bdc2dcd87203af4e9", size = 55650, upload-time = "2024-03-22T20:32:29.939Z" }
 wheels = [
@@ -8005,8 +8120,20 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+chroma = [
+    { name = "chromadb", marker = "python_full_version < '3.14'" },
+]
+csv-loader = [
+    { name = "aiofiles" },
+]
 custom-tools = [
     { name = "slack-sdk" },
+]
+docling-loader = [
+    { name = "docling" },
+]
+docx-loader = [
+    { name = "python-docx" },
 ]
 embeddings = [
     { name = "aiohttp" },
@@ -8027,6 +8154,25 @@ embeddings = [
     { name = "torch" },
     { name = "transformers" },
 ]
+faiss = [
+    { name = "faiss-cpu" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple/" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.0", source = { registry = "https://pypi.org/simple/" }, marker = "python_full_version >= '3.11'" },
+]
+gmail-interface = [
+    { name = "fastapi" },
+    { name = "google-api-python-client" },
+    { name = "google-auth-httplib2" },
+    { name = "google-auth-oauthlib" },
+]
+html-loader = [
+    { name = "aiohttp" },
+    { name = "beautifulsoup4" },
+    { name = "requests" },
+]
+json-loader = [
+    { name = "jq" },
+]
 loaders = [
     { name = "aiofiles" },
     { name = "aiohttp" },
@@ -8045,6 +8191,16 @@ loaders = [
     { name = "rapidocr-onnxruntime", marker = "python_full_version < '3.13'" },
     { name = "requests" },
 ]
+markdown-loader = [
+    { name = "markdown-it-py" },
+    { name = "python-frontmatter" },
+]
+mem0-storage = [
+    { name = "mem0ai" },
+]
+milvus = [
+    { name = "pymilvus" },
+]
 models = [
     { name = "anthropic" },
     { name = "anyio" },
@@ -8062,6 +8218,10 @@ models = [
     { name = "openai" },
     { name = "outlines" },
 ]
+mongo-storage = [
+    { name = "motor" },
+    { name = "pymongo" },
+]
 ocr = [
     { name = "easyocr" },
     { name = "paddleocr" },
@@ -8070,8 +8230,51 @@ ocr = [
     { name = "pytesseract" },
     { name = "rapidocr-onnxruntime", marker = "python_full_version < '3.13'" },
 ]
+pdf-loader = [
+    { name = "pypdf" },
+    { name = "rapidocr-onnxruntime", marker = "python_full_version < '3.13'" },
+]
+pdfplumber-loader = [
+    { name = "pdfplumber" },
+    { name = "rapidocr-onnxruntime", marker = "python_full_version < '3.13'" },
+]
+pgvector = [
+    { name = "pgvector" },
+    { name = "psycopg" },
+    { name = "sqlalchemy" },
+]
+pinecone = [
+    { name = "pinecone" },
+    { name = "pinecone-text", marker = "python_full_version < '3.14'" },
+]
+postgres-storage = [
+    { name = "asyncpg" },
+    { name = "greenlet" },
+    { name = "psycopg", extra = ["binary"] },
+    { name = "psycopg2-binary" },
+    { name = "sqlalchemy" },
+]
+pymupdf-loader = [
+    { name = "pymupdf" },
+    { name = "rapidocr-onnxruntime", marker = "python_full_version < '3.13'" },
+]
+qdrant = [
+    { name = "qdrant-client" },
+]
+redis-storage = [
+    { name = "redis" },
+]
 safety-engine = [
     { name = "detoxify" },
+]
+slack-interface = [
+    { name = "fastapi" },
+    { name = "slack-sdk" },
+]
+sqlite-storage = [
+    { name = "aiosqlite" },
+    { name = "greenlet" },
+    { name = "sqlalchemy" },
 ]
 storage = [
     { name = "aiosqlite" },
@@ -8081,8 +8284,12 @@ storage = [
     { name = "motor" },
     { name = "psycopg", extra = ["binary"] },
     { name = "psycopg2-binary" },
+    { name = "pymongo" },
     { name = "redis" },
     { name = "sqlalchemy" },
+]
+text-loader = [
+    { name = "aiofiles" },
 ]
 tools = [
     { name = "beautifulsoup4" },
@@ -8110,10 +8317,21 @@ vectordb = [
     { name = "sqlalchemy" },
     { name = "weaviate-client" },
 ]
+weaviate = [
+    { name = "weaviate-client" },
+]
 web = [
     { name = "celery" },
+    { name = "fastapi" },
     { name = "python-multipart" },
     { name = "uvicorn" },
+]
+xml-loader = [
+    { name = "lxml" },
+]
+yaml-loader = [
+    { name = "jq" },
+    { name = "pyyaml" },
 ]
 
 [package.dev-dependencies]
@@ -8127,20 +8345,24 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiofiles", marker = "extra == 'csv-loader'", specifier = ">=24.1.0" },
     { name = "aiofiles", marker = "extra == 'loaders'", specifier = ">=24.1.0" },
+    { name = "aiofiles", marker = "extra == 'text-loader'", specifier = ">=24.1.0" },
     { name = "aiohttp", specifier = ">=3.12.15" },
     { name = "aiohttp", marker = "extra == 'embeddings'", specifier = ">=3.12.15" },
+    { name = "aiohttp", marker = "extra == 'html-loader'", specifier = ">=3.12.15" },
     { name = "aiohttp", marker = "extra == 'loaders'", specifier = ">=3.12.15" },
-    { name = "aiosqlite", marker = "extra == 'storage'", specifier = ">=0.21.0" },
+    { name = "aiosqlite", marker = "extra == 'sqlite-storage'", specifier = ">=0.21.0" },
     { name = "anthropic", marker = "extra == 'embeddings'", specifier = ">=0.69.0" },
     { name = "anthropic", marker = "extra == 'models'", specifier = ">=0.69.0" },
     { name = "anyio", specifier = ">=4.10.0" },
     { name = "anyio", marker = "extra == 'models'", specifier = ">=4.10.0" },
-    { name = "asyncpg", marker = "extra == 'storage'", specifier = ">=0.30.0" },
+    { name = "asyncpg", marker = "extra == 'postgres-storage'", specifier = ">=0.30.0" },
     { name = "azure-core", marker = "extra == 'embeddings'", specifier = ">=1.35.1" },
     { name = "azure-core", marker = "extra == 'models'", specifier = ">=1.35.1" },
     { name = "azure-identity", marker = "extra == 'embeddings'", specifier = ">=1.25.0" },
     { name = "azure-identity", marker = "extra == 'models'", specifier = ">=1.25.0" },
+    { name = "beautifulsoup4", marker = "extra == 'html-loader'", specifier = ">=4.14.2" },
     { name = "beautifulsoup4", marker = "extra == 'loaders'", specifier = ">=4.14.2" },
     { name = "beautifulsoup4", marker = "extra == 'tools'", specifier = ">=4.14.2" },
     { name = "boto3", marker = "extra == 'embeddings'", specifier = ">=1.40.45" },
@@ -8148,38 +8370,53 @@ requires-dist = [
     { name = "botocore", marker = "extra == 'embeddings'", specifier = ">=1.40.45" },
     { name = "botocore", marker = "extra == 'models'", specifier = ">=1.40.45" },
     { name = "celery", marker = "extra == 'web'", specifier = ">=5.5.3" },
+    { name = "chromadb", marker = "python_full_version < '3.14' and extra == 'chroma'", specifier = ">=1.0.20" },
     { name = "chromadb", marker = "python_full_version < '3.14' and extra == 'vectordb'", specifier = ">=1.0.20" },
     { name = "cloudpickle", specifier = ">=3.1.2" },
     { name = "cohere", marker = "extra == 'models'", specifier = ">=5.18.0" },
     { name = "ddgs", marker = "extra == 'tools'", specifier = ">=9.10.0" },
     { name = "detoxify", marker = "extra == 'safety-engine'", specifier = ">=0.5.2" },
+    { name = "docling", marker = "extra == 'docling-loader'", specifier = ">=2.55.1" },
     { name = "docling", marker = "extra == 'loaders'", specifier = ">=2.55.1" },
     { name = "easyocr", marker = "extra == 'ocr'", specifier = ">=1.7.2" },
+    { name = "faiss-cpu", marker = "extra == 'faiss'", specifier = ">=1.12.0" },
     { name = "faiss-cpu", marker = "extra == 'vectordb'", specifier = ">=1.12.0" },
+    { name = "fastapi", marker = "extra == 'gmail-interface'" },
+    { name = "fastapi", marker = "extra == 'slack-interface'", specifier = ">=0.128.0" },
+    { name = "fastapi", marker = "extra == 'web'" },
     { name = "fastembed", marker = "python_full_version < '3.14' and extra == 'embeddings'", specifier = ">=0.7.3" },
     { name = "genai-prices", specifier = ">=0.0.38" },
     { name = "genai-prices", marker = "extra == 'tools'", specifier = ">=0.0.29" },
+    { name = "google-api-python-client", marker = "extra == 'gmail-interface'" },
     { name = "google-auth", marker = "extra == 'embeddings'", specifier = ">=2.40.3" },
     { name = "google-auth", marker = "extra == 'models'", specifier = ">=2.40.3" },
+    { name = "google-auth-httplib2", marker = "extra == 'gmail-interface'" },
+    { name = "google-auth-oauthlib", marker = "extra == 'gmail-interface'" },
     { name = "google-genai", marker = "extra == 'embeddings'", specifier = ">=1.41.0" },
     { name = "google-genai", marker = "extra == 'models'", specifier = ">=1.41.0" },
-    { name = "greenlet", marker = "extra == 'storage'", specifier = ">=3.2.3" },
+    { name = "greenlet", marker = "extra == 'postgres-storage'", specifier = ">=3.2.3" },
+    { name = "greenlet", marker = "extra == 'sqlite-storage'", specifier = ">=3.2.3" },
     { name = "griffe", specifier = ">=1.14.0" },
     { name = "groq", marker = "extra == 'models'", specifier = ">=0.32.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "httpx", marker = "extra == 'models'", specifier = ">=0.28.1" },
     { name = "huggingface-hub", marker = "extra == 'embeddings'", specifier = ">=0.34.4" },
+    { name = "jq", marker = "extra == 'json-loader'", specifier = ">=1.10.0" },
     { name = "jq", marker = "extra == 'loaders'", specifier = ">=1.10.0" },
+    { name = "jq", marker = "extra == 'yaml-loader'", specifier = ">=1.10.0" },
     { name = "llmlingua", marker = "extra == 'tools'", specifier = ">=0.2.2" },
     { name = "lxml", marker = "extra == 'loaders'", specifier = ">=4.9.1" },
+    { name = "lxml", marker = "extra == 'xml-loader'", specifier = ">=4.9.1" },
     { name = "markdown-it-py", marker = "extra == 'loaders'", specifier = ">=4.0.0" },
+    { name = "markdown-it-py", marker = "extra == 'markdown-loader'", specifier = ">=4.0.0" },
     { name = "mcp", extras = ["cli"], specifier = "==1.9.4" },
-    { name = "mem0ai", marker = "extra == 'storage'", specifier = ">=0.1.116" },
+    { name = "mem0ai", marker = "extra == 'mem0-storage'", specifier = ">=0.1.116" },
     { name = "mistralai", marker = "extra == 'models'", specifier = ">=1.9.11" },
-    { name = "motor", marker = "extra == 'storage'", specifier = ">=3.7.1" },
+    { name = "motor", marker = "extra == 'mongo-storage'", specifier = ">=3.7.1" },
     { name = "mypy-boto3-bedrock-runtime", marker = "extra == 'models'", specifier = ">=1.40.41" },
     { name = "nest-asyncio", specifier = ">=1.6.0" },
     { name = "numpy", marker = "extra == 'embeddings'", specifier = ">=2.2.6" },
+    { name = "numpy", marker = "extra == 'faiss'", specifier = ">=2.2.6" },
     { name = "onnxruntime", marker = "python_full_version < '3.14' and extra == 'embeddings'", specifier = ">=1.22.1" },
     { name = "openai", specifier = ">=2.2.0" },
     { name = "openai", marker = "extra == 'embeddings'", specifier = ">=2.1.0" },
@@ -8189,41 +8426,61 @@ requires-dist = [
     { name = "pandas", marker = "extra == 'tools'", specifier = ">=2.3.2" },
     { name = "pdf2image", marker = "extra == 'ocr'", specifier = ">=1.17.0" },
     { name = "pdfplumber", marker = "extra == 'loaders'", specifier = ">=0.11.7" },
+    { name = "pdfplumber", marker = "extra == 'pdfplumber-loader'", specifier = ">=0.11.7" },
+    { name = "pgvector", marker = "extra == 'pgvector'", specifier = ">=0.4.1" },
     { name = "pgvector", marker = "extra == 'vectordb'", specifier = ">=0.4.1" },
     { name = "pillow", marker = "extra == 'loaders'", specifier = ">=11.3.0" },
     { name = "pillow", marker = "extra == 'ocr'", specifier = ">=11.3.0" },
+    { name = "pinecone", marker = "extra == 'pinecone'", specifier = ">=7.3.0" },
     { name = "pinecone", marker = "extra == 'vectordb'", specifier = ">=7.3.0" },
+    { name = "pinecone-text", marker = "python_full_version < '3.14' and extra == 'pinecone'", specifier = ">=0.11.0" },
     { name = "pinecone-text", marker = "python_full_version < '3.14' and extra == 'vectordb'", specifier = ">=0.11.0" },
     { name = "protobuf", specifier = ">=5.27.2,<6.0.0" },
     { name = "psutil", specifier = "==6.1.1" },
+    { name = "psycopg", marker = "extra == 'pgvector'", specifier = ">=3.2.9" },
     { name = "psycopg", marker = "extra == 'vectordb'", specifier = ">=3.2.9" },
-    { name = "psycopg", extras = ["binary"], marker = "extra == 'storage'", specifier = ">=3.2.9" },
-    { name = "psycopg2-binary", marker = "extra == 'storage'", specifier = ">=2.9.10" },
+    { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres-storage'", specifier = ">=3.2.9" },
+    { name = "psycopg2-binary", marker = "extra == 'postgres-storage'", specifier = ">=2.9.10" },
     { name = "pydantic", specifier = ">=2.10.5" },
     { name = "pydantic-core", specifier = ">=2.27.2" },
+    { name = "pymilvus", marker = "extra == 'milvus'", specifier = ">=2.6.1" },
     { name = "pymilvus", extras = ["milvus-lite"], marker = "extra == 'vectordb'", specifier = ">=2.6.1" },
+    { name = "pymongo", marker = "extra == 'mongo-storage'", specifier = ">=4.9.0" },
     { name = "pymupdf", marker = "extra == 'loaders'", specifier = ">=1.26.4" },
+    { name = "pymupdf", marker = "extra == 'pymupdf-loader'", specifier = ">=1.26.4" },
     { name = "pypdf", marker = "extra == 'loaders'", specifier = ">=6.1.1" },
+    { name = "pypdf", marker = "extra == 'pdf-loader'", specifier = ">=6.1.1" },
     { name = "pytesseract", marker = "extra == 'ocr'", specifier = ">=0.3.13" },
+    { name = "python-docx", marker = "extra == 'docx-loader'", specifier = ">=1.2.0" },
     { name = "python-docx", marker = "extra == 'loaders'", specifier = ">=1.2.0" },
     { name = "python-dotenv", specifier = ">=1.0.1" },
     { name = "python-frontmatter", marker = "extra == 'loaders'", specifier = ">=1.1.0" },
+    { name = "python-frontmatter", marker = "extra == 'markdown-loader'", specifier = ">=1.1.0" },
     { name = "python-multipart", marker = "extra == 'web'", specifier = ">=0.0.20" },
     { name = "pyyaml", marker = "extra == 'loaders'", specifier = ">=6.0.2" },
+    { name = "pyyaml", marker = "extra == 'yaml-loader'", specifier = ">=6.0.2" },
+    { name = "qdrant-client", marker = "extra == 'qdrant'", specifier = ">=1.12.1" },
     { name = "qdrant-client", marker = "extra == 'vectordb'", specifier = ">=1.12.1" },
     { name = "rapidocr-onnxruntime", marker = "python_full_version < '3.13' and extra == 'loaders'", specifier = ">=1.4.4" },
     { name = "rapidocr-onnxruntime", marker = "python_full_version < '3.13' and extra == 'ocr'", specifier = ">=1.4.4" },
-    { name = "redis", marker = "extra == 'storage'", specifier = ">=5.2.1" },
+    { name = "rapidocr-onnxruntime", marker = "python_full_version < '3.13' and extra == 'pdf-loader'", specifier = ">=1.4.4" },
+    { name = "rapidocr-onnxruntime", marker = "python_full_version < '3.13' and extra == 'pdfplumber-loader'", specifier = ">=1.4.4" },
+    { name = "rapidocr-onnxruntime", marker = "python_full_version < '3.13' and extra == 'pymupdf-loader'", specifier = ">=1.4.4" },
+    { name = "redis", marker = "extra == 'redis-storage'", specifier = ">=5.2.1" },
     { name = "reportlab", marker = "extra == 'vectordb'", specifier = ">=4.1.0" },
     { name = "requests", specifier = ">=2.32.5" },
     { name = "requests", marker = "extra == 'embeddings'", specifier = ">=2.32.5" },
+    { name = "requests", marker = "extra == 'html-loader'", specifier = ">=2.32.5" },
     { name = "requests", marker = "extra == 'loaders'", specifier = ">=2.32.5" },
     { name = "rich", specifier = ">=13.9.4" },
     { name = "scikit-learn", marker = "extra == 'vectordb'", specifier = ">=1.4.0" },
     { name = "scipy", marker = "extra == 'vectordb'", specifier = ">=1.13.0" },
     { name = "sentry-sdk", extras = ["opentelemetry"], specifier = ">=2.35.0" },
     { name = "slack-sdk", marker = "extra == 'custom-tools'", specifier = ">=3.38.0" },
-    { name = "sqlalchemy", marker = "extra == 'storage'", specifier = ">=2.0.42" },
+    { name = "slack-sdk", marker = "extra == 'slack-interface'", specifier = ">=3.39.0" },
+    { name = "sqlalchemy", marker = "extra == 'pgvector'", specifier = ">=2.0.44" },
+    { name = "sqlalchemy", marker = "extra == 'postgres-storage'", specifier = ">=2.0.42" },
+    { name = "sqlalchemy", marker = "extra == 'sqlite-storage'", specifier = ">=2.0.42" },
     { name = "sqlalchemy", marker = "extra == 'vectordb'", specifier = ">=2.0.44" },
     { name = "tavily-python", marker = "extra == 'tools'", specifier = ">=0.7.12" },
     { name = "toml", specifier = ">=0.10.2" },
@@ -8231,13 +8488,19 @@ requires-dist = [
     { name = "transformers", marker = "extra == 'embeddings'", specifier = ">=4.57.0" },
     { name = "typing-extensions", specifier = ">=4.15.0" },
     { name = "typing-inspection", specifier = ">=0.4.1" },
+    { name = "upsonic", extras = ["mem0-storage"], marker = "extra == 'storage'" },
+    { name = "upsonic", extras = ["mongo-storage"], marker = "extra == 'storage'" },
+    { name = "upsonic", extras = ["postgres-storage"], marker = "extra == 'storage'" },
+    { name = "upsonic", extras = ["redis-storage"], marker = "extra == 'storage'" },
+    { name = "upsonic", extras = ["sqlite-storage"], marker = "extra == 'storage'" },
     { name = "uv", specifier = ">=0.5.20" },
     { name = "uvicorn", specifier = ">=0.34.0" },
     { name = "uvicorn", marker = "extra == 'web'", specifier = ">=0.35.0" },
     { name = "weaviate-client", marker = "extra == 'vectordb'", specifier = ">=4.16.9" },
+    { name = "weaviate-client", marker = "extra == 'weaviate'", specifier = ">=4.16.9" },
     { name = "yfinance", marker = "extra == 'tools'", specifier = ">=0.2.66" },
 ]
-provides-extras = ["vectordb", "storage", "models", "embeddings", "loaders", "tools", "web", "ocr", "custom-tools", "safety-engine"]
+provides-extras = ["chroma", "qdrant", "milvus", "weaviate", "pinecone", "faiss", "pgvector", "vectordb", "sqlite-storage", "redis-storage", "postgres-storage", "mongo-storage", "mem0-storage", "storage", "models", "embeddings", "csv-loader", "docling-loader", "docx-loader", "html-loader", "json-loader", "markdown-loader", "pdf-loader", "pdfplumber-loader", "pymupdf-loader", "text-loader", "xml-loader", "yaml-loader", "loaders", "tools", "web", "ocr", "custom-tools", "gmail-interface", "safety-engine", "slack-interface"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -8246,6 +8509,15 @@ dev = [
     { name = "pytest", specifier = ">=8.3.4" },
     { name = "pytest-asyncio", specifier = ">=0.25.1" },
     { name = "tomlkit", specifier = ">=0.13.3" },
+]
+
+[[package]]
+name = "uritemplate"
+version = "4.2.0"
+source = { registry = "https://pypi.org/simple/" }
+sdist = { url = "https://files.pythonhosted.org/packages/98/60/f174043244c5306c9988380d2cb10009f91563fc4b31293d27e17201af56/uritemplate-4.2.0.tar.gz", hash = "sha256:480c2ed180878955863323eea31b0ede668795de182617fef9c6ca09e6ec9d0e", size = 33267, upload-time = "2025-06-02T15:12:06.318Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a9/99/3ae339466c9183ea5b8ae87b34c0b897eda475d2aec2307cae60e5cd4f29/uritemplate-4.2.0-py3-none-any.whl", hash = "sha256:962201ba1c4edcab02e60f9a0d3821e82dfc5d2d6662a21abd533879bdb8a686", size = 11488, upload-time = "2025-06-02T15:12:03.405Z" },
 ]
 
 [[package]]
