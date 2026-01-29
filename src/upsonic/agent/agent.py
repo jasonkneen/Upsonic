@@ -139,7 +139,7 @@ class Agent(BaseAgent):
         work_experience: Optional[str] = None,
         feed_tool_call_results: Optional[bool] = None,
         show_tool_calls: bool = True,
-        tool_call_limit: int = 5,
+        tool_call_limit: int = 100,
         enable_thinking_tool: bool = False,
         enable_reasoning_tool: bool = False,
         tools: Optional[list] = None,
