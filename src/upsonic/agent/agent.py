@@ -2666,7 +2666,7 @@ class Agent(BaseAgent):
         """
         result = self.do(task, model, debug, retry)
         from upsonic.utils.printing import success_log
-        success_log(f"Task completed: {result}", "Agent")
+        success_log(f"{result}", "Agent")
         return result
     
     async def print_do_async(
@@ -2684,7 +2684,7 @@ class Agent(BaseAgent):
         """
         result = await self.do_async(task, model, debug, retry)
         from upsonic.utils.printing import success_log
-        success_log(f"Task completed: {result}", "Agent")
+        success_log(f"{result}", "Agent")
         return result
     
     def stream(

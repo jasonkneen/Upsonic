@@ -298,7 +298,6 @@ class SystemPromptManager:
         Returns:
             The final system prompt string.
         """
-        print(f"\n\n SystemPromptManager: system_prompt: {self.system_prompt}\n\n")
         return self.system_prompt
     
     def should_include_system_prompt(self, message_history: List[Any]) -> bool:

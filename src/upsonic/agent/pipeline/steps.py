@@ -59,10 +59,11 @@ class InitializationStep(Step):
             if agent and hasattr(agent, 'run_id') and agent.run_id:
                 raise_if_cancelled(agent.run_id)
             
-            from upsonic.utils.printing import agent_started
-
             task.task_start(agent)
-            agent_started(agent.get_agent_id())
+            
+            if agent and agent.debug:
+                from upsonic.utils.printing import agent_started
+                agent_started(agent.get_agent_id())
 
             context.tool_call_count = 0
             agent.current_task = context.task

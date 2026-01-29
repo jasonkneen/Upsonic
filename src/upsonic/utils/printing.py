@@ -1015,6 +1015,10 @@ def connected_to_server(server_type: str, status: str, total_time: float = None)
     spacing()
 
 def call_end(result: Any, model: Any, response_format: str, start_time: float, end_time: float, usage: dict, tool_usage: list, debug: bool = False, price_id: str = None):
+    # Only display output when debug is enabled
+    if not debug:
+        return
+    
     # Display tool calls in magnificent table
     if tool_usage and len(tool_usage) > 0:
         display_tool_calls_table(tool_usage, debug=debug)
@@ -1112,6 +1116,10 @@ def call_end(result: Any, model: Any, response_format: str, start_time: float, e
 
 
 def agent_end(result: Any, model: Any, response_format: str, start_time: float, end_time: float, usage: dict, tool_usage: list, tool_count: int, context_count: int, debug: bool = False, price_id:str = None):
+    # Only display output when debug is enabled
+    if not debug:
+        return
+    
     # Display tool calls in magnificent table
     if tool_usage and len(tool_usage) > 0:
         display_tool_calls_table(tool_usage, debug=debug)
@@ -1134,7 +1142,8 @@ def agent_end(result: Any, model: Any, response_format: str, start_time: float, 
             else:
                 price_id_summary[price_id]['estimated_cost'] = Decimal(str(price_id_summary[price_id]['estimated_cost'])) + Decimal(cost_str)
         except Exception as e:
-            console.print(f"[bold red]Warning: Could not parse cost value: {estimated_cost}. Error: {e}[/bold red]")
+            if debug:
+                console.print(f"[bold red]Warning: Could not parse cost value: {estimated_cost}. Error: {e}[/bold red]")
     
     # Display LLM result in magnificent table
     execution_time = end_time - start_time
@@ -2195,7 +2204,7 @@ def success_log(message: str, context: str = "Upsonic") -> None:
     context_esc = escape_rich_markup(context)
 
     # Rich console output (user görür)
-    console.print(f"[green][SUCCESS][/green] [{context_esc}] {message_esc}")
+    console.print(f"{message_esc}")
 
     # Background logging (Sentry/file'a gider)
     _bg_logger.info(f"[SUCCESS] [{context}] {message}")
