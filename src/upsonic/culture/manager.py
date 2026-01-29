@@ -71,6 +71,7 @@ class CultureManager:
         team_id: Optional[str] = None,
         debug: bool = False,
         debug_level: int = 1,
+        print: Optional[bool] = None,
     ) -> None:
         """
         Initialize the CultureManager.
@@ -82,6 +83,7 @@ class CultureManager:
             team_id: Team ID for culture context
             debug: Enable debug logging
             debug_level: Debug verbosity level (1-3)
+            print: Enable printing of output. If None, uses default (True). Should match main agent's print flag.
         """
         self._model_spec = model
         self.enabled = enabled
@@ -89,6 +91,7 @@ class CultureManager:
         self.team_id = team_id
         self.debug = debug
         self.debug_level = debug_level
+        self.print = print if print is not None else True
         
         # Current culture instance
         self._culture: Optional["Culture"] = None
@@ -230,6 +233,8 @@ Provide specific, actionable guidelines for each aspect.
                 name="Culture Extractor",
                 system_prompt=CULTURE_EXTRACTION_SYSTEM_PROMPT,
                 debug=self.debug,
+                debug_level=self.debug_level,
+                print=self.print,
             )
             
             task = Task(
@@ -370,6 +375,9 @@ Provide specific, actionable guidelines for each aspect.
             "enabled": self.enabled,
             "agent_id": self.agent_id,
             "team_id": self.team_id,
+            "debug": self.debug,
+            "debug_level": self.debug_level,
+            "print": self.print,
             "prepared": self._prepared,
             "message_count": self._message_count,
         }
@@ -409,6 +417,9 @@ Provide specific, actionable guidelines for each aspect.
             enabled=data.get("enabled", True),
             agent_id=data.get("agent_id"),
             team_id=data.get("team_id"),
+            debug=data.get("debug", False),
+            debug_level=data.get("debug_level", 1),
+            print=data.get("print", True),
         )
         
         manager._prepared = data.get("prepared", False)
