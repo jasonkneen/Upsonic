@@ -1260,17 +1260,26 @@ def agent_total_cost(total_input_tokens: int, total_output_tokens: int, total_ti
     console.print(panel)
     spacing()
 
-def print_price_id_summary(price_id: str, task) -> dict:
+def print_price_id_summary(price_id: str, task, print_output: bool = True) -> dict:
     """
     Get the summary of usage and costs for a specific price ID and print it in a formatted panel.
     
     Args:
         price_id (str): The price ID to look up
         task: The task object containing timing information
+        print_output: Whether to print the output (default: True)
         
     Returns:
         dict: A dictionary containing the usage summary, or None if price_id not found
     """
+    if not print_output:
+        # Return summary without printing if price_id exists
+        if price_id in price_id_summary:
+            summary = price_id_summary[price_id].copy()
+            summary['estimated_cost'] = f"${summary['estimated_cost']:.4f}"
+            return summary
+        return None
+    
     price_id_display = escape_rich_markup(price_id)
     task_display = escape_rich_markup(str(task))
     

@@ -1,6 +1,5 @@
 import asyncio
 import copy
-import os
 import uuid
 from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Literal, Optional, Union, TYPE_CHECKING
 
@@ -269,7 +268,7 @@ class Agent(BaseAgent):
         if print is not None:
             self.print = print
         else:
-            self.print = get_env_bool("UPSONIC_AGENT_PRINT", default=False)
+            self.print = get_env_bool("UPSONIC_AGENT_PRINT", default=True)
 
         # Set db attribute
         self.db = db
@@ -340,6 +339,7 @@ class Agent(BaseAgent):
                 model=self.model_name,
                 debug=self.debug,
                 debug_level=self.debug_level,
+                print=self.print,
             )
             self._culture_manager.set_culture(culture)
         

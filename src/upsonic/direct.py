@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from typing import Any, Optional, Union
 
 from upsonic.models.settings import ModelSettings
@@ -67,7 +66,7 @@ class Direct:
         if print is not None:
             self.print = print
         else:
-            self.print = get_env_bool("UPSONIC_DIRECT_PRINT", default=False)
+            self.print = get_env_bool("UPSONIC_DIRECT_PRINT", default=True)
         
         if model is not None:
             self._set_model(model)
