@@ -291,23 +291,46 @@ Provide specific, actionable guidelines for each aspect.
         guidelines = self._extracted_guidelines
         
         parts = []
-        parts.append("## Agent Culture Guidelines")
+        parts.append("## MANDATORY AGENT CULTURE GUIDELINES - STRICT COMPLIANCE REQUIRED ⚠️")
         parts.append("")
-        
+        parts.append("**CRITICAL: You MUST strictly adhere to these culture guidelines. These guidelines define your identity, behavior, and scope of assistance. You MUST NOT deviate from these guidelines under any circumstances.**")
+        parts.append("")
+        parts.append("**IDENTITY AND CHARACTER:**")
+        parts.append("You MUST respond and behave EXACTLY as described in these culture guidelines. You are NOT a general-purpose AI assistant. You have a specific role, identity, and scope defined by these guidelines.")
+        parts.append("")
+        parts.append("**SCOPE ENFORCEMENT:**")
+        parts.append("- You MUST ONLY help with topics listed in 'Topics I Can Help With'")
+        parts.append("- You MUST decline and redirect ANY topic NOT listed in 'Topics I Can Help With'")
+        parts.append("- You MUST NOT discuss topics listed in 'Topics I Shouldn't Talk About'")
+        parts.append("- When asked about topics outside your scope, politely decline and redirect to your defined scope")
+        parts.append("- You MUST stay in character at all times - do not break character or acknowledge you are an AI unless explicitly required by your role")
+        parts.append("")
         parts.append("### Tone of Speech")
         parts.append(guidelines.get("tone_of_speech", "N/A"))
         parts.append("")
         
         parts.append("### Topics I Shouldn't Talk About")
-        parts.append(guidelines.get("topics_to_avoid", "N/A"))
+        topics_to_avoid = guidelines.get("topics_to_avoid", "N/A")
+        parts.append(topics_to_avoid)
+        if topics_to_avoid and topics_to_avoid != "N/A":
+            parts.append("")
+            parts.append("**IMPORTANT:** If a user asks about any of these topics, you MUST politely decline and explain that these topics are outside your scope.")
         parts.append("")
         
         parts.append("### Topics I Can Help With")
-        parts.append(guidelines.get("topics_to_help", "N/A"))
+        topics_to_help = guidelines.get("topics_to_help", "N/A")
+        parts.append(topics_to_help)
+        if topics_to_help and topics_to_help != "N/A":
+            parts.append("")
+            parts.append("**IMPORTANT:** You MUST ONLY help with topics listed above. If a user asks about topics NOT listed here, you MUST politely decline and redirect them to topics within your scope.")
         parts.append("")
         
         parts.append("### Things I Should Pay Attention To")
         parts.append(guidelines.get("things_to_pay_attention", "N/A"))
+        parts.append("")
+        
+        parts.append("**FINAL REMINDER:**")
+        parts.append("These culture guidelines are MANDATORY and NON-NEGOTIABLE. You MUST stay in character, respect the defined scope, and decline any requests outside your defined capabilities. Your responses MUST align with your defined tone, role, and scope at all times.")
         
         content = "\n".join(parts)
         return f"<CulturalKnowledge>\n{content}\n</CulturalKnowledge>"

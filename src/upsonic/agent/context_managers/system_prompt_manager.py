@@ -214,14 +214,15 @@ class SystemPromptManager:
             if system_injection:
                 prompt_parts.append(system_injection)
         
-        # Inject culture from CultureManager (if enabled and add_system_prompt is True)
-        # Note: Culture must be prepared before this method is called (done in aprepare())
+        # Check if culture is present and will be added
+        has_culture = False
+        culture_formatted = None
         if self.agent._culture_manager and self.agent._culture_manager.enabled:
             culture = self.agent._culture_manager.culture
             if culture and culture.add_system_prompt and self.agent._culture_manager.prepared:
                 culture_formatted = self.agent._culture_manager.format_for_system_prompt()
                 if culture_formatted:
-                    prompt_parts.append(culture_formatted)
+                    has_culture = True
 
         if self.agent.system_prompt is not None:
             base_prompt = self.agent.system_prompt
@@ -260,9 +261,18 @@ class SystemPromptManager:
         
         
         if self.agent.system_prompt is None and not has_any_info and not is_thinking_enabled:
-            base_prompt = default_prompt().prompt
+            # If culture is present, use a more restrictive default prompt
+            if has_culture:
+                base_prompt = "You are an agent with specific cultural guidelines that define your identity, behavior, and scope. You MUST strictly follow the cultural guidelines provided to you. These guidelines override any general instructions."
+            else:
+                base_prompt = default_prompt().prompt
         
         prompt_parts.append(base_prompt.strip())
+        
+        # Inject culture AFTER base prompt so it has final authority
+        # Note: Culture must be prepared before this method is called (done in aprepare())
+        if has_culture and culture_formatted:
+            prompt_parts.append(culture_formatted)
 
         agent_context_str = "<YourCharacter>"
         found_agent_context = False
@@ -288,7 +298,6 @@ class SystemPromptManager:
         Returns:
             The final system prompt string.
         """
-        print(f"\n\n SystemPromptManager: system_prompt: {self.system_prompt}\n\n")
         return self.system_prompt
     
     def should_include_system_prompt(self, message_history: List[Any]) -> bool:

@@ -1,10 +1,11 @@
 import asyncio
 import copy
+import os
 import uuid
 from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Literal, Optional, Union, TYPE_CHECKING
 
 
-from upsonic.utils.logging_config import sentry_sdk
+from upsonic.utils.logging_config import sentry_sdk, get_env_bool
 from upsonic.agent.base import BaseAgent
 from upsonic.run.agent.output import AgentRunOutput
 from upsonic.run.agent.input import AgentRunInput
@@ -119,6 +120,7 @@ class Agent(BaseAgent):
         user_id: Optional[str] = None,
         debug: bool = False,
         debug_level: int = 1,
+        print: Optional[bool] = None,
         company_url: Optional[str] = None,
         company_objective: Optional[str] = None,
         company_description: Optional[str] = None,
@@ -139,7 +141,7 @@ class Agent(BaseAgent):
         work_experience: Optional[str] = None,
         feed_tool_call_results: Optional[bool] = None,
         show_tool_calls: bool = True,
-        tool_call_limit: int = 5,
+        tool_call_limit: int = 100,
         enable_thinking_tool: bool = False,
         enable_reasoning_tool: bool = False,
         tools: Optional[list] = None,
@@ -178,6 +180,7 @@ class Agent(BaseAgent):
             db: Database instance (overrides memory if provided)
             debug: Enable debug logging
             debug_level: Debug level (1 = standard, 2 = detailed). Only used when debug=True
+            print: Enable printing of agent output and execution details. If None, reads from UPSONIC_AGENT_PRINT env variable. If set, overrides env variable.
             company_url: Company URL for context
             company_objective: Company objective for context
             company_description: Company description for context
@@ -261,6 +264,12 @@ class Agent(BaseAgent):
         self.debug = debug
         self.debug_level = debug_level if debug else 1
         self.reflection = reflection
+        
+        # Handle print flag: parameter overrides env variable
+        if print is not None:
+            self.print = print
+        else:
+            self.print = get_env_bool("UPSONIC_AGENT_PRINT", default=False)
 
         # Set db attribute
         self.db = db
@@ -2666,7 +2675,7 @@ class Agent(BaseAgent):
         """
         result = self.do(task, model, debug, retry)
         from upsonic.utils.printing import success_log
-        success_log(f"Task completed: {result}", "Agent")
+        success_log(f"{result}", "Agent")
         return result
     
     async def print_do_async(
@@ -2684,7 +2693,7 @@ class Agent(BaseAgent):
         """
         result = await self.do_async(task, model, debug, retry)
         from upsonic.utils.printing import success_log
-        success_log(f"Task completed: {result}", "Agent")
+        success_log(f"{result}", "Agent")
         return result
     
     def stream(

@@ -17,7 +17,7 @@ else:
 
 
 class CallManager:
-    def __init__(self, model: "Model", task, debug=False, show_tool_calls=True):
+    def __init__(self, model: "Model", task, debug=False, show_tool_calls=True, print_output=False):
         """
         Initializes the CallManager.
 
@@ -26,11 +26,13 @@ class CallManager:
             task: The task being executed.
             debug: Whether debug mode is enabled.
             show_tool_calls: Whether to show tool calls.
+            print_output: Whether to print output to console.
         """
         self.model = model
         self.task = task
         self.show_tool_calls = show_tool_calls
         self.debug = debug
+        self.print_output = print_output
         self.start_time = None
         self.end_time = None
         self.model_response = None
@@ -82,7 +84,8 @@ class CallManager:
                 usage,
                 tool_usage_result,
                 self.debug,
-                self.task.price_id
+                self.task.price_id,
+                print_output=self.print_output
             )
     
     def prepare(self) -> None:

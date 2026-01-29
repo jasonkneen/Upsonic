@@ -706,7 +706,7 @@ class Chat:
                 )
             
             # Execute agent - memory handles persistence
-            result = await self.agent.do_async(task, debug=self.debug, **kwargs)
+            result = await self.agent.print_do_async(task, debug=self.debug, **kwargs)
             
             response_text = str(result)
             
