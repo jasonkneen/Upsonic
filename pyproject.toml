@@ -7,6 +7,14 @@ authors = [
     { name = "Onur ULUSOY", email = "onur@upsonic.co" },
     { name = "Dogan Keskin", email = "dogan@upsonic.co" }
 ]
+
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+]
+
 requires-python = ">=3.10"
 dependencies = [
     "psutil==6.1.1",
