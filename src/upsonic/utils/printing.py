@@ -1014,9 +1014,9 @@ def connected_to_server(server_type: str, status: str, total_time: float = None)
 
     spacing()
 
-def call_end(result: Any, model: Any, response_format: str, start_time: float, end_time: float, usage: dict, tool_usage: list, debug: bool = False, price_id: str = None):
-    # Only display output when debug is enabled
-    if not debug:
+def call_end(result: Any, model: Any, response_format: str, start_time: float, end_time: float, usage: dict, tool_usage: list, debug: bool = False, price_id: str = None, print_output: bool = False):
+    # Only display output when print_output is enabled
+    if not print_output:
         return
     
     # Display tool calls in magnificent table
@@ -1115,9 +1115,9 @@ def call_end(result: Any, model: Any, response_format: str, start_time: float, e
 
 
 
-def agent_end(result: Any, model: Any, response_format: str, start_time: float, end_time: float, usage: dict, tool_usage: list, tool_count: int, context_count: int, debug: bool = False, price_id:str = None):
-    # Only display output when debug is enabled
-    if not debug:
+def agent_end(result: Any, model: Any, response_format: str, start_time: float, end_time: float, usage: dict, tool_usage: list, tool_count: int, context_count: int, debug: bool = False, price_id:str = None, print_output: bool = False):
+    # Only display output when print_output is enabled
+    if not print_output:
         return
     
     # Display tool calls in magnificent table

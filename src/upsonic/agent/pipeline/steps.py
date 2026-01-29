@@ -61,7 +61,7 @@ class InitializationStep(Step):
             
             task.task_start(agent)
             
-            if agent and agent.debug:
+            if agent and hasattr(agent, 'print') and agent.print:
                 from upsonic.utils.printing import agent_started
                 agent_started(agent.get_agent_id())
 
@@ -1003,6 +1003,7 @@ class ModelExecutionStep(Step):
                 model,
                 task,
                 debug=agent.debug,
+                print_output=agent.print if hasattr(agent, 'print') else False,
                 show_tool_calls=agent.show_tool_calls
             )
             if pipeline_manager:
@@ -1585,7 +1586,8 @@ class CallManagementStep(Step):
                     usage,
                     tool_usage_result,
                     agent.debug,
-                    getattr(task, 'price_id', None)
+                    getattr(task, 'price_id', None),
+                    print_output=agent.print if hasattr(agent, 'print') else False
                 )
             
             step_result = StepResult(

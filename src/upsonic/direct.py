@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Any, Optional, Union
 
 from upsonic.models.settings import ModelSettings
@@ -8,6 +9,7 @@ from upsonic.tasks.tasks import Task
 from upsonic.output import OutputObjectDefinition
 from upsonic.profiles import ModelProfileSpec
 from upsonic.providers import Provider
+from upsonic.utils.logging_config import get_env_bool
 
 
 class Direct:
@@ -44,7 +46,8 @@ class Direct:
         *,
         settings: Optional[ModelSettings] = None,
         profile: Optional[ModelProfileSpec] = None,
-        provider: Optional[Union[str, Provider]] = None
+        provider: Optional[Union[str, Provider]] = None,
+        print: Optional[bool] = None
     ):
         """Initialize the Direct instance.
         
@@ -53,11 +56,18 @@ class Direct:
             settings: Optional model settings
             profile: Optional model profile
             provider: Optional provider name or Provider instance
+            print: Enable printing of direct output and execution details. If None, reads from UPSONIC_DIRECT_PRINT env variable. If set, overrides env variable.
         """
         self._model = None
         self._settings = settings
         self._profile = profile
         self._provider = provider
+        
+        # Handle print flag: parameter overrides env variable
+        if print is not None:
+            self.print = print
+        else:
+            self.print = get_env_bool("UPSONIC_DIRECT_PRINT", default=False)
         
         if model is not None:
             self._set_model(model)
@@ -84,7 +94,8 @@ class Direct:
         new_direct = Direct(
             settings=self._settings,
             profile=self._profile,
-            provider=self._provider
+            provider=self._provider,
+            print=self.print
         )
         new_direct._set_model(model)
         return new_direct
@@ -102,7 +113,8 @@ class Direct:
             model=self._model,
             settings=settings,
             profile=self._profile,
-            provider=self._provider
+            provider=self._provider,
+            print=self.print
         )
         return new_direct
     
@@ -119,7 +131,8 @@ class Direct:
             model=self._model,
             settings=self._settings,
             profile=profile,
-            provider=self._provider
+            provider=self._provider,
+            print=self.print
         )
         return new_direct
     
@@ -136,7 +149,8 @@ class Direct:
             model=self._model,
             settings=self._settings,
             profile=self._profile,
-            provider=provider
+            provider=provider,
+            print=self.print
         )
         return new_direct
     
@@ -317,29 +331,30 @@ class Direct:
         # Default: return as string
         return text_content
     
-    def do(self, task: Task, show_output: bool = True) -> Any:
+    def do(self, task: Task, show_output: Optional[bool] = None) -> Any:
         """Execute a task synchronously.
         
         Args:
             task: Task object containing description, context, and response format
-            show_output: Whether to show visual output (default: True)
+            show_output: Whether to show visual output. If None, uses self.print flag.
             
         Returns:
             The model's response (extracted output)
         """
+        print_output = show_output if show_output is not None else self.print
         try:
             loop = asyncio.get_running_loop()
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(asyncio.run, self.do_async(task, show_output=show_output))
+                future = executor.submit(asyncio.run, self.do_async(task, show_output=print_output))
                 return future.result()
         except RuntimeError:
-            return asyncio.run(self.do_async(task, show_output=show_output))
+            return asyncio.run(self.do_async(task, show_output=print_output))
     
     async def do_async(
         self, 
         task: Task, 
-        show_output: bool = True,
+        show_output: Optional[bool] = None,
         state: Optional[Any] = None,
         *,
         graph_execution_id: Optional[str] = None
@@ -348,7 +363,7 @@ class Direct:
         
         Args:
             task: Task object containing description, context, and response format
-            show_output: Whether to show visual output (default: True)
+            show_output: Whether to show visual output. If None, uses self.print flag.
             state: Optional state object (for Graph compatibility, not used by Direct)
             graph_execution_id: Optional graph execution ID (for Graph compatibility, not used by Direct)
             
@@ -356,6 +371,9 @@ class Direct:
             The model's response (extracted output)
         """
         import time
+        
+        # Use show_output parameter if provided, otherwise use self.print
+        print_output = show_output if show_output is not None else self.print
         
         model = self._prepare_model()
         
@@ -372,7 +390,7 @@ class Direct:
                 response_format_name = str(task.response_format)
         
         # Show start message
-        if show_output:
+        if print_output:
             from upsonic.utils.printing import direct_started
             direct_started(
                 model_name=model.model_name,
@@ -424,11 +442,12 @@ class Direct:
                 usage=usage,
                 tool_usage=[],
                 debug=False,
-                price_id=task.price_id
+                price_id=task.price_id,
+                print_output=print_output
             )
             
             # Show completion message with metrics (optional, for display)
-            if show_output:
+            if print_output:
                 from upsonic.utils.printing import direct_completed
                 direct_completed(
                     result=result,
@@ -446,7 +465,7 @@ class Direct:
         except Exception as e:
             end_time = time.time()
             
-            if show_output:
+            if print_output:
                 from upsonic.utils.printing import direct_error
                 direct_error(
                     error_message=str(e),
@@ -465,7 +484,7 @@ class Direct:
         Returns:
             The model's response (extracted output)
         """
-        # show_output is True by default in do() method
+        # Force print output for this convenience method
         return self.do(task, show_output=True)
     
     async def print_do_async(self, task: Task) -> Any:
@@ -477,7 +496,7 @@ class Direct:
         Returns:
             The model's response (extracted output)
         """
-        # show_output is True by default in do_async() method
+        # Force print output for this convenience method
         return await self.do_async(task, show_output=True)
     
     @property

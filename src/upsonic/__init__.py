@@ -81,6 +81,9 @@ def _get_Direct():
 def _get_Simulation():
     return _lazy_import("upsonic.simulation.simulation", "Simulation")()
 
+def _get_RalphLoop():
+    return _lazy_import("upsonic.ralph.loop", "RalphLoop")()
+
 def hello() -> str:
     return "Hello from upsonic!"
 
@@ -108,6 +111,8 @@ def __getattr__(name: str) -> Any:
         return _get_Direct()
     elif name == "Simulation":
         return _get_Simulation()
+    elif name == "RalphLoop":
+        return _get_RalphLoop()
     
     # All other imports must come from sub-modules
     raise AttributeError(
@@ -126,4 +131,5 @@ __all__ = [
     "Chat",
     "Direct",
     "Simulation",
+    "RalphLoop",
 ]

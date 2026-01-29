@@ -252,7 +252,7 @@ class TestCultureManagerFormatForSystemPrompt:
         assert result is not None
         assert "<CulturalKnowledge>" in result
         assert "</CulturalKnowledge>" in result
-        assert "## Agent Culture Guidelines" in result
+        assert "## MANDATORY AGENT CULTURE GUIDELINES - STRICT COMPLIANCE REQUIRED ⚠️" in result
         assert "### Tone of Speech" in result
         assert "Professional and friendly" in result
         assert "### Topics I Shouldn't Talk About" in result
