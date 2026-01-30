@@ -2509,7 +2509,7 @@ class Agent(BaseAgent):
             return validation_error.output
         
         # Update policy managers debug flag if debug is enabled
-        if debug:
+        if debug or self.debug:
             self.user_policy_manager.debug = True
             self.agent_policy_manager.debug = True
         

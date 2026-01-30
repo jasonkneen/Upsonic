@@ -348,6 +348,11 @@ class UserPolicyStep(Step):
             original_content = task.description
             processed_task, should_continue = await agent._apply_user_policy(task, context)
             
+            # Update AgentRunInput.user_prompt if task.description was modified by policy
+            if hasattr(agent, '_agent_run_output') and agent._agent_run_output and agent._agent_run_output.input:
+                if processed_task.description != original_content:
+                    agent._agent_run_output.input.user_prompt = processed_task.description
+            
             if not should_continue:
                 context.output = processed_task._response
                 processed_task._policy_blocked = True
