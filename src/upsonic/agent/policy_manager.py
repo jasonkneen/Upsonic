@@ -201,7 +201,8 @@ class PolicyManager:
                     result.rule_outputs.append(rule_output)
                     result.triggered_policies.append(policy.name)
                 
-                if self.debug and rule_output.confidence > 0.0:
+                # Always print policy check result in debug mode (including when policy passes)
+                if self.debug:
                     from upsonic.utils.printing import policy_triggered
                     policy_triggered(
                         policy_name=policy.name,
@@ -229,6 +230,15 @@ class PolicyManager:
                     # Apply transformation - content continues to next policy
                     if policy_output.output_texts:
                         current_texts = policy_output.output_texts
+                    else:
+                        # If output_texts is missing, log warning but continue with current_texts
+                        if self.debug:
+                            from upsonic.utils.printing import warning_log
+                            warning_log(
+                                f"Policy '{policy.name}' returned action '{action_taken}' but no output_texts. "
+                                "Using original content.",
+                                "PolicyManager"
+                            )
                     
                     # Keep track of most restrictive non-blocking action
                     if result.action_taken == "ALLOW":
@@ -237,8 +247,17 @@ class PolicyManager:
                         result.violated_policy_name = policy.name
                         result.violation_reason = rule_output.details
                     
-                    # Store the transformed text
-                    result.final_output = current_texts[0] if current_texts else ""
+                    # Store the transformed text - must use output_texts from policy if available
+                    if policy_output.output_texts and len(policy_output.output_texts) > 0:
+                        result.final_output = policy_output.output_texts[0]
+                        # Update current_texts for next policy in chain
+                        current_texts = policy_output.output_texts
+                    elif current_texts:
+                        # Fallback to current_texts if output_texts is missing
+                        result.final_output = current_texts[0]
+                    else:
+                        result.final_output = ""
+                    
                     # For REPLACE/ANONYMIZE, we consider this a "violation" that could benefit from feedback
                     # However, we still apply the transformation - feedback is for agent to understand why
                     await self._generate_feedback_if_enabled(result, action_taken)

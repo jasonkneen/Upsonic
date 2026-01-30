@@ -4,7 +4,7 @@ Handles detection and protection against insider threats, data exfiltration, and
 """
 
 import re
-from typing import List, Optional, Dict, Any
+from typing import Optional, Dict, Any
 from ..base import RuleBase, ActionBase, Policy
 from ..models import PolicyInput, RuleOutput, PolicyOutput
 
@@ -30,7 +30,8 @@ class InsiderThreatRule(RuleBase):
         
         # Data exfiltration patterns
         self.data_exfiltration_patterns = [
-            r'\b(?:download|copy|transfer|upload|export|backup)\s+(?:all|entire|complete|bulk)\s+(?:database|data|files|documents|records)\b',
+            r'\b(?:download|copy|transfer|upload|export|backup)\s+(?:all|entire|complete|bulk)\s+(?:\w+\s+)?(?:database|databases|data|files|documents|records)\b',
+            r'\b(?:download|copy|transfer|upload|export|backup)\s+(?:all|entire|complete|bulk)\s+(?:company|organization|corporate|business)\s+(?:database|databases|data|files|documents|records)\b',
             r'\b(?:mass|bulk|large|huge)\s+(?:download|copy|transfer|upload|export)\s+(?:of|for)\s+(?:data|files|documents|information)\b',
             r'\b(?:unauthorized|illegal|illegitimate)\s+(?:access|download|copy|transfer|export)\s+(?:of|to)\s+(?:sensitive|confidential|proprietary)\b',
             r'\b(?:exfiltrate|steal|take|remove)\s+(?:data|information|files|documents|intellectual property)\s+(?:from|out of)\s+(?:company|organization|system)\b',
@@ -87,7 +88,8 @@ class InsiderThreatRule(RuleBase):
             r'\b(?:collect|gather|accumulate|hoard)\s+(?:large|huge|excessive|massive)\s+(?:amount|volume|quantity)\s+(?:of|of data|of files|of information)\b',
             r'\b(?:store|keep|save|archive)\s+(?:data|files|information)\s+(?:on|in|to)\s+(?:personal|private|external|unauthorized)\s+(?:devices|storage|accounts|systems)\b',
             r'\b(?:backup|copy|duplicate)\s+(?:entire|complete|all)\s+(?:databases|systems|files|data)\s+(?:to|on|in)\s+(?:personal|private|external)\b',
-            r'\b(?:download|save|keep)\s+(?:everything|all|entire|complete)\s+(?:before|prior to|in preparation for)\s+(?:leaving|quitting|resigning|termination)\b',
+            r'\b(?:download|save|keep)\s+(?:everything|all|entire|complete)\s+(?:company|organization|corporate|business)?\s+(?:database|databases|data|files|documents|information)?\s+(?:before|prior to|in preparation for)\s+(?:\w+\s+)?(?:leaving|leave|quitting|quit|resigning|resign|termination)\b',
+            r'\b(?:download|save|keep)\s+(?:everything|all|entire|complete)\s+(?:before|prior to|in preparation for)\s+(?:\w+\s+)?(?:leaving|leave|quitting|quit|resigning|resign|termination)\b',
         ]
         
         # Communication with external parties patterns
@@ -225,7 +227,7 @@ class InsiderThreatRule_LLM_Finder(RuleBase):
                 triggered_keywords=triggered_keywords
             )
             
-        except Exception as e:
+        except Exception:
             # Fallback to pattern-based detection on error
             fallback_rule = InsiderThreatRule()
             return fallback_rule.process(policy_input)

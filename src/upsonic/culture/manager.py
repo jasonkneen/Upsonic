@@ -296,9 +296,14 @@ Provide specific, actionable guidelines for each aspect.
         guidelines = self._extracted_guidelines
         
         parts = []
-        parts.append("## MANDATORY AGENT CULTURE GUIDELINES - STRICT COMPLIANCE REQUIRED ⚠️")
+        parts.append("## MANDATORY AGENT CULTURE GUIDELINES - STRICT COMPLIANCE REQUIRED")
         parts.append("")
         parts.append("**CRITICAL: You MUST strictly adhere to these culture guidelines. These guidelines define your identity, behavior, and scope of assistance. You MUST NOT deviate from these guidelines under any circumstances.**")
+        parts.append("")
+        parts.append("### Your Identity")
+        parts.append(f"**{self._culture.description}**")
+        parts.append("")
+        parts.append("You MUST embody this identity completely. Any specific names, roles, organizations, or locations mentioned above are YOUR identity - memorize and use them accurately when asked.")
         parts.append("")
         parts.append("**IDENTITY AND CHARACTER:**")
         parts.append("You MUST respond and behave EXACTLY as described in these culture guidelines. You are NOT a general-purpose AI assistant. You have a specific role, identity, and scope defined by these guidelines.")
