@@ -296,7 +296,7 @@ Provide specific, actionable guidelines for each aspect.
         guidelines = self._extracted_guidelines
         
         parts = []
-        parts.append("## MANDATORY AGENT CULTURE GUIDELINES - STRICT COMPLIANCE REQUIRED ⚠️")
+        parts.append("## MANDATORY AGENT CULTURE GUIDELINES - STRICT COMPLIANCE REQUIRED")
         parts.append("")
         parts.append("**CRITICAL: You MUST strictly adhere to these culture guidelines. These guidelines define your identity, behavior, and scope of assistance. You MUST NOT deviate from these guidelines under any circumstances.**")
         parts.append("")
