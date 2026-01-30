@@ -119,6 +119,20 @@ def get_env_bool(key: str, default: bool = False) -> bool:
     return value in ("true", "1", "yes", "on")
 
 
+def get_env_bool_optional(key: str) -> "Optional[bool]":
+    """ Gets a boolean value from an environment variable, returns None if the variable is not set.
+    Args:
+        key: The environment variable name
+    Returns:
+        The boolean value of the environment variable, or None if the variable is not set
+    """
+    value = os.getenv(key)
+    if value is None:
+        return None
+    value_lower = value.lower()
+    return value_lower in ("true", "1", "yes", "on")
+
+
 def setup_sentry() -> None:
     """
     Sentry telemetry sistemini yapılandır (ERROR-ONLY mode by default).
