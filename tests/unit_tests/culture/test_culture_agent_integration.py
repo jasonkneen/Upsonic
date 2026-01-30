@@ -107,7 +107,7 @@ class TestAgentCultureSystemPromptInjection:
         
         assert system_prompt is not None
         assert "<CulturalKnowledge>" in system_prompt
-        assert "## MANDATORY AGENT CULTURE GUIDELINES - STRICT COMPLIANCE REQUIRED ⚠️" in system_prompt
+        assert "## MANDATORY AGENT CULTURE GUIDELINES - STRICT COMPLIANCE REQUIRED" in system_prompt
     
     @pytest.mark.asyncio
     @patch('upsonic.models.infer_model')
@@ -437,7 +437,7 @@ class TestAgentCultureWithTaskExecution:
         assert formatted is not None
         assert formatted.startswith("<CulturalKnowledge>")
         assert formatted.endswith("</CulturalKnowledge>")
-        assert "## MANDATORY AGENT CULTURE GUIDELINES - STRICT COMPLIANCE REQUIRED ⚠️" in formatted
+        assert "## MANDATORY AGENT CULTURE GUIDELINES - STRICT COMPLIANCE REQUIRED" in formatted
         assert "### Tone of Speech" in formatted
         assert "### Topics I Shouldn't Talk About" in formatted
         assert "### Topics I Can Help With" in formatted
