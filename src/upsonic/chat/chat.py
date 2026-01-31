@@ -27,8 +27,10 @@ from .message import ChatMessage
 
 if TYPE_CHECKING:
     from upsonic.agent.agent import Agent
+    from upsonic.run.events.events import AgentEvent
 else:
     Agent = "Agent"
+    AgentEvent = "AgentEvent"
 
 
 class Chat:
@@ -610,6 +612,7 @@ class Chat:
         *,
         context: Optional[List[str]] = None,
         stream: Literal[False] = False,
+        events: Literal[False] = False,
         **kwargs: Any
     ) -> str: ...
 
@@ -620,8 +623,31 @@ class Chat:
         *,
         context: Optional[List[str]] = None,
         stream: Literal[True],
+        events: Literal[False] = False,
         **kwargs: Any
     ) -> AsyncIterator[str]: ...
+
+    @overload
+    async def invoke(
+        self,
+        input_data: Union[str, Task],
+        *,
+        context: Optional[List[str]] = None,
+        stream: Literal[True],
+        events: Literal[True],
+        **kwargs: Any
+    ) -> AsyncIterator["AgentEvent"]: ...
+
+    @overload
+    async def invoke(
+        self,
+        input_data: Union[str, Task],
+        *,
+        context: Optional[List[str]] = None,
+        stream: bool = False,
+        events: Literal[True] = ...,
+        **kwargs: Any
+    ) -> AsyncIterator["AgentEvent"]: ...
 
     async def invoke(
         self,
@@ -629,8 +655,9 @@ class Chat:
         *,
         context: Optional[List[str]] = None,
         stream: bool = False,
+        events: bool = False,
         **kwargs: Any
-    ) -> Union[str, AsyncIterator[str]]:
+    ) -> Union[str, AsyncIterator[str], AsyncIterator["AgentEvent"]]:
         """
         Send a message to the chat and get a response.
         
@@ -644,17 +671,32 @@ class Chat:
             input_data: The message content (string) or Task object
             context: Optional list of file paths to attach
             stream: Whether to stream the response
+            events: If True, yield AgentEvent objects instead of text chunks (requires stream=True)
             **kwargs: Additional arguments passed to the agent
             
         Returns:
-            If stream=False: The response string
-            If stream=True: AsyncIterator yielding response chunks
+            If stream=False and events=False: The response string
+            If stream=True and events=False: AsyncIterator yielding text chunks
+            If stream=True and events=True: AsyncIterator yielding AgentEvent objects
             
         Raises:
             RuntimeError: If chat is in an invalid state
             ValueError: If input validation fails
             Exception: If agent execution fails after retries
+            
+        Example:
+            # Stream text chunks
+            async for chunk in chat.invoke("Hello", stream=True):
+                print(chunk, end='', flush=True)
+            
+            # Stream events
+            async for event in chat.invoke("Hello", stream=True, events=True):
+                print(event)
         """
+        # If events=True, force stream=True
+        if events and not stream:
+            stream = True
+        
         # State and concurrency checks
         if not self._session_manager.can_accept_invocation():
             if self._session_manager.state == SessionState.ERROR:
@@ -681,7 +723,10 @@ class Chat:
         response_start_time = self._session_manager.start_response_timer()
         
         if stream:
-            return self._invoke_streaming(task, response_start_time, **kwargs)
+            if events:
+                return self._invoke_streaming_events(task, response_start_time, **kwargs)
+            else:
+                return self._invoke_streaming(task, response_start_time, **kwargs)
         else:
             return await self._invoke_blocking_async(task, response_start_time, **kwargs)
     
@@ -742,9 +787,9 @@ class Chat:
         response_start_time: float,
         **kwargs: Any
     ) -> AsyncIterator[str]:
-        """Handle streaming invocation."""
+        """Handle streaming invocation (text chunks)."""
         async def _execute_streaming() -> AsyncIterator[str]:
-            async for chunk in self.agent.astream(task, debug=self.debug, **kwargs):
+            async for chunk in self.agent.astream(task, debug=self.debug, events=False, **kwargs):
                 if isinstance(chunk, str):
                     yield chunk
         
@@ -799,13 +844,98 @@ class Chat:
         
         return _stream_with_retry()
     
+    def _invoke_streaming_events(
+        self,
+        task: Task,
+        response_start_time: float,
+        **kwargs: Any
+    ) -> AsyncIterator["AgentEvent"]:
+        """Handle streaming invocation with events (yields AgentEvent objects)."""
+        from upsonic.run.events.events import AgentEvent
+        
+        async def _execute_streaming_events() -> AsyncIterator[AgentEvent]:
+            async for event in self.agent.astream(task, debug=self.debug, events=True, **kwargs):
+                yield event
+        
+        async def _stream_events_with_retry() -> AsyncIterator[AgentEvent]:
+            last_exception = None
+            stream_generator = None
+            
+            try:
+                for attempt in range(self._retry_attempts + 1):
+                    try:
+                        stream_generator = _execute_streaming_events()
+                        async for event in stream_generator:
+                            yield event
+                        return
+                    except Exception as exc:
+                        last_exception = exc
+                        if stream_generator:
+                            try:
+                                await stream_generator.aclose()
+                            except Exception:
+                                pass
+                            stream_generator = None
+                        
+                        if "context manager is already active" in str(exc):
+                            if self.debug:
+                                from upsonic.utils.printing import debug_log
+                                debug_log(
+                                    f"Event streaming context conflict on attempt {attempt + 1}",
+                                    "Chat"
+                                )
+                            await asyncio.sleep(self._retry_delay * (3 ** attempt))
+                        elif attempt < self._retry_attempts:
+                            if self.debug:
+                                from upsonic.utils.printing import debug_log
+                                debug_log(
+                                    f"Event streaming attempt {attempt + 1} failed: {last_exception}",
+                                    "Chat"
+                                )
+                            await asyncio.sleep(self._retry_delay * (2 ** attempt))
+                        else:
+                            raise last_exception
+            finally:
+                if stream_generator:
+                    try:
+                        await stream_generator.aclose()
+                    except Exception:
+                        pass
+                
+                self._session_manager.end_response_timer(response_start_time)
+                self._session_manager.end_invocation()
+                self._transition_state(SessionState.IDLE)
+        
+        return _stream_events_with_retry()
+    
+    @overload
     def stream(
         self,
         input_data: Union[str, Task],
         *,
         context: Optional[List[str]] = None,
+        events: Literal[False] = False,
         **kwargs: Any
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[str]: ...
+
+    @overload
+    def stream(
+        self,
+        input_data: Union[str, Task],
+        *,
+        context: Optional[List[str]] = None,
+        events: Literal[True],
+        **kwargs: Any
+    ) -> AsyncIterator["AgentEvent"]: ...
+
+    def stream(
+        self,
+        input_data: Union[str, Task],
+        *,
+        context: Optional[List[str]] = None,
+        events: bool = False,
+        **kwargs: Any
+    ) -> Union[AsyncIterator[str], AsyncIterator["AgentEvent"]]:
         """
         Stream a response from the chat.
         
@@ -814,10 +944,21 @@ class Chat:
         Args:
             input_data: The message content (string) or Task object
             context: Optional list of file paths to attach
+            events: If True, yield AgentEvent objects instead of text chunks
             **kwargs: Additional arguments passed to the agent
             
         Returns:
-            AsyncIterator yielding response chunks
+            If events=False: AsyncIterator yielding text chunks
+            If events=True: AsyncIterator yielding AgentEvent objects
+            
+        Example:
+            # Stream text chunks
+            async for chunk in chat.stream("Tell me a story"):
+                print(chunk, end='', flush=True)
+            
+            # Stream events (tool calls, text deltas, etc.)
+            async for event in chat.stream("Calculate 5+3", events=True):
+                print(event)
         """
         task = self._normalize_input(input_data, context)
         
@@ -826,7 +967,10 @@ class Chat:
         
         response_start_time = self._session_manager.start_response_timer()
         
-        return self._invoke_streaming(task, response_start_time, **kwargs)
+        if events:
+            return self._invoke_streaming_events(task, response_start_time, **kwargs)
+        else:
+            return self._invoke_streaming(task, response_start_time, **kwargs)
     
     
     async def close(self) -> None:
