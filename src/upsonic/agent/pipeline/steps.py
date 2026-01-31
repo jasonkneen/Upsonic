@@ -850,17 +850,23 @@ class MessageBuildStep(Step):
                 getattr(agent._culture_manager.culture, 'add_system_prompt', False)
             )
             
+            # Set chat_history to historical messages FIRST and mark run start
+            # This ensures new_messages() captures both request and response
+            historical_messages = memory_manager.get_message_history()
+            context.chat_history = list(historical_messages)  # Copy to avoid mutation
+            
+            # Mark the start of this run for message tracking
+            # This records the current chat_history length (historical only) so new_messages()
+            # knows where new messages from this run begin
+            context.start_new_run()
+            
+            # Now build the full messages including the new request
             messages = await agent._build_model_request(
                 task,
                 memory_manager,
                 None,
             )
             context.chat_history = messages
-            
-            # Mark the start of this run for message tracking
-            # This records the current chat_history length so new_messages() 
-            # knows where new messages from this run begin
-            context.start_new_run()
             
             if agent.debug and agent.debug_level >= 2:
                 from upsonic.utils.printing import debug_log_level2
@@ -2566,6 +2572,10 @@ class StreamModelExecutionStep(Step):
         final_response = stream.get()
         context.response = final_response
         
+        # Add the final response to chat_history for message tracking
+        # This ensures the response is included in session memory
+        context.chat_history.append(final_response)
+        
         # Update usage from streaming response
         if hasattr(final_response, 'usage') and final_response.usage:
             context.update_usage_from_response(final_response.usage)
@@ -2617,8 +2627,7 @@ class StreamModelExecutionStep(Step):
             
             # Check for tool limit reached
             if context.tool_limit_reached:
-                # Add tool calls and results to chat_history
-                context.chat_history.append(final_response)
+                # Add tool results to chat_history (response already added above)
                 context.chat_history.append(ModelRequest(parts=tool_results))
                 
                 # Add limit notification
@@ -2673,8 +2682,7 @@ class StreamModelExecutionStep(Step):
                 context.response = stop_response
                 return
             
-            # Add tool calls and results to chat_history
-            context.chat_history.append(final_response)
+            # Add tool results to chat_history (response already added above)
             context.chat_history.append(ModelRequest(parts=tool_results))
             
             # Reset accumulated_text for new streaming round
