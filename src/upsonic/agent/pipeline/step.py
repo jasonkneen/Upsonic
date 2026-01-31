@@ -302,6 +302,10 @@ class Step(ABC):
         # Get result from context (set by execute_stream())
         result = context.current_step_result
         
+        # Finalize step result (updates context.step_results and execution_stats)
+        if result:
+            self._finalize_step_result(result, context)
+        
         # Yield step end event
         if result:
             yield StepEndEvent(
