@@ -61,8 +61,8 @@ class InitializationStep(Step):
             
             task.task_start(agent)
             
-            # Check print flag before calling agent_started
-            should_print = agent and hasattr(agent, 'print') and agent.print
+            # Check print flag from context (thread-safe, set per-run)
+            should_print = context.print_flag
             if should_print:
                 from upsonic.utils.printing import agent_started
                 agent_started(agent.get_agent_id())
@@ -1016,7 +1016,7 @@ class ModelExecutionStep(Step):
                 model,
                 task,
                 debug=agent.debug,
-                print_output=agent.print if (agent and hasattr(agent, 'print')) else False,
+                print_output=context.print_flag,
                 show_tool_calls=agent.show_tool_calls
             )
             if pipeline_manager:
@@ -1600,7 +1600,7 @@ class CallManagementStep(Step):
                     tool_usage_result,
                     agent.debug,
                     getattr(task, 'price_id', None),
-                    print_output=agent.print if (agent and hasattr(agent, 'print')) else False
+                    print_output=context.print_flag
                 )
             
             step_result = StepResult(
@@ -2894,8 +2894,7 @@ class FinalizationStep(Step):
             if task and not task.not_main_task:
                 from upsonic.utils.printing import print_price_id_summary, price_id_summary
                 if task.price_id in price_id_summary:
-                    print_output = agent.print if agent and hasattr(agent, 'print') else False
-                    print_price_id_summary(task.price_id, task, print_output=print_output)
+                    print_price_id_summary(task.price_id, task, print_output=context.print_flag)
 
             try:
                 from upsonic.tools.mcp import MCPHandler, MultiMCPHandler

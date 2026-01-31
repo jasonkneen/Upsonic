@@ -137,6 +137,7 @@ class AgentRunOutput:
     
     # --- Configuration ---
     agent_knowledge_base_filter: Optional["KBFilterExpr"] = None
+    print_flag: bool = False  # Resolved print flag for this run (thread-safe)
     
     # --- Metadata ---
     metadata: Optional[Dict[str, Any]] = None

@@ -267,11 +267,12 @@ class Agent(BaseAgent):
         # Handle print flag with hierarchy:
         # 1. ENV variable (highest priority - overrides everything)
         # 2. Agent constructor print parameter
-        # 3. Method name (print_do=True, do=False) - lowest priority
+        # 3. Method name (print_do=True, do=False) - lowest priority (resolved per-method call)
         self._print_env: Optional[bool] = get_env_bool_optional("UPSONIC_AGENT_PRINT")
         self._print_param: Optional[bool] = print
-        # Default value for backward compatibility - will be dynamically set per method call
-        self.print: bool = False
+        # Initialize with resolved default for introspection (ENV > param > True)
+        # Note: This is the "default" value; per-method resolution uses _resolve_print_flag()
+        self.print: bool = self._print_env if self._print_env is not None else (print if print is not None else True)
 
         # Set db attribute
         self.db = db
@@ -2526,7 +2527,8 @@ class Agent(BaseAgent):
         from upsonic.agent.pipeline import PipelineManager
         
         # Resolve print flag based on hierarchy (ENV > param > method default)
-        self.print = self._resolve_print_flag(_print_method_default)
+        # Store locally - don't mutate self.print to ensure thread-safety
+        resolved_print_flag = self._resolve_print_flag(_print_method_default)
         
         # Convert string to Task if needed
         task = self._convert_to_task(task)
@@ -2553,6 +2555,8 @@ class Agent(BaseAgent):
             self.run_id = run_id
             self._agent_run_output = _resume_output
             self._agent_run_output.is_streaming = False
+            # Set resolved print flag on output for thread-safe access
+            self._agent_run_output.print_flag = resolved_print_flag
         else:
             run_id = str(uuid.uuid4())
             self.run_id = run_id
@@ -2570,6 +2574,9 @@ class Agent(BaseAgent):
                     run_input=run_input,
                     is_streaming=False
                 )
+                
+                # Set resolved print flag on output for thread-safe access
+                self._agent_run_output.print_flag = resolved_print_flag
                 
                 # Set run_id on task for cross-process continuation support
                 if task is not None:
@@ -2905,6 +2912,10 @@ class Agent(BaseAgent):
                 run_input=run_input,
                 is_streaming=True
             )
+            
+            # Set resolved print flag on output for thread-safe access
+            # Streaming defaults to False since user handles output themselves
+            self._agent_run_output.print_flag = self._resolve_print_flag(False)
             
             # Set run_id on task for cross-process continuation support
             if task is not None:
