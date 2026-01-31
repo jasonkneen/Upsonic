@@ -4,7 +4,7 @@ import uuid
 from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Literal, Optional, Union, TYPE_CHECKING
 
 
-from upsonic.utils.logging_config import sentry_sdk, get_env_bool
+from upsonic.utils.logging_config import sentry_sdk, get_env_bool_optional
 from upsonic.agent.base import BaseAgent
 from upsonic.run.agent.output import AgentRunOutput
 from upsonic.run.agent.input import AgentRunInput
@@ -264,11 +264,15 @@ class Agent(BaseAgent):
         self.debug_level = debug_level if debug else 1
         self.reflection = reflection
         
-        # Handle print flag: parameter overrides env variable
-        if print is not None:
-            self.print = print
-        else:
-            self.print = get_env_bool("UPSONIC_AGENT_PRINT", default=True)
+        # Handle print flag with hierarchy:
+        # 1. ENV variable (highest priority - overrides everything)
+        # 2. Agent constructor print parameter
+        # 3. Method name (print_do=True, do=False) - lowest priority (resolved per-method call)
+        self._print_env: Optional[bool] = get_env_bool_optional("UPSONIC_AGENT_PRINT")
+        self._print_param: Optional[bool] = print
+        # Initialize with resolved default for introspection (ENV > param > True)
+        # Note: This is the "default" value; per-method resolution uses _resolve_print_flag()
+        self.print: bool = self._print_env if self._print_env is not None else (print if print is not None else True)
 
         # Set db attribute
         self.db = db
@@ -665,6 +669,32 @@ class Agent(BaseAgent):
         if isinstance(task, str):
             return TaskClass(description=task)
         return task
+    
+    def _resolve_print_flag(self, method_default: bool) -> bool:
+        """
+        Resolve the print flag based on hierarchy.
+        
+        Priority (highest to lowest):
+        1. UPSONIC_AGENT_PRINT env variable (overrides everything)
+        2. Agent constructor print parameter
+        3. Method default (print_do=True, do=False)
+        
+        Args:
+            method_default: Default value based on method name (True for print_do, False for do)
+            
+        Returns:
+            bool: Whether to print output
+        """
+        # 1. ENV has highest priority - overrides everything
+        if self._print_env is not None:
+            return self._print_env
+        
+        # 2. Agent constructor parameter
+        if self._print_param is not None:
+            return self._print_param
+        
+        # 3. Method default (print_do=True, do=False)
+        return method_default
     
     def _validate_task_for_new_run(
         self, 
@@ -2457,6 +2487,7 @@ class Agent(BaseAgent):
         graph_execution_id: Optional[str] = None,
         _resume_output: Optional[AgentRunOutput] = None,
         _resume_step_index: Optional[int] = None,
+        _print_method_default: bool = False,
     ) -> Any:
         """
         Execute a task asynchronously using the pipeline architecture.
@@ -2475,6 +2506,7 @@ class Agent(BaseAgent):
             graph_execution_id: Graph execution identifier
             _resume_output: Internal - output for HITL resumption
             _resume_step_index: Internal - step index to resume from
+            _print_method_default: Internal - default print value based on method (do=False, print_do=True)
             
         Returns:
             Task content (str, BaseModel, etc.) if return_output=False
@@ -2493,6 +2525,10 @@ class Agent(BaseAgent):
             ```
         """
         from upsonic.agent.pipeline import PipelineManager
+        
+        # Resolve print flag based on hierarchy (ENV > param > method default)
+        # Store locally - don't mutate self.print to ensure thread-safety
+        resolved_print_flag = self._resolve_print_flag(_print_method_default)
         
         # Convert string to Task if needed
         task = self._convert_to_task(task)
@@ -2519,6 +2555,8 @@ class Agent(BaseAgent):
             self.run_id = run_id
             self._agent_run_output = _resume_output
             self._agent_run_output.is_streaming = False
+            # Set resolved print flag on output for thread-safe access
+            self._agent_run_output.print_flag = resolved_print_flag
         else:
             run_id = str(uuid.uuid4())
             self.run_id = run_id
@@ -2536,6 +2574,9 @@ class Agent(BaseAgent):
                     run_input=run_input,
                     is_streaming=False
                 )
+                
+                # Set resolved print flag on output for thread-safe access
+                self._agent_run_output.print_flag = resolved_print_flag
                 
                 # Set run_id on task for cross-process continuation support
                 if task is not None:
@@ -2654,47 +2695,66 @@ class Agent(BaseAgent):
             # If we get here, we're already in an async context with a running loop
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(asyncio.run, self.do_async(task, model, debug, retry, return_output))
+                future = executor.submit(asyncio.run, self.do_async(task, model, debug, retry, return_output, _print_method_default=False))
                 return future.result()
         except RuntimeError:
             # No event loop is running, so we can safely use asyncio.run()
-            return asyncio.run(self.do_async(task, model, debug, retry, return_output))
+            return asyncio.run(self.do_async(task, model, debug, retry, return_output, _print_method_default=False))
     
     def print_do(
         self,
-        task: "Task",
+        task: Union[str, "Task"],
         model: Optional[Union[str, "Model"]] = None,
         debug: bool = False,
-        retry: int = 1
+        retry: int = 1,
+        return_output: bool = False
     ) -> Any:
         """
         Execute a task synchronously and print the result.
         
         Returns:
-            AgentRunOutput: The result object (with output printed to console)
+            Task content (str, BaseModel, etc.) if return_output=False
+            Full AgentRunOutput if return_output=True
         """
-        result = self.do(task, model, debug, retry)
-        from upsonic.utils.printing import success_log
-        success_log(f"{result}", "Agent")
-        return result
+        # Auto-convert string to Task object if needed
+        from upsonic.tasks.tasks import Task as TaskClass
+        if isinstance(task, str):
+            task = TaskClass(description=task)
+        
+        task.price_id_ = None
+        _ = task.price_id
+        task._tool_calls = []
+
+        try:
+            loop = asyncio.get_running_loop()
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(asyncio.run, self.do_async(task, model, debug, retry, return_output, _print_method_default=True))
+                return future.result()
+        except RuntimeError:
+            return asyncio.run(self.do_async(task, model, debug, retry, return_output, _print_method_default=True))
     
     async def print_do_async(
         self,
-        task: "Task",
+        task: Union[str, "Task"],
         model: Optional[Union[str, "Model"]] = None,
         debug: bool = False,
-        retry: int = 1
+        retry: int = 1,
+        return_output: bool = False
     ) -> Any:
         """
-        Execute a task asynchronously and print the result.
+        Execute a task asynchronously with print output enabled (unless overridden by ENV or Agent param).
+        
+        Print hierarchy (highest to lowest priority):
+        1. UPSONIC_AGENT_PRINT env variable
+        2. Agent constructor print parameter
+        3. Method default (print_do_async=True)
         
         Returns:
-            AgentRunOutput: The result object (with output printed to console)
+            Task content (str, BaseModel, etc.) if return_output=False
+            Full AgentRunOutput if return_output=True
         """
-        result = await self.do_async(task, model, debug, retry)
-        from upsonic.utils.printing import success_log
-        success_log(f"{result}", "Agent")
-        return result
+        return await self.do_async(task, model, debug, retry, return_output, _print_method_default=True)
     
     def stream(
         self,
@@ -2852,6 +2912,10 @@ class Agent(BaseAgent):
                 run_input=run_input,
                 is_streaming=True
             )
+            
+            # Set resolved print flag on output for thread-safe access
+            # Streaming defaults to False since user handles output themselves
+            self._agent_run_output.print_flag = self._resolve_print_flag(False)
             
             # Set run_id on task for cross-process continuation support
             if task is not None:
