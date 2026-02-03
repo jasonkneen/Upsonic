@@ -7,17 +7,20 @@ if TYPE_CHECKING:
     from .financial_tools import YFinanceTools
     from .tavily import tavily_search_tool
     from .duckduckgo import duckduckgo_search_tool
+    from .bochasearch import bocha_search_tool
 
 def _get_common_tools():
     """Lazy import of common tool classes and functions."""
     from .financial_tools import YFinanceTools
     from .tavily import tavily_search_tool
     from .duckduckgo import duckduckgo_search_tool
+    from .bochasearch import bocha_search_tool
     
     return {
         'YFinanceTools': YFinanceTools,
         'tavily_search_tool': tavily_search_tool,
         'duckduckgo_search_tool': duckduckgo_search_tool,
+        'bocha_search_tool': bocha_search_tool
     }
 
 def __getattr__(name: str) -> Any:
@@ -35,4 +38,5 @@ __all__ = [
     'YFinanceTools',
     'tavily_search_tool',
     'duckduckgo_search_tool',
+    'bocha_search_tool',
 ]
