@@ -68,12 +68,13 @@ class Team:
     def print_complete(self, tasks: list[Task] | Task | None = None):
         return self.print_do(tasks)
 
-    def do(self, tasks: list[Task] | Task | None = None):
+    def do(self, tasks: list[Task] | Task | None = None, _print_method_default: bool = False):
         """
         Execute multi-agent operations with the predefined agents and tasks.
         
         Args:
             tasks: Optional list of tasks or single task to execute. If not provided, uses tasks from initialization.
+            _print_method_default: Internal - default print value based on method (do=False, print_do=True)
         
         Returns:
             The response from the multi-agent operation
@@ -84,9 +85,9 @@ class Team:
             tasks_to_execute = [tasks_to_execute]
         
         # Execute the multi-agent call
-        return self.multi_agent(self.agents, tasks_to_execute)
+        return self.multi_agent(self.agents, tasks_to_execute, _print_method_default=_print_method_default)
     
-    def multi_agent(self, agent_configurations: List[Agent], tasks: Any):
+    def multi_agent(self, agent_configurations: List[Agent], tasks: Any, _print_method_default: bool = False):
         import asyncio
         
         try:
@@ -95,7 +96,7 @@ class Team:
             if loop.is_running():
                 # If there's a running loop, run the coroutine in that loop
                 return asyncio.run_coroutine_threadsafe(
-                    self.multi_agent_async(agent_configurations, tasks), 
+                    self.multi_agent_async(agent_configurations, tasks, _print_method_default=_print_method_default), 
                     loop
                 ).result()
         except RuntimeError:
@@ -103,11 +104,16 @@ class Team:
             pass
         
         # If no running loop or exception occurred, create a new one
-        return asyncio.run(self.multi_agent_async(agent_configurations, tasks))
+        return asyncio.run(self.multi_agent_async(agent_configurations, tasks, _print_method_default=_print_method_default))
 
-    async def multi_agent_async(self, agent_configurations: List[Agent], tasks: Any):
+    async def multi_agent_async(self, agent_configurations: List[Agent], tasks: Any, _print_method_default: bool = False):
         """
         Asynchronous version of the multi_agent method.
+        
+        Args:
+            agent_configurations: List of Agent instances to use as team members.
+            tasks: Tasks to execute.
+            _print_method_default: Internal - default print value based on method (do=False, print_do=True)
         """
         if self.mode == "sequential":
             # Set shared memory on all agents if memory is provided
@@ -156,7 +162,7 @@ class Team:
                     context_sharing.enhance_task_context(
                         current_task, tasks, task_index, agent_configurations, all_results
                     )
-                    result = await agents_registry[selected_agent_name].do_async(current_task)
+                    result = await agents_registry[selected_agent_name].do_async(current_task, _print_method_default=_print_method_default)
                     all_results.append(current_task)
                     
                     # Level 2: Task execution completion
@@ -225,7 +231,7 @@ class Team:
                 response_format=self.response_format,
             )
 
-            final_response = await self.leader_agent.do_async(master_task)
+            final_response = await self.leader_agent.do_async(master_task, _print_method_default=_print_method_default)
             
             return final_response
         elif self.mode == "route":
@@ -244,7 +250,7 @@ class Team:
             router_task_description = "Analyze the MISSION OBJECTIVES in your system prompt and route the request to the best specialist."
             router_task = Task(description=router_task_description, tools=[routing_tool])
 
-            await self.leader_agent.do_async(router_task)
+            await self.leader_agent.do_async(router_task, _print_method_default=_print_method_default)
 
             chosen_agent = delegation_manager.routed_agent
 
@@ -262,18 +268,19 @@ class Team:
                 response_format=self.response_format
             )
 
-            await chosen_agent.do_async(final_task)
+            await chosen_agent.do_async(final_task, _print_method_default=_print_method_default)
             return final_task.response
 
     def print_do(self, tasks: list[Task] | Task | None = None):
         """
         Execute the multi-agent operation and print the result.
         
+        This enables printing during agent execution (streaming output).
+        
         Returns:
             The response from the multi-agent operation
         """
-        result = self.do(tasks)
-        print(str(result))
+        result = self.do(tasks, _print_method_default=True)
         return result
     
     def add_tool(self):
