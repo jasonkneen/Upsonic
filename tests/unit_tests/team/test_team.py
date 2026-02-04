@@ -42,7 +42,7 @@ class MockAgent:
     def get_agent_id(self) -> str:
         return self.name if self.name else f"Agent_{self.agent_id_[:8]}"
 
-    async def do_async(self, task: Task) -> Any:
+    async def do_async(self, task: Task, _print_method_default: bool = False) -> Any:
         """Mock async do method."""
         task._response = f"Response from {self.name}: {task.description}"
         return task.response
@@ -330,7 +330,7 @@ async def test_team_route_mode():
         mock_delegation.return_value = mock_delegation_instance
 
         # Mock agent1.do_async to set response on the task passed to it
-        async def mock_do_async(task):
+        async def mock_do_async(task, _print_method_default: bool = False):
             task._response = "Routed response"
             return task.response
 
@@ -495,7 +495,7 @@ def test_team_print_do():
     Test print_do() method.
 
     This tests that:
-    1. print_do() executes and prints result
+    1. print_do() executes with _print_method_default=True
     2. Returns the result
     """
     print("\n" + "=" * 80)
@@ -508,15 +508,11 @@ def test_team_print_do():
 
     team = Team(agents=agents)
 
-    with (
-        patch.object(team, "do", return_value="Result") as mock_do,
-        patch("builtins.print") as mock_print,
-    ):
+    with patch.object(team, "do", return_value="Result") as mock_do:
         result = team.print_do(task)
 
         assert result == "Result", "Should return result"
-        mock_do.assert_called_once_with(task)
-        mock_print.assert_called_once_with("Result")
+        mock_do.assert_called_once_with(task, _print_method_default=True)
 
     print("✓ Team print_do() method works!")
 
