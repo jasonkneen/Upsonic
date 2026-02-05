@@ -1994,10 +1994,16 @@ class Agent(BaseAgent):
                 )
                 task.description = anonymization_notice + task.description
                 if self.debug:
-                    from upsonic.utils.printing import debug_log
+                    from upsonic.utils.printing import debug_log, anonymization_debug_panel
                     debug_log(
                         f"Stored anonymization map with {len(result.transformation_map)} entries for de-anonymization",
                         "Agent"
+                    )
+                    # Show detailed anonymization info - what LLM will see vs original
+                    anonymization_debug_panel(
+                        original_values=[entry.get("original", "") for entry in result.transformation_map.values()],
+                        anonymized_values=[entry.get("anonymous", "") for entry in result.transformation_map.values()],
+                        llm_input=task.description
                     )
             return task, True
         

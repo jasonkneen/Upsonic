@@ -1,11 +1,13 @@
-from typing import Any, Dict, Literal, Optional, Set, Union, TYPE_CHECKING
+from typing import Any, Dict, List, Literal, Optional, Set, Union, TYPE_CHECKING
 from decimal import Decimal
 
 if TYPE_CHECKING:
     from upsonic.models import Model
-from rich.console import Console
+from rich.console import Console, Group
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
+from rich import box
 import platform
 import sys
 import shutil
@@ -2004,6 +2006,61 @@ def debug_log_level2(message: str, context: str = "Upsonic", debug: bool = False
     detail_str = ", ".join([f"{k}={v}" for k, v in details.items()]) if details else ""
     _bg_logger.debug(f"[{context}] {message}" + (f" | {detail_str}" if detail_str else ""))
 
+
+def anonymization_debug_panel(
+    original_values: List[str],
+    anonymized_values: List[str],
+    llm_input: str
+) -> None:
+    """
+    Displays a debug panel showing anonymization details.
+    
+    This panel shows:
+    - Original PII values (what user provided)
+    - Anonymized values (what LLM will see)
+    - The full input that will be sent to the LLM
+    
+    Args:
+        original_values: List of original PII values
+        anonymized_values: List of anonymized replacement values
+        llm_input: The full input that will be sent to the LLM
+    """
+    table = Table(show_header=True, expand=True, box=box.ROUNDED)
+    table.add_column("Original (User's Data)", style="red", justify="left")
+    table.add_column("Anonymized (Sent to LLM)", style="green", justify="left")
+    
+    for orig, anon in zip(original_values, anonymized_values):
+        orig_esc = escape_rich_markup(str(orig))
+        anon_esc = escape_rich_markup(str(anon))
+        table.add_row(orig_esc, anon_esc)
+    
+    panel_content = Group(
+        table,
+        Text(""),
+        Text("📤 Input sent to LLM:", style="bold yellow"),
+        Text(""),
+        Panel(
+            escape_rich_markup(llm_input[:1000] + ("..." if len(llm_input) > 1000 else "")),
+            border_style="dim green",
+            title="[dim]LLM sees this (anonymized)[/dim]",
+            expand=True
+        )
+    )
+    
+    panel = Panel(
+        panel_content,
+        title="[bold cyan]🔒 Anonymization Details[/bold cyan]",
+        subtitle="[dim]Real PII NEVER sent to LLM[/dim]",
+        border_style="cyan",
+        expand=True,
+        width=90
+    )
+    
+    console.print(panel)
+    spacing()
+    
+    # Background logging
+    _bg_logger.debug(f"[Anonymization] Mapped {len(original_values)} values: originals hidden, anonymized sent to LLM")
 
 
 def culture_info(message: str, debug: bool = False) -> None:
