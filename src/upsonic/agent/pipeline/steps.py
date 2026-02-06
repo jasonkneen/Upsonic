@@ -1535,6 +1535,39 @@ class CallManagementStep(Step):
             if context.output is None and task:
                 context.output = task.response
             
+            # De-anonymize response BEFORE printing (if anonymization was applied)
+            # This ensures print_do shows original values, not anonymized ones
+            if task and hasattr(task, '_anonymization_map') and task._anonymization_map:
+                from upsonic.safety_engine.anonymization import deanonymize_content
+                
+                if context.output is not None:
+                    if isinstance(context.output, str):
+                        context.output = deanonymize_content(context.output, task._anonymization_map)
+                    elif hasattr(context.output, 'model_dump_json'):
+                        # For Pydantic models, de-anonymize the JSON representation
+                        try:
+                            import json
+                            json_str = context.output.model_dump_json()
+                            deanonymized_json = deanonymize_content(json_str, task._anonymization_map)
+                            context.output = type(context.output).model_validate_json(deanonymized_json)
+                        except Exception:
+                            pass  # If it fails, keep original output
+                
+                # Also de-anonymize task._response if set
+                if hasattr(task, '_response') and task._response:
+                    if isinstance(task._response, str):
+                        task._response = deanonymize_content(task._response, task._anonymization_map)
+                
+                if agent.debug:
+                    from upsonic.utils.printing import debug_log
+                    debug_log(
+                        f"De-anonymized response using {len(task._anonymization_map)} mappings",
+                        "CallManagementStep"
+                    )
+                
+                # Clear the map to prevent double de-anonymization in FinalizationStep
+                task._anonymization_map = None
+            
             # Retrieve CallManager from pipeline registry
             if pipeline_manager:
                 call_manager = pipeline_manager.get_manager('call_manager')
@@ -2960,35 +2993,8 @@ class FinalizationStep(Step):
             if context.output is None and task:
                 context.output = task.response
             
-            # De-anonymize response if anonymization was applied
-            if task and hasattr(task, '_anonymization_map') and task._anonymization_map:
-                from upsonic.safety_engine.anonymization import deanonymize_content
-                
-                if context.output is not None:
-                    if isinstance(context.output, str):
-                        context.output = deanonymize_content(context.output, task._anonymization_map)
-                    elif hasattr(context.output, 'model_dump_json'):
-                        # For Pydantic models, de-anonymize the JSON representation
-                        # and reconstruct (this is a best-effort approach)
-                        try:
-                            import json
-                            json_str = context.output.model_dump_json()
-                            deanonymized_json = deanonymize_content(json_str, task._anonymization_map)
-                            context.output = type(context.output).model_validate_json(deanonymized_json)
-                        except Exception:
-                            pass  # If it fails, keep original output
-                
-                # Also de-anonymize task._response if set
-                if hasattr(task, '_response') and task._response:
-                    if isinstance(task._response, str):
-                        task._response = deanonymize_content(task._response, task._anonymization_map)
-                
-                if agent.debug:
-                    from upsonic.utils.printing import debug_log
-                    debug_log(
-                        f"De-anonymized response using {len(task._anonymization_map)} mappings",
-                        "FinalizationStep"
-                    )
+            # Note: De-anonymization is now handled in CallManagementStep (before print_do)
+            # to ensure printed output shows original values, not anonymized ones
             
             task.task_end()
 
