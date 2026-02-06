@@ -440,7 +440,15 @@ class TelegramInterface(Interface):
         was_reset = await self.areset_chat_session(str(user_id))
         
         if was_reset:
-            reply_text = "✅ Your conversation has been reset. I'm ready to start fresh!"
+            # Check if agent has workspace and execute greeting
+            if self.agent.workspace:
+                greeting_result = await self.agent.execute_workspace_greeting_async()
+                if greeting_result:
+                    reply_text = str(greeting_result)
+                else:
+                    reply_text = "✅ Your conversation has been reset. I'm ready to start fresh!"
+            else:
+                reply_text = "✅ Your conversation has been reset. I'm ready to start fresh!"
         else:
             reply_text = "No active conversation found. Send me a message to start!"
         

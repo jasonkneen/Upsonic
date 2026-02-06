@@ -155,6 +155,9 @@ class AgentRunOutput:
     pause_reason: Optional[Literal["external_tool"]] = None  # "external_tool" only now
     error_details: Optional[str] = None
     
+    # --- Context management ---
+    _context_window_full: bool = False
+    
     # --- Message tracking (internal) ---
     # _run_boundaries tracks where each run starts in chat_history
     # This allows extracting new messages from just this run
