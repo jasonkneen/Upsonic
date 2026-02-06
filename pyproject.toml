@@ -1,6 +1,6 @@
 [project]
 name = "upsonic"
-version = "0.71.5"
+version = "0.71.6"
 description = "Agent Framework For Fintech"
 readme = "README.md"
 authors = [
