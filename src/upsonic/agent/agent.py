@@ -127,6 +127,7 @@ class Agent(BaseAgent):
         reflection: bool = False,
         context_management: bool = False,
         context_management_keep_recent: int = 5,
+        context_management_model: Optional[str] = None,
         reliability_layer: Optional[Any] = None,
         agent_id_: Optional[str] = None,
         canvas: Optional["Canvas"] = None,
@@ -192,6 +193,9 @@ class Agent(BaseAgent):
             context_management_keep_recent: Number of recent tool-call events /
                 messages to preserve when the context management middleware prunes or
                 summarizes the history (default 5).
+            context_management_model: Optional model identifier (e.g. 'openai/gpt-4.1')
+                with a larger context window to use specifically for context compression /
+                summarization. If None, the agent's primary model is used.
             reliability_layer: Reliability layer for robustness
             agent_id_: Specific agent ID
             canvas: Canvas instance for visual interactions
@@ -296,13 +300,21 @@ class Agent(BaseAgent):
 
         self.context_management: bool = context_management
         self.context_management_keep_recent: int = context_management_keep_recent
+        self.context_management_model: Optional[str] = context_management_model
         self._context_management_middleware: Optional[Any] = None
 
         if self.context_management:
             from upsonic.agent.context_managers import ContextManagementMiddleware
+            from upsonic.models import infer_model as _infer_model
+
+            compression_model: Optional[Any] = None
+            if self.context_management_model is not None:
+                compression_model = _infer_model(self.context_management_model)
+
             self._context_management_middleware = ContextManagementMiddleware(
                 model=self.model,
                 keep_recent_count=self.context_management_keep_recent,
+                context_compression_model=compression_model,
             )
 
         self.reliability_layer = reliability_layer

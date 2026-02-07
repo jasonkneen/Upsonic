@@ -2762,24 +2762,6 @@ wheels = [
 ]
 
 [[package]]
-name = "llmlingua"
-version = "0.2.2"
-source = { registry = "https://pypi.org/simple/" }
-dependencies = [
-    { name = "accelerate" },
-    { name = "nltk" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple/" }, marker = "python_full_version < '3.11'" },
-    { name = "numpy", version = "2.4.0", source = { registry = "https://pypi.org/simple/" }, marker = "python_full_version >= '3.11'" },
-    { name = "tiktoken" },
-    { name = "torch" },
-    { name = "transformers" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/fd/02/7ed8ad9cec4b2f0a8a45c5b50a2435b559d2c764b5865e896d1c511080b1/llmlingua-0.2.2.tar.gz", hash = "sha256:1a0caedd8d5a65512a85dadb6bfda6f5b3c4b45e5cb9e7b1c6009573f9058572", size = 59753, upload-time = "2024-04-09T08:21:56.88Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/6e/3e/221fe46a3338f2babdb2082ee42df88fcaa8ea0e639e832cbb1b93c5923a/llmlingua-0.2.2-py3-none-any.whl", hash = "sha256:da55137efe0db78063b3395396efe8a0dcfe4ae5a09aea0d503c34b7bf1d800c", size = 30536, upload-time = "2024-04-09T08:21:55.428Z" },
-]
-
-[[package]]
 name = "lmdb"
 version = "1.7.5"
 source = { registry = "https://pypi.org/simple/" }
@@ -3585,10 +3567,10 @@ name = "nltk"
 version = "3.9.2"
 source = { registry = "https://pypi.org/simple/" }
 dependencies = [
-    { name = "click" },
-    { name = "joblib" },
-    { name = "regex" },
-    { name = "tqdm" },
+    { name = "click", marker = "python_full_version < '3.14'" },
+    { name = "joblib", marker = "python_full_version < '3.14'" },
+    { name = "regex", marker = "python_full_version < '3.14'" },
+    { name = "tqdm", marker = "python_full_version < '3.14'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/f9/76/3a5e4312c19a028770f86fd7c058cf9f4ec4321c6cf7526bab998a5b683c/nltk-3.9.2.tar.gz", hash = "sha256:0f409e9b069ca4177c1903c3e843eef90c7e92992fa4931ae607da6de49e1419", size = 2887629, upload-time = "2025-10-01T07:19:23.764Z" }
 wheels = [
@@ -8295,7 +8277,6 @@ tools = [
     { name = "beautifulsoup4" },
     { name = "ddgs" },
     { name = "genai-prices" },
-    { name = "llmlingua" },
     { name = "pandas" },
     { name = "tavily-python" },
     { name = "yfinance" },
@@ -8404,7 +8385,6 @@ requires-dist = [
     { name = "jq", marker = "extra == 'json-loader'", specifier = ">=1.10.0" },
     { name = "jq", marker = "extra == 'loaders'", specifier = ">=1.10.0" },
     { name = "jq", marker = "extra == 'yaml-loader'", specifier = ">=1.10.0" },
-    { name = "llmlingua", marker = "extra == 'tools'", specifier = ">=0.2.2" },
     { name = "lxml", marker = "extra == 'loaders'", specifier = ">=4.9.1" },
     { name = "lxml", marker = "extra == 'xml-loader'", specifier = ">=4.9.1" },
     { name = "markdown-it-py", marker = "extra == 'loaders'", specifier = ">=4.0.0" },

@@ -110,6 +110,8 @@ JSON SCHEMA:
 """
 
 
+_LOG_CONTEXT: str = "ContextManagement"
+
 
 class ContextManagementMiddleware:
     """Middleware that manages context window overflow for agent conversations.
@@ -122,6 +124,11 @@ class ContextManagementMiddleware:
        ModelRequest / ModelResponse objects.
     3. If the context is still full after all strategies, inject a fixed
        "context full" response and stop further processing.
+
+    An optional ``context_compression_model`` can be provided to use a
+    different (typically higher-context-window) model specifically for
+    the summarization step, while still using the agent's primary model
+    for context-window limit checks.
     """
 
     def __init__(
@@ -129,6 +136,7 @@ class ContextManagementMiddleware:
         model: "Model",
         keep_recent_count: int = DEFAULT_KEEP_RECENT_COUNT,
         safety_margin_ratio: float = 0.90,
+        context_compression_model: Optional["Model"] = None,
     ) -> None:
         """
         Args:
@@ -137,10 +145,20 @@ class ContextManagementMiddleware:
                 to preserve when pruning or summarizing (default 5).
             safety_margin_ratio: Use this fraction of the max context window as
                 the effective limit (default 0.90 = 90%).
+            context_compression_model: Optional separate Model instance with a
+                larger context window to use for the summarization LLM call.
+                If None, the primary ``model`` is used for summarization.
         """
-        self.model = model
+        self.model: "Model" = model
         self.keep_recent_count: int = keep_recent_count
         self.safety_margin_ratio: float = safety_margin_ratio
+        self.context_compression_model: Optional["Model"] = context_compression_model
+
+    def _get_summarization_model(self) -> "Model":
+        """Return the model to use for the summarization LLM call."""
+        if self.context_compression_model is not None:
+            return self.context_compression_model
+        return self.model
 
     def _get_max_context_window(self) -> Optional[int]:
         """Get the max context window for the current model."""
@@ -183,7 +201,6 @@ class ContextManagementMiddleware:
         if has_usage:
             return total_input_tokens + total_output_tokens
 
-        # Fallback: character-based heuristic when no usage data is available
         total_chars: int = 0
         for message in messages:
             if hasattr(message, 'parts'):
@@ -216,6 +233,17 @@ class ContextManagementMiddleware:
         estimated_tokens: int = self._estimate_message_tokens(messages)
         return estimated_tokens > effective_limit
 
+    def _has_tool_related_messages(self, messages: List["ModelMessage"]) -> bool:
+        """Check whether the message list contains any tool call or tool return parts."""
+        from upsonic.messages import ToolCallPart, ToolReturnPart
+
+        for msg in messages:
+            if not hasattr(msg, 'parts'):
+                continue
+            for part in msg.parts:
+                if isinstance(part, (ToolCallPart, ToolReturnPart)):
+                    return True
+        return False
 
     def _prune_tool_call_history(
         self,
@@ -367,6 +395,9 @@ class ContextManagementMiddleware:
         ModelResponse objects, keeping the last ``self.keep_recent_count``
         messages verbatim.
 
+        Uses the ``context_compression_model`` if set, otherwise falls
+        back to the primary agent model.
+
         Args:
             messages: The full message list.
 
@@ -378,11 +409,11 @@ class ContextManagementMiddleware:
             SystemPromptPart,
             UserPromptPart,
         )
+        from upsonic.utils.printing import info_log
 
         if len(messages) <= self.keep_recent_count:
             return list(messages)
 
-        # Separate system prompt (first message if it contains SystemPromptPart)
         system_messages: List["ModelMessage"] = []
         non_system_messages: List["ModelMessage"] = []
 
@@ -427,11 +458,28 @@ class ContextManagementMiddleware:
 
         from upsonic.messages import TextPart
 
-        llm_response: "ModelResponse" = await self.model.request(
-            messages=[request_msg],
-            model_settings=self.model.settings,
-            model_request_parameters=model_params,
+        summarization_model: "Model" = self._get_summarization_model()
+
+        info_log(
+            f"Summarizing {len(old_messages)} old messages using model "
+            f"'{summarization_model.model_name}' (keeping {len(recent_messages)} recent)",
+            context=_LOG_CONTEXT,
         )
+
+        try:
+            llm_response: "ModelResponse" = await summarization_model.request(
+                messages=[request_msg],
+                model_settings=summarization_model.settings,
+                model_request_parameters=model_params,
+            )
+        except Exception as exc:
+            from upsonic.utils.printing import warning_log
+            warning_log(
+                f"Summarization LLM call failed ({type(exc).__name__}: {exc}). "
+                f"Returning original messages without summarization.",
+                context=_LOG_CONTEXT,
+            )
+            return list(messages)
 
         raw_text: str = ""
         for part in llm_response.parts:
@@ -439,7 +487,6 @@ class ContextManagementMiddleware:
                 raw_text += part.content
 
         raw_text = raw_text.strip()
-        # Strip markdown code fences if the LLM wrapped the JSON
         if raw_text.startswith("```"):
             first_newline = raw_text.find("\n")
             if first_newline != -1:
@@ -447,11 +494,31 @@ class ContextManagementMiddleware:
             if raw_text.endswith("```"):
                 raw_text = raw_text[:-3].strip()
 
-        summary: ConversationSummary = ConversationSummary.model_validate_json(raw_text)
+        try:
+            summary: ConversationSummary = ConversationSummary.model_validate_json(raw_text)
+        except Exception as exc:
+            from upsonic.utils.printing import warning_log
+            warning_log(
+                f"Failed to parse summarization response ({type(exc).__name__}: {exc}). "
+                f"Returning original messages without summarization.",
+                context=_LOG_CONTEXT,
+            )
+            return list(messages)
+
         summarized_messages: List["ModelMessage"] = self._reconstruct_messages(summary)
 
         if not summarized_messages:
+            info_log(
+                "Summarization produced no messages; falling back to recent messages only",
+                context=_LOG_CONTEXT,
+            )
             return system_messages + recent_messages
+
+        info_log(
+            f"Summarization complete: {len(old_messages)} old messages → "
+            f"{len(summarized_messages)} summarized messages",
+            context=_LOG_CONTEXT,
+        )
 
         return system_messages + summarized_messages + recent_messages
 
@@ -479,8 +546,8 @@ class ContextManagementMiddleware:
         """Apply context management strategies to messages.
 
         Checks if the context window is exceeded and applies strategies in order:
-        1. Prune old tool call history (keep last ``self.keep_recent_count``).
-        2. Summarize old messages via LLM (keep last ``self.keep_recent_count`` verbatim).
+        1. If tool calls exist, prune old tool call history first.
+        2. Summarize old messages via LLM (independent of whether pruning occurred).
         3. If still exceeded, return a context_full flag.
 
         Args:
@@ -491,20 +558,74 @@ class ContextManagementMiddleware:
             If context_full is True, the caller should stop processing and
             return a context-full response.
         """
+        from upsonic.utils.printing import info_log
+
         if not self._is_context_exceeded(messages):
             return list(messages), False
 
-        # Step 1: Prune tool call history
-        pruned: List["ModelMessage"] = self._prune_tool_call_history(messages)
+        estimated_tokens: int = self._estimate_message_tokens(messages)
+        max_window: Optional[int] = self._get_max_context_window()
+        info_log(
+            f"Context window exceeded: ~{estimated_tokens:,} tokens estimated, "
+            f"limit {int(max_window * self.safety_margin_ratio):,} "
+            f"(model window {max_window:,} × {self.safety_margin_ratio}). "
+            f"Applying compression strategies...",
+            context=_LOG_CONTEXT,
+        )
 
-        if not self._is_context_exceeded(pruned):
-            return pruned, False
+        current_messages: List["ModelMessage"] = list(messages)
+
+        # Step 1: Prune tool call history (only if tool calls exist)
+        has_tools: bool = self._has_tool_related_messages(current_messages)
+        if has_tools:
+            pruned: List["ModelMessage"] = self._prune_tool_call_history(current_messages)
+            pruned_count: int = len(current_messages) - len(pruned)
+            if pruned_count > 0:
+                info_log(
+                    f"Step 1 — Tool pruning: removed {pruned_count} old tool-related "
+                    f"messages (kept {self.keep_recent_count} recent)",
+                    context=_LOG_CONTEXT,
+                )
+                current_messages = pruned
+
+                if not self._is_context_exceeded(current_messages):
+                    info_log(
+                        "Context within limits after tool pruning. No further action needed.",
+                        context=_LOG_CONTEXT,
+                    )
+                    return current_messages, False
+            else:
+                info_log(
+                    f"Step 1 — Tool pruning: no old tool messages to remove "
+                    f"(all {len(current_messages)} messages within keep_recent_count={self.keep_recent_count})",
+                    context=_LOG_CONTEXT,
+                )
+        else:
+            info_log(
+                "Step 1 — Tool pruning: skipped (no tool call/return parts in messages)",
+                context=_LOG_CONTEXT,
+            )
 
         # Step 2: Summarize old messages via LLM
-        summarized: List["ModelMessage"] = await self._summarize_old_messages(pruned)
+        info_log(
+            "Step 2 — Summarizing old messages via LLM...",
+            context=_LOG_CONTEXT,
+        )
+        summarized: List["ModelMessage"] = await self._summarize_old_messages(current_messages)
 
         if not self._is_context_exceeded(summarized):
+            info_log(
+                "Context within limits after summarization. Compression successful.",
+                context=_LOG_CONTEXT,
+            )
             return summarized, False
 
         # Step 3: Context is still full — signal to caller
+        remaining_tokens: int = self._estimate_message_tokens(summarized)
+        info_log(
+            f"Step 3 — Context still exceeded after all strategies: "
+            f"~{remaining_tokens:,} tokens remaining vs limit "
+            f"{int(max_window * self.safety_margin_ratio):,}. Signaling context_full.",
+            context=_LOG_CONTEXT,
+        )
         return summarized, True

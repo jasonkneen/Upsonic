@@ -1,8 +1,5 @@
 """
 Tests for ContextManagementMiddleware.
-
-All tests use real objects — no mocking. Tests that exercise
-LLM summarization make actual API calls to OpenAI.
 """
 
 import json
