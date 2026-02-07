@@ -3051,17 +3051,22 @@ wheels = [
 
 [[package]]
 name = "mcp"
-version = "1.9.4"
+version = "1.26.0"
 source = { registry = "https://pypi.org/simple/" }
 dependencies = [
     { name = "anyio" },
     { name = "httpx" },
     { name = "httpx-sse" },
+    { name = "jsonschema" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "pyjwt", extra = ["crypto"] },
     { name = "python-multipart" },
+    { name = "pywin32", marker = "sys_platform == 'win32'" },
     { name = "sse-starlette" },
     { name = "starlette" },
+    { name = "typing-extensions" },
+    { name = "typing-inspection" },
     { name = "uvicorn", marker = "sys_platform != 'emscripten'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/06/f2/dc2450e566eeccf92d89a00c3e813234ad58e2ba1e31d11467a09ac4f3b9/mcp-1.9.4.tar.gz", hash = "sha256:cfb0bcd1a9535b42edaef89947b9e18a8feb49362e1cc059d6e7fc636f2cb09f", size = 333294, upload-time = "2025-06-12T08:20:30.158Z" }
@@ -8329,10 +8334,10 @@ requires-dist = [
     { name = "aiofiles", marker = "extra == 'csv-loader'", specifier = ">=24.1.0" },
     { name = "aiofiles", marker = "extra == 'loaders'", specifier = ">=24.1.0" },
     { name = "aiofiles", marker = "extra == 'text-loader'", specifier = ">=24.1.0" },
-    { name = "aiohttp", specifier = ">=3.12.15" },
-    { name = "aiohttp", marker = "extra == 'embeddings'", specifier = ">=3.12.15" },
-    { name = "aiohttp", marker = "extra == 'html-loader'", specifier = ">=3.12.15" },
-    { name = "aiohttp", marker = "extra == 'loaders'", specifier = ">=3.12.15" },
+    { name = "aiohttp", specifier = ">=3.13.3" },
+    { name = "aiohttp", marker = "extra == 'embeddings'", specifier = ">=3.13.3" },
+    { name = "aiohttp", marker = "extra == 'html-loader'", specifier = ">=3.13.3" },
+    { name = "aiohttp", marker = "extra == 'loaders'", specifier = ">=3.13.3" },
     { name = "aiosqlite", marker = "extra == 'sqlite-storage'", specifier = ">=0.21.0" },
     { name = "anthropic", marker = "extra == 'embeddings'", specifier = ">=0.69.0" },
     { name = "anthropic", marker = "extra == 'models'", specifier = ">=0.69.0" },
@@ -8389,7 +8394,7 @@ requires-dist = [
     { name = "lxml", marker = "extra == 'xml-loader'", specifier = ">=4.9.1" },
     { name = "markdown-it-py", marker = "extra == 'loaders'", specifier = ">=4.0.0" },
     { name = "markdown-it-py", marker = "extra == 'markdown-loader'", specifier = ">=4.0.0" },
-    { name = "mcp", extras = ["cli"], specifier = "==1.9.4" },
+    { name = "mcp", extras = ["cli"], specifier = ">=1.26.0" },
     { name = "mem0ai", marker = "extra == 'mem0-storage'", specifier = ">=0.1.116" },
     { name = "mistralai", marker = "extra == 'models'", specifier = ">=1.9.11" },
     { name = "motor", marker = "extra == 'mongo-storage'", specifier = ">=3.7.1" },
