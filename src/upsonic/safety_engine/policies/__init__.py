@@ -8,7 +8,6 @@ from .medical_policies import *
 from .legal_policies import *
 from .technical_policies import *
 from .cybersecurity_policies import *
-from .data_privacy_policies import *
 from .fraud_detection_policies import *
 from .phishing_policies import *
 from .insider_threat_policies import *
@@ -89,15 +88,6 @@ __all__ = [
     "CybersecurityReplacePolicy",
     "CybersecurityRaiseExceptionPolicy",
     "CybersecurityRaiseExceptionPolicy_LLM",
-    
-    # Data Privacy Policies
-    "DataPrivacyBlockPolicy",
-    "DataPrivacyBlockPolicy_LLM",
-    "DataPrivacyBlockPolicy_LLM_Finder",
-    "DataPrivacyAnonymizePolicy",
-    "DataPrivacyReplacePolicy",
-    "DataPrivacyRaiseExceptionPolicy",
-    "DataPrivacyRaiseExceptionPolicy_LLM",
     
     # Fraud Detection Policies
     "FraudDetectionBlockPolicy",
