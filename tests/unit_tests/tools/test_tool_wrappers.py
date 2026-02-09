@@ -100,10 +100,13 @@ class TestToolWrappers:
     @pytest.mark.asyncio
     async def test_agent_tool_execution(self):
         """Test agent tool execution."""
+        from upsonic.usage import RunUsage
+
         mock_agent = Mock()
         mock_agent.name = "TestAgent"
         mock_agent.system_prompt = None
-        mock_agent.do_async = AsyncMock(return_value=Mock(output="Agent response"))
+        mock_return = Mock(output="Agent response", usage=RunUsage())
+        mock_agent.do_async = AsyncMock(return_value=mock_return)
 
         tool = AgentTool(mock_agent)
 
