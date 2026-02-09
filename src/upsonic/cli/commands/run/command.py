@@ -1,155 +1,200 @@
+import asyncio
 import importlib.util
+import inspect
 import sys
 from pathlib import Path
+from typing import Any, Callable, Optional
 
 from upsonic.cli.commands.shared.config import load_config
 from upsonic.cli.commands.shared.fastapi_imports import get_fastapi_imports
 from upsonic.cli.commands.shared.openapi import modify_openapi_schema
 
 
-def run_command(host: str = "0.0.0.0", port: int = 8000) -> int:
+def _is_interface_mode(source_path: Path) -> bool:
     """
-    Run the agent as a FastAPI server.
+    Determine if the entrypoint file is an interface project.
 
-    Dynamically builds OpenAPI for both multipart/form-data and application/json
-    from upsonic_configs.json input_schema/output_schema so /docs shows editable form fields.
+    Performs a static source-level check for InterfaceManager usage.
+    This avoids executing user code for detection and has no side effects.
+
+    Args:
+        source_path: Path to the entrypoint Python file.
+
+    Returns:
+        True if the file contains InterfaceManager usage, False otherwise.
     """
     try:
-        # Lazy import printer functions
+        source: str = source_path.read_text(encoding="utf-8")
+        return "InterfaceManager" in source
+    except Exception:
+        return False
+
+
+def _resolve_interface_manager(main_func: Callable[..., Any]) -> Optional[object]:
+    """
+    Call the main function with empty inputs to obtain an InterfaceManager.
+
+    For interface projects, main() creates and returns an InterfaceManager instance.
+    If main() raises or returns a non-InterfaceManager value, returns None.
+
+    Args:
+        main_func: The async main function from the loaded entrypoint module.
+
+    Returns:
+        The InterfaceManager instance if main() returned one, None otherwise.
+    """
+    try:
+        if inspect.iscoroutinefunction(main_func):
+            result: Any = asyncio.run(main_func({}))
+        else:
+            result = main_func({})
+    except Exception:
+        return None
+
+    try:
+        from upsonic.interfaces.manager import InterfaceManager
+        if isinstance(result, InterfaceManager):
+            return result
+    except ImportError:
+        pass
+
+    return None
+
+
+def run_command(host: str = "0.0.0.0", port: int = 8000) -> int:
+    """
+    Run the agent as a FastAPI server or as an InterfaceManager server.
+
+    Loads the entrypoint module specified in upsonic_configs.json and:
+    1. If main() returns an InterfaceManager, starts it with serve().
+    2. Otherwise, dynamically builds a FastAPI app with OpenAPI from config schemas.
+    """
+    try:
         from upsonic.cli.printer import (
             print_config_not_found,
             print_error,
             print_success,
             print_info,
         )
-        
-        # Get current directory
-        current_dir = Path.cwd()
-        config_json_path = current_dir / "upsonic_configs.json"
 
-        # Check if config file exists
+        current_dir: Path = Path.cwd()
+        config_json_path: Path = current_dir / "upsonic_configs.json"
+
         if not config_json_path.exists():
             print_config_not_found()
             return 1
 
-        # Read config (use cache for faster startup)
-        config_data = load_config(config_json_path)
+        config_data: Optional[dict[str, Any]] = load_config(config_json_path)
         if config_data is None:
             print_error("Invalid JSON in upsonic_configs.json")
             return 1
 
-        # Get FastAPI imports (lazy loaded)
-        fastapi_imports = get_fastapi_imports()
-        if fastapi_imports is None:
-            print_error("FastAPI dependencies not found. Please run: upsonic install")
-            return 1
-        
-        # Extract imports from cache
-        FastAPI = fastapi_imports['FastAPI']
-        JSONResponse = fastapi_imports['JSONResponse']
-        uvicorn = fastapi_imports['uvicorn']
-        request_fastapi = fastapi_imports['Request']
+        agent_name: str = config_data.get("agent_name", "Upsonic Agent")
+        description: str = config_data.get("description", "An Upsonic AI agent")
 
+        entrypoints: dict[str, Any] = config_data.get("entrypoints", {})
+        agent_py_file: Optional[str] = entrypoints.get("api_file")
 
-        # Agent metadata
-        agent_name = config_data.get("agent_name", "Upsonic Agent")
-        description = config_data.get("description", "An Upsonic AI agent")
-
-        # Load agent file from src directory
-        # Priority: entrypoints.api_file
-        entrypoints = config_data.get("entrypoints", {})
-        agent_py_file = entrypoints.get("api_file")
-        
         if not agent_py_file:
             print_error("entrypoints.api_file not found in upsonic_configs.json")
             return 1
-            
-        agent_py_path = current_dir / agent_py_file
+
+        agent_py_path: Path = current_dir / agent_py_file
         if not agent_py_path.exists():
             print_error(f"Agent file not found: {agent_py_path}")
             return 1
 
+        agent_dir: Path = agent_py_path.parent.absolute()
+        project_root: Path = current_dir.absolute()
 
-        agent_dir = agent_py_path.parent.absolute()
-        project_root = current_dir.absolute()
-        
-        # Add agent directory to sys.path (handles same-dir and subdirectory imports)
-        agent_dir_str = str(agent_dir)
+        agent_dir_str: str = str(agent_dir)
         if agent_dir_str not in sys.path:
             sys.path.insert(0, agent_dir_str)
-        
-        # Add project root to sys.path (handles project-level imports)
-        project_root_str = str(project_root)
+
+        project_root_str: str = str(project_root)
         if project_root_str not in sys.path:
             sys.path.insert(0, project_root_str)
 
-        # Determine package structure for relative imports
-        # Calculate relative path from project root to agent file
+        module_package: Optional[str] = None
         try:
             relative_path = agent_py_path.relative_to(project_root)
-            # Remove .py extension and convert to package path
-            package_parts = relative_path.parts[:-1]  # Exclude filename
-            module_package = '.'.join(package_parts) if package_parts else None
+            package_parts = relative_path.parts[:-1]
+            module_package = ".".join(package_parts) if package_parts else None
         except ValueError:
-            # If agent file is outside project root, use None
             module_package = None
 
-        # Create spec with "main" as the module name (loader requires this to match)
         spec = importlib.util.spec_from_file_location("main", agent_py_path)
         if spec is None or spec.loader is None:
             print_error(f"Failed to load agent module from {agent_py_path}")
             return 1
 
         agent_module = importlib.util.module_from_spec(spec)
-        
-        # Set __package__ for relative imports to work correctly
-        # This is the key for relative imports (from .module import X)
+
         if module_package:
             agent_module.__package__ = module_package
         else:
-            # If no package structure, set to empty string to allow relative imports
             agent_module.__package__ = ""
-        
-        # Keep __name__ as "main" to match the spec (loader requirement)
-        # The __package__ attribute is sufficient for relative imports to work
+
         agent_module.__name__ = "main"
-        
-        # Register the module
         sys.modules["main"] = agent_module
-        
+
         spec.loader.exec_module(agent_module)
 
+        # Require main function in the entrypoint
         if not hasattr(agent_module, "main"):
             print_error(f"main function not found in {agent_py_file}")
             return 1
-        
-        # Prefer amain if it exists, otherwise use main
-        import inspect
-        if hasattr(agent_module, "amain") and inspect.iscoroutinefunction(agent_module.amain):
-            main_func = agent_module.amain
-        else:
-            main_func = agent_module.main
 
-        # Build inputs_schema list from config
-        input_schema_dict = config_data.get("input_schema", {}).get("inputs", {}) or {}
-        inputs_schema = []
+        main_func: Callable[..., Any] = agent_module.main
+
+        # Detect interface mode: static source check then call main()
+        if _is_interface_mode(agent_py_path):
+            interface_manager = _resolve_interface_manager(main_func)
+            if interface_manager is not None:
+                interface_names: str = ", ".join(
+                    iface.get_name() for iface in interface_manager.interfaces
+                )
+                print_success(f"Interface detected! Starting {agent_name} with InterfaceManager...")
+                print_info(f"Interfaces: {interface_names}")
+                display_host: str = "localhost" if host == "0.0.0.0" else host
+                print_info(f"Server will be available at http://{display_host}:{port}")
+                print_info("Press CTRL+C to stop the server")
+                print()
+
+                try:
+                    interface_manager.serve(host=host, port=port)
+                except KeyboardInterrupt:
+                    print()
+                    print_info("Server stopped by user")
+
+                return 0
+
+        # Default API mode — requires FastAPI
+        fastapi_imports = get_fastapi_imports()
+        if fastapi_imports is None:
+            print_error("FastAPI dependencies not found. Please run: upsonic install")
+            return 1
+
+        FastAPI = fastapi_imports["FastAPI"]
+        JSONResponse = fastapi_imports["JSONResponse"]
+        uvicorn = fastapi_imports["uvicorn"]
+        request_fastapi = fastapi_imports["Request"]
+
+        input_schema_dict: dict[str, Any] = config_data.get("input_schema", {}).get("inputs", {}) or {}
+        inputs_schema: list[dict[str, Any]] = []
         for field_name, field_config in input_schema_dict.items():
             inputs_schema.append({
                 "name": field_name,
                 "type": field_config.get("type", "string"),
                 "required": bool(field_config.get("required", False)),
                 "default": field_config.get("default"),
-                "description": field_config.get("description", "") or ""
+                "description": field_config.get("description", "") or "",
             })
 
-        # Build output schema
-        output_schema_dict = config_data.get("output_schema", {}) or {}
+        output_schema_dict: dict[str, Any] = config_data.get("output_schema", {}) or {}
 
-        # Create app
         app = FastAPI(title=f"{agent_name} - Upsonic", description=description, version="0.1.0")
 
-        # Import necessary types
-        # Create unified endpoint that handles BOTH multipart/form-data AND application/json
         @app.post("/call", summary="Call Main", operation_id="call_main_call_post", tags=["jobs"])
         async def call_endpoint_unified(request: request_fastapi):
             """
@@ -158,65 +203,51 @@ def run_command(host: str = "0.0.0.0", port: int = 8000) -> int:
             - application/json (for JSON APIs)
             """
             try:
-                content_type = request.headers.get("content-type", "").lower()
-                
+                content_type: str = request.headers.get("content-type", "").lower()
+
                 if "application/json" in content_type:
-                    # Handle JSON request
                     inputs = await request.json()
                 elif "multipart/form-data" in content_type:
-                    # Handle multipart/form-data request
                     form_data = await request.form()
                     inputs = {}
-                    
                     for key, value in form_data.items():
                         if value is None:
                             continue
-                        # Check if it's a file upload
-                        if hasattr(value, 'read'):
-                            # It's an UploadFile
+                        if hasattr(value, "read"):
                             try:
                                 inputs[key] = await value.read()
                             except Exception:
                                 inputs[key] = None
                         else:
-                            # Regular form field
                             inputs[key] = value
                 else:
-                    # Default to form data for other content types
                     form_data = await request.form()
                     inputs = {k: v for k, v in form_data.items() if v is not None}
-                
-                # Call main function - handle both sync and async
-                import inspect
+
                 if inspect.iscoroutinefunction(main_func):
                     result = await main_func(inputs)
                 else:
                     result = main_func(inputs)
                 return JSONResponse(content=result)
-                
+
             except Exception as e:
                 return JSONResponse(
                     status_code=500,
-                    content={"error": str(e), "type": type(e).__name__}
+                    content={"error": str(e), "type": type(e).__name__},
                 )
 
-        # Override openapi() to return modified schema
         original_openapi = app.openapi
-        
+
         def custom_openapi():
             if app.openapi_schema:
                 return app.openapi_schema
-            
-            # Generate and modify schema once
             schema = original_openapi()
             schema = modify_openapi_schema(schema, inputs_schema, output_schema_dict, "/call")
             app.openapi_schema = schema
-            
             return app.openapi_schema
-        
+
         app.openapi = custom_openapi
 
-        # Startup messages
         print_success(f"Starting {agent_name} server...")
         display_host = "localhost" if host == "0.0.0.0" else host
         print_info(f"Server will be available at http://{display_host}:{port}")
@@ -224,16 +255,13 @@ def run_command(host: str = "0.0.0.0", port: int = 8000) -> int:
         print_info("Press CTRL+C to stop the server")
         print()
 
-        # Run uvicorn - it handles SIGINT/SIGTERM properly
-        # Use log_level="info" to reduce noise, but keep important messages
         try:
             uvicorn.run(app, host=host, port=port, log_level="info")
         except KeyboardInterrupt:
-            # This should be caught by uvicorn, but just in case
             from upsonic.cli.printer import print_info
             print()
             print_info("Server stopped by user")
-        
+
         return 0
 
     except KeyboardInterrupt:
@@ -247,4 +275,3 @@ def run_command(host: str = "0.0.0.0", port: int = 8000) -> int:
         import traceback
         traceback.print_exc()
         return 1
-
