@@ -104,6 +104,9 @@ class CultureManager:
         
         # Track message count for repeat logic
         self._message_count: int = 0
+        
+        # Accumulated LLM usage from sub-agent calls (culture extraction)
+        self._last_llm_usage: Optional[Any] = None
     
     @property
     def culture(self) -> Optional["Culture"]:
@@ -242,7 +245,15 @@ Provide specific, actionable guidelines for each aspect.
                 response_format=ExtractedCulture,
             )
             
-            result = await extractor.do_async(task)
+            extractor_output = await extractor.do_async(task, return_output=True)
+            result = extractor_output.output
+            
+            # Store sub-agent usage for parent context aggregation
+            if hasattr(extractor_output, 'usage') and extractor_output.usage:
+                from upsonic.usage import RunUsage
+                if not hasattr(self, '_last_llm_usage') or self._last_llm_usage is None:
+                    self._last_llm_usage = RunUsage()
+                self._last_llm_usage.incr(extractor_output.usage)
             
             if result:
                 self._extracted_guidelines = {
@@ -364,6 +375,17 @@ Provide specific, actionable guidelines for each aspect.
             return True
         
         return False
+    
+    def drain_accumulated_usage(self) -> Optional[Any]:
+        """Drain and return accumulated LLM usage from culture extraction.
+        
+        Returns:
+            RunUsage instance if any usage was accumulated, None otherwise.
+            Resets internal usage accumulator after draining.
+        """
+        usage = self._last_llm_usage
+        self._last_llm_usage = None
+        return usage
     
     def reset_message_count(self) -> None:
         """Reset the message count (useful for testing or manual control)."""

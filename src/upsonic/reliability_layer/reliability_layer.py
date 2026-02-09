@@ -389,15 +389,23 @@ class ReliabilityProcessor:
 
                 # Execute all validation tasks in parallel if there are any
                 if validation_tasks:
-                    # Run each validation task with its specific agent
+                    # Run each validation task with its specific agent using return_output=True for usage tracking
                     validation_coroutines = []
                     for i, validation_type in enumerate(validation_types):
                         validation_coroutines.append(
-                            validator_agents[validation_type].do_async(validation_tasks[i])
+                            validator_agents[validation_type].do_async(validation_tasks[i], return_output=True)
                         )
                     
                     # Wait for all validation tasks to complete
-                    await asyncio.gather(*validation_coroutines)
+                    validation_outputs = await asyncio.gather(*validation_coroutines)
+                    
+                    # Aggregate sub-agent usage from validation runs
+                    from upsonic.usage import RunUsage
+                    if not hasattr(task, '_reliability_sub_agent_usage'):
+                        task._reliability_sub_agent_usage = RunUsage()
+                    for v_output in validation_outputs:
+                        if hasattr(v_output, 'usage') and v_output.usage:
+                            task._reliability_sub_agent_usage.incr(v_output.usage)
                     
                     # Process results
                     for i, validation_type in enumerate(validation_types):
@@ -439,7 +447,14 @@ class ReliabilityProcessor:
                         not_main_task=True
                     )
                     
-                    await editor_agent.do_async(editor_task)
+                    editor_output = await editor_agent.do_async(editor_task, return_output=True)
+                    
+                    # Aggregate editor agent usage
+                    if hasattr(editor_output, 'usage') and editor_output.usage:
+                        from upsonic.usage import RunUsage
+                        if not hasattr(task, '_reliability_sub_agent_usage'):
+                            task._reliability_sub_agent_usage = RunUsage()
+                        task._reliability_sub_agent_usage.incr(editor_output.usage)
                     
                     # Set the cleaned response back on the original task
                     task._response = editor_task.response

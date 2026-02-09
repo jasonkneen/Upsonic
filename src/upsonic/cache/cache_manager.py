@@ -30,8 +30,9 @@ class CacheManager:
         """
         self.session_id = session_id or f"session_{int(time.time())}"
         self._cache_data: Dict[str, CacheEntry] = {}
-        self._cache_hits = 0
-        self._cache_misses = 0
+        self._cache_hits: int = 0
+        self._cache_misses: int = 0
+        self._last_llm_usage: Optional[Any] = None
     
     def _generate_cache_id(self, input_text: str) -> str:
         """Generate a unique cache ID for the input text."""
@@ -194,7 +195,12 @@ class CacheManager:
                 response_format=str
             )
             
-            result = await comparison_agent.do_async(comparison_task)
+            agent_output = await comparison_agent.do_async(comparison_task, return_output=True)
+            result = agent_output.output
+            
+            # Capture sub-agent usage for parent aggregation
+            if hasattr(agent_output, 'usage') and agent_output.usage:
+                self._last_llm_usage = agent_output.usage
             
             if result and isinstance(result, str):
                 result = result.strip().upper()

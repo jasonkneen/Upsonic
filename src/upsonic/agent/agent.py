@@ -1413,6 +1413,8 @@ class Agent(BaseAgent):
         if self.context_management and self._context_management_middleware:
             managed_msgs, ctx_full = await self._context_management_middleware.apply(messages)
             messages = managed_msgs
+            # Propagate summarization usage to the parent run context
+            self._propagate_context_management_usage()
             if ctx_full:
                 context_full_response = self._context_management_middleware._build_context_full_response(
                     model_name=self.model.model_name
@@ -1467,6 +1469,8 @@ class Agent(BaseAgent):
         if self.context_management and self._context_management_middleware:
             managed_msgs, ctx_full = await self._context_management_middleware.apply(messages)
             messages = managed_msgs
+            # Propagate summarization usage to the parent run context
+            self._propagate_context_management_usage()
             if ctx_full:
                 context_full_response = self._context_management_middleware._build_context_full_response(
                     model_name=self.model.model_name
@@ -1612,6 +1616,12 @@ class Agent(BaseAgent):
                     check_type="Post-Execution Tool Call Validation"
                 )
                 
+                # Drain and aggregate sub-agent usage from tool policy LLM calls
+                tool_policy_usage = self.tool_policy_post_manager.drain_accumulated_usage()
+                if tool_policy_usage is not None and hasattr(self, '_agent_run_output') and self._agent_run_output:
+                    usage = self._agent_run_output._ensure_usage()
+                    usage.incr(tool_policy_usage)
+                
                 if validation_result.should_block():
                     # Handle blocking based on action type
                     # If DisallowedOperation was raised by a RAISE action policy, re-raise it
@@ -1662,6 +1672,10 @@ class Agent(BaseAgent):
                     if self._agent_run_output.tools is None:
                         self._agent_run_output.tools = []
                     self._agent_run_output.tools.append(tool_exec)
+                
+                # Drain accumulated usage from AgentTool sub-agent executions (sequential path)
+                if hasattr(self, '_agent_run_output') and self._agent_run_output:
+                    self._drain_agent_tool_usage(tool_call.tool_name)
                 
                 # Level 2: Detailed tool execution logging
                 if self.debug and self.debug_level >= 2:
@@ -1731,6 +1745,12 @@ class Agent(BaseAgent):
                         check_type="Post-Execution Tool Call Validation"
                     )
                     
+                    # Drain and aggregate sub-agent usage from tool policy LLM calls (parallel path)
+                    tool_policy_usage = self.tool_policy_post_manager.drain_accumulated_usage()
+                    if tool_policy_usage is not None and hasattr(self, '_agent_run_output') and self._agent_run_output:
+                        usage = self._agent_run_output._ensure_usage()
+                        usage.incr(tool_policy_usage)
+                    
                     if validation_result.should_block():
                         # Handle blocking based on action type
                         # If DisallowedOperation was raised by a RAISE action policy, re-raise it
@@ -1765,6 +1785,10 @@ class Agent(BaseAgent):
                         if self._agent_run_output.tools is None:
                             self._agent_run_output.tools = []
                         self._agent_run_output.tools.append(tool_exec)
+                    
+                    # Drain accumulated usage from AgentTool sub-agent executions (parallel path)
+                    if hasattr(self, '_agent_run_output') and self._agent_run_output:
+                        self._drain_agent_tool_usage(tool_call.tool_name)
                     
                     return ToolReturnPart(
                         tool_name=result.tool_name,
@@ -1849,6 +1873,12 @@ class Agent(BaseAgent):
                     # Ensure culture is prepared
                     if not self._culture_manager.prepared:
                         await self._culture_manager.aprepare()
+                        
+                        # Drain culture extraction LLM usage into run output
+                        if hasattr(self, '_agent_run_output') and self._agent_run_output:
+                            culture_usage = self._culture_manager.drain_accumulated_usage()
+                            if culture_usage:
+                                self._agent_run_output.usage.incr(culture_usage)
                     
                     culture_formatted = self._culture_manager.format_for_system_prompt()
                     if culture_formatted:
@@ -1903,6 +1933,7 @@ class Agent(BaseAgent):
                     managed_msgs, ctx_full = await self._context_management_middleware.apply(messages)
                     messages.clear()
                     messages.extend(managed_msgs)
+                    self._propagate_context_management_usage()
                     if ctx_full:
                         return self._context_management_middleware._build_context_full_response(
                             model_name=self.model.model_name
@@ -1916,6 +1947,17 @@ class Agent(BaseAgent):
                     model_settings=self.model.settings,
                     model_request_parameters=model_params
                 )
+                
+                # Track usage from tool-limit follow-up LLM call
+                if hasattr(self, '_agent_run_output') and self._agent_run_output:
+                    if hasattr(final_response, 'usage') and final_response.usage:
+                        self._agent_run_output.update_usage_from_response(final_response.usage)
+                        try:
+                            from upsonic.utils.usage import calculate_cost_from_usage
+                            cost_value: float = calculate_cost_from_usage(final_response.usage, self.model)
+                            self._agent_run_output.set_usage_cost(cost_value)
+                        except Exception:
+                            pass
                 
                 return final_response
             
@@ -1956,6 +1998,7 @@ class Agent(BaseAgent):
                 managed_msgs, ctx_full = await self._context_management_middleware.apply(messages)
                 messages.clear()
                 messages.extend(managed_msgs)
+                self._propagate_context_management_usage()
                 if ctx_full:
                     return self._context_management_middleware._build_context_full_response(
                         model_name=self.model.model_name
@@ -1970,9 +2013,56 @@ class Agent(BaseAgent):
                 model_request_parameters=model_params
             )
             
+            # Track usage from follow-up LLM call after tool execution
+            if hasattr(self, '_agent_run_output') and self._agent_run_output:
+                if hasattr(follow_up_response, 'usage') and follow_up_response.usage:
+                    self._agent_run_output.update_usage_from_response(follow_up_response.usage)
+                    try:
+                        from upsonic.utils.usage import calculate_cost_from_usage
+                        cost_value: float = calculate_cost_from_usage(follow_up_response.usage, self.model)
+                        self._agent_run_output.set_usage_cost(cost_value)
+                    except Exception:
+                        pass
+            
             return await self._handle_model_response(follow_up_response, messages)
         
         return response
+    
+    def _propagate_context_management_usage(self) -> None:
+        """Propagate usage from ContextManagementMiddleware summarization LLM call
+        to the parent AgentRunOutput context.
+        """
+        if not hasattr(self, '_agent_run_output') or not self._agent_run_output:
+            return
+        if not self._context_management_middleware:
+            return
+        summarization_usage = getattr(self._context_management_middleware, '_last_summarization_usage', None)
+        if summarization_usage is not None:
+            self._agent_run_output.update_usage_from_response(summarization_usage)
+            try:
+                from upsonic.utils.usage import calculate_cost_from_usage
+                summarization_model: "Model" = self._context_management_middleware._get_summarization_model()
+                cost_value: float = calculate_cost_from_usage(summarization_usage, summarization_model)
+                self._agent_run_output.set_usage_cost(cost_value)
+            except Exception:
+                pass
+            # Reset to prevent double-counting on next apply() call
+            self._context_management_middleware._last_summarization_usage = None
+    
+    def _drain_agent_tool_usage(self, tool_name: str) -> None:
+        """Drain accumulated usage from AgentTool sub-agent executions into the parent AgentRunOutput.
+        
+        Args:
+            tool_name: The name of the tool that was just executed
+        """
+        from upsonic.tools.wrappers import AgentTool
+        
+        # Look up the tool in the processor's registered tools
+        registered_tool = self.tool_manager.processor.registered_tools.get(tool_name)
+        if registered_tool and isinstance(registered_tool, AgentTool):
+            agent_tool_usage = registered_tool.drain_accumulated_usage()
+            if agent_tool_usage is not None:
+                self._agent_run_output.usage.incr(agent_tool_usage)
     
     async def _handle_cache(self, task: "Task") -> Optional[Any]:
         """Handle cache operations for the task."""
@@ -2219,6 +2309,17 @@ class Agent(BaseAgent):
                 model_settings=self.model.settings,
                 model_request_parameters=model_params
             )
+            
+            # Track usage from each guardrail retry iteration
+            if hasattr(self, '_agent_run_output') and self._agent_run_output:
+                if hasattr(response, 'usage') and response.usage:
+                    self._agent_run_output.update_usage_from_response(response.usage)
+                    try:
+                        from upsonic.utils.usage import calculate_cost_from_usage
+                        cost_value: float = calculate_cost_from_usage(response.usage, self.model)
+                        self._agent_run_output.set_usage_cost(cost_value)
+                    except Exception:
+                        pass
             
             current_model_response = await self._handle_model_response(response, messages)
             

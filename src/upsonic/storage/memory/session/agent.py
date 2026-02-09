@@ -376,6 +376,13 @@ class AgentSessionMemory(BaseSessionMemory):
                 except Exception as e:
                     warning_log(f"Failed to generate summary: {e}", "AgentSessionMemory")
         
+        # Aggregate summary sub-agent LLM usage into output.usage before session save
+        summary_llm_usage = getattr(self, '_last_llm_usage', None)
+        if summary_llm_usage is not None and output is not None:
+            usage = output._ensure_usage()
+            usage.incr(summary_llm_usage)
+            self._last_llm_usage = None
+        
         # Append new messages
         new_message_count = session.append_new_messages_from_run_output(output)
         if self.debug:
@@ -889,8 +896,17 @@ Focus on important information, user preferences, and topics discussed.
 """
         task = Task(description=prompt, response_format=str)
         
-        summary_response = await summarizer.do_async(task)
-        summary_text = str(summary_response)
+        summary_output = await summarizer.do_async(task, return_output=True)
+        summary_text = str(summary_output.output)
+        
+        # Store sub-agent usage for parent context aggregation
+        if hasattr(summary_output, 'usage') and summary_output.usage:
+            if not hasattr(self, '_last_llm_usage'):
+                self._last_llm_usage = None
+            from upsonic.usage import RunUsage
+            if self._last_llm_usage is None:
+                self._last_llm_usage = RunUsage()
+            self._last_llm_usage.incr(summary_output.usage)
         
         if self.debug:
             info_log(f"Summary generated: {len(summary_text)} chars", "AgentSessionMemory")

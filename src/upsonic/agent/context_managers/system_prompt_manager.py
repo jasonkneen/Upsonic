@@ -368,6 +368,12 @@ class SystemPromptManager:
         if self.agent._culture_manager and self.agent._culture_manager.enabled:
             if not self.agent._culture_manager.prepared:
                 await self.agent._culture_manager.aprepare()
+            
+            # Drain culture extraction LLM usage into parent agent's run output
+            if hasattr(self.agent, '_agent_run_output') and self.agent._agent_run_output:
+                culture_usage = self.agent._culture_manager.drain_accumulated_usage()
+                if culture_usage:
+                    self.agent._agent_run_output.usage.incr(culture_usage)
         
         # Build system prompt (culture will be injected in _build_system_prompt if prepared)
         self.system_prompt = self._build_system_prompt(memory_handler)

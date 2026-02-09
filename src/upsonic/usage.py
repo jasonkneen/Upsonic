@@ -326,15 +326,14 @@ class RunUsage(UsageBase):
             # RequestUsage counts as 1 request
             self.requests += 1
         
-        # Extract special token types from details dict
-        # These are provider-specific fields that should be tracked at top level
-        if incr_usage.details:
-            # Extract reasoning tokens (OpenAI o1/o3 models)
-            if 'reasoning_tokens' in incr_usage.details:
-                self.reasoning_tokens += incr_usage.details.get('reasoning_tokens', 0)
-        
-        # _incr_usage_tokens handles all token fields including output_audio_tokens
-        return _incr_usage_tokens(self, incr_usage)
+        # Extract special token types from details dict (only when details is a dict)
+        details = getattr(incr_usage, "details", None)
+        if isinstance(details, dict) and details:
+            if "reasoning_tokens" in details:
+                self.reasoning_tokens += details.get("reasoning_tokens", 0)
+
+        if isinstance(incr_usage, (RunUsage, RequestUsage)):
+            _incr_usage_tokens(self, incr_usage)
 
     def __add__(self, other: RunUsage | RequestUsage) -> RunUsage:
         """Add two RunUsages together.
@@ -480,8 +479,10 @@ def _incr_usage_tokens(slf: RunUsage | RequestUsage, incr_usage: RunUsage | Requ
     slf.output_tokens += incr_usage.output_tokens
     slf.output_audio_tokens += incr_usage.output_audio_tokens
 
-    for key, value in incr_usage.details.items():
-        slf.details[key] = slf.details.get(key, 0) + value
+    incr_details = getattr(incr_usage, "details", None)
+    if isinstance(incr_details, dict):
+        for key, value in incr_details.items():
+            slf.details[key] = slf.details.get(key, 0) + value
 
 
 @dataclass(repr=False, kw_only=True)

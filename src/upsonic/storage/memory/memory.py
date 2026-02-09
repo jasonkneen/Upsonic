@@ -360,7 +360,17 @@ class Memory:
         
         is_completed = output.status == RunStatus.completed
         
-        # Get session memory and save
+        # Analyze and update user memory BEFORE session save so that any LLM usage
+        # from user analysis is included in output.usage when the session is persisted
+        if self._user_memory and is_completed:
+            try:
+                agent_id = output.agent_id
+                await self._user_memory.asave(output, agent_id=agent_id)
+            except Exception as e:
+                if self.debug:
+                    warning_log(f"Failed to analyze/update user memory: {e}", "Memory")
+        
+        # Save session memory (includes summary generation and persists output.usage)
         session_memory = self.get_session_memory(session_type)
         if session_memory:
             try:
@@ -368,16 +378,6 @@ class Memory:
             except Exception as e:
                 if self.debug:
                     warning_log(f"Failed to save session: {e}", "Memory")
-        
-        # Analyze and update user memory only for completed runs
-        if self._user_memory and is_completed:
-            try:
-                # Get agent_id from output for user memory storage
-                agent_id = output.agent_id
-                await self._user_memory.asave(output, agent_id=agent_id)
-            except Exception as e:
-                if self.debug:
-                    warning_log(f"Failed to analyze/update user memory: {e}", "Memory")
         
         if self.debug:
             status_str = "completed" if is_completed else output.status.value

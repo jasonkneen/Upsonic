@@ -144,7 +144,8 @@ class TestCultureManagerPrepare:
         mock_result.topics_to_avoid = "Personal information"
         mock_result.topics_to_help = "Technical questions"
         mock_result.things_to_pay_attention = "User preferences"
-        
+        mock_result.output = mock_result
+
         mock_agent.do_async = AsyncMock(return_value=mock_result)
         mock_agent_class.return_value = mock_agent
         

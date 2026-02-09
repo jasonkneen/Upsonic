@@ -175,6 +175,15 @@ class CacheCheckStep(Step):
             input_text = task._original_input or task.description
             cached_response = await task.get_cached_response(input_text, model)
             
+            # Propagate sub-agent usage from cache LLM comparison (if any)
+            cache_mgr = getattr(agent, '_cache_manager', None)
+            if cache_mgr is not None:
+                cache_llm_usage = getattr(cache_mgr, '_last_llm_usage', None)
+                if cache_llm_usage is not None:
+                    usage = context._ensure_usage()
+                    usage.incr(cache_llm_usage)
+                    cache_mgr._last_llm_usage = None
+            
             if cached_response is not None:
                 similarity = None
                 cache_key = None
@@ -347,6 +356,12 @@ class UserPolicyStep(Step):
             
             original_content = task.description
             processed_task, should_continue = await agent._apply_user_policy(task, context)
+            
+            # Drain and aggregate sub-agent usage from user policy LLM calls
+            user_policy_usage = agent.user_policy_manager.drain_accumulated_usage()
+            if user_policy_usage is not None:
+                usage = context._ensure_usage()
+                usage.incr(user_policy_usage)
             
             # Update AgentRunInput.user_prompt if task.description was modified by policy
             if hasattr(agent, '_agent_run_output') and agent._agent_run_output and agent._agent_run_output.input:
@@ -1411,6 +1426,11 @@ class ReflectionStep(Step):
                 context.output
             )
             
+            # Aggregate sub-agent usage from reflection into parent context
+            if reflection_result.sub_agent_usage is not None:
+                usage = context._ensure_usage()
+                usage.incr(reflection_result.sub_agent_usage)
+            
             # Extract values from ReflectionResult
             improved_output = reflection_result.improved_output
             improvement_made = reflection_result.improvement_made
@@ -1988,6 +2008,13 @@ class ReliabilityStep(Step):
             finally:
                 await reliability_manager.afinalize()
 
+            # Aggregate sub-agent usage from reliability layer into parent context
+            reliability_usage = getattr(task, '_reliability_sub_agent_usage', None)
+            if reliability_usage is not None:
+                usage = context._ensure_usage()
+                usage.incr(reliability_usage)
+                task._reliability_sub_agent_usage = None
+
             modifications_made = str(original_output) != str(context.output)
             
             if agent.debug and agent.debug_level >= 2:
@@ -2128,6 +2155,12 @@ class AgentPolicyStep(Step):
                 
                 processed_task, feedback_message = await agent._apply_agent_policy(task, context)
                 
+                # Drain and aggregate sub-agent usage from agent policy LLM calls
+                agent_policy_usage = agent.agent_policy_manager.drain_accumulated_usage()
+                if agent_policy_usage is not None:
+                    usage = context._ensure_usage()
+                    usage.incr(agent_policy_usage)
+                
                 if agent.debug and agent.debug_level >= 2:
                     from upsonic.utils.printing import debug_log_level2
                     response_changed = processed_task.response != original_response
@@ -2234,6 +2267,16 @@ class AgentPolicyStep(Step):
             model_settings=model.settings,
             model_request_parameters=model_params
         )
+        
+        # Track usage from policy feedback re-execution LLM call
+        if hasattr(response, 'usage') and response.usage:
+            context.update_usage_from_response(response.usage)
+            try:
+                from upsonic.utils.usage import calculate_cost_from_usage
+                cost_value: float = calculate_cost_from_usage(response.usage, model)
+                context.set_usage_cost(cost_value)
+            except Exception:
+                pass
         
         # Handle response (including any tool calls)
         final_response = await agent._handle_model_response(
