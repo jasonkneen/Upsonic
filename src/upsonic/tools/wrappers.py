@@ -428,6 +428,9 @@ class AgentTool(Tool):
             schema=agent_schema,
             metadata=metadata
         )
+        
+        # Accumulated LLM usage from sub-agent calls
+        self._accumulated_usage: Optional[Any] = None
     
     def _create_agent_function(self) -> Callable:
         """Create a dummy function for the schema."""
@@ -454,7 +457,15 @@ class AgentTool(Tool):
         
         # Execute based on agent capabilities
         if hasattr(self.agent, 'do_async'):
-            result = await self.agent.do_async(task)
+            agent_output = await self.agent.do_async(task, return_output=True)
+            result = agent_output.output if hasattr(agent_output, 'output') else agent_output
+            
+            # Accumulate sub-agent usage for parent to drain
+            if hasattr(agent_output, 'usage') and agent_output.usage:
+                from upsonic.usage import RunUsage
+                if self._accumulated_usage is None:
+                    self._accumulated_usage = RunUsage()
+                self._accumulated_usage.incr(agent_output.usage)
         elif hasattr(self.agent, 'do'):
             # Run sync method in executor
             loop = asyncio.get_running_loop()
@@ -467,3 +478,14 @@ class AgentTool(Tool):
         
         # Convert result to string if needed
         return str(result) if result is not None else "No response from agent"
+    
+    def drain_accumulated_usage(self) -> Optional[Any]:
+        """Drain and return accumulated LLM usage from sub-agent executions.
+        
+        Returns:
+            RunUsage instance if any usage was accumulated, None otherwise.
+            Resets internal usage accumulator after draining.
+        """
+        usage = self._accumulated_usage
+        self._accumulated_usage = None
+        return usage

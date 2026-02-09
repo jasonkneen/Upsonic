@@ -2,12 +2,15 @@
 Upsonic LLM Provider for AI Safety Engine
 """
 
-from typing import List, Optional, Union
-import asyncio
+from typing import List, Optional, Union, TYPE_CHECKING
 from pydantic import BaseModel
 from upsonic.models import Model
 
 from upsonic.tasks.tasks import Task
+
+if TYPE_CHECKING:
+    from upsonic.usage import RunUsage
+    from upsonic.agent.output import AgentRunOutput
 
 class KeywordDetectionResponse(BaseModel):
     """Response format for keyword detection"""
@@ -78,6 +81,22 @@ class UpsonicLLMProvider:
             self.agent = Agent(model=model, name=agent_name)
         else:
             self.agent = Agent(name=agent_name)
+        self._accumulated_usage: Optional["RunUsage"] = None
+    
+    def _accumulate_usage_from_output(self, agent_output: "AgentRunOutput") -> None:
+        """Accumulate usage from a sub-agent run output into this provider's usage tracker."""
+        if not hasattr(agent_output, 'usage') or agent_output.usage is None:
+            return
+        from upsonic.usage import RunUsage
+        if self._accumulated_usage is None:
+            self._accumulated_usage = RunUsage()
+        self._accumulated_usage.incr(agent_output.usage)
+    
+    def drain_accumulated_usage(self) -> Optional["RunUsage"]:
+        """Return and reset accumulated usage from all LLM calls made by this provider."""
+        usage = self._accumulated_usage
+        self._accumulated_usage = None
+        return usage
     
     def find_keywords(self, content_type: str, text: str, language: str = "en") -> List[str]:
         """Find keywords of specified content type in text using Upsonic Agent"""
@@ -135,7 +154,9 @@ class UpsonicLLMProvider:
         )
 
         try:
-            result = await self.agent.do_async(task)
+            output = await self.agent.do_async(task, return_output=True)
+            self._accumulate_usage_from_output(output)
+            result = output.output
             if result.confidence >= 0.7:
                 return result.detected_keywords
             return []
@@ -184,7 +205,9 @@ class UpsonicLLMProvider:
             response_format=BlockMessageResponse
         )
         try:
-            result = await self.agent.do_async(task)
+            output = await self.agent.do_async(task, return_output=True)
+            self._accumulate_usage_from_output(output)
+            result = output.output
             return result.block_message
         except Exception:
             return f"Content blocked: {reason}"
@@ -241,7 +264,9 @@ class UpsonicLLMProvider:
             response_format=AnonymizationResponse
         )
         try:
-            result = await self.agent.do_async(task)
+            output = await self.agent.do_async(task, return_output=True)
+            self._accumulate_usage_from_output(output)
+            result = output.output
             return result.anonymized_content
         except Exception:
             anonymized = text
@@ -282,7 +307,9 @@ class UpsonicLLMProvider:
             response_format=LanguageDetectionResponse
         )
         try:
-            result = await self.agent.do_async(task)
+            output = await self.agent.do_async(task, return_output=True)
+            self._accumulate_usage_from_output(output)
+            result = output.output
             if result.confidence >= 0.6:
                 return result.language_code
             return "en"
@@ -531,11 +558,15 @@ class UpsonicLLMProvider:
             response_format=TranslationResponse
         )
         try:
-            result = await self.agent.do_async(task)
+            output = await self.agent.do_async(task, return_output=True)
+            self._accumulate_usage_from_output(output)
+            result = output.output
             translated = result.translated_text.strip()
             if not translated or translated == text.strip():
                 task.description += "\n\nWARNING: Previous attempt returned original text. Please ensure to translate to " + target_lang_name
-                result = await self.agent.do_async(task)
+                output2 = await self.agent.do_async(task, return_output=True)
+                self._accumulate_usage_from_output(output2)
+                result = output2.output
                 translated = result.translated_text.strip()
             if translated and translated != text.strip():
                 return translated
@@ -681,7 +712,9 @@ class UpsonicLLMProvider:
             task = Task(prompt, response_format=ToolSafetyAnalysisResponse)
             
             try:
-                result = await self.agent.do_async(task)
+                output = await self.agent.do_async(task, return_output=True)
+                self._accumulate_usage_from_output(output)
+                result = output.output
                 return {
                     "is_harmful": result.is_harmful,
                     "confidence": result.confidence,
@@ -716,7 +749,9 @@ class UpsonicLLMProvider:
             task = Task(prompt, response_format=ToolSafetyAnalysisResponse)
             
             try:
-                result = await self.agent.do_async(task)
+                output = await self.agent.do_async(task, return_output=True)
+                self._accumulate_usage_from_output(output)
+                result = output.output
                 return {
                     "is_malicious": result.is_malicious,
                     "confidence": result.confidence,
@@ -876,7 +911,9 @@ class UpsonicLLMProvider:
         task = Task(prompt, response_format=PolicyFeedbackResponse)
         
         try:
-            result = await self.agent.do_async(task)
+            output = await self.agent.do_async(task, return_output=True)
+            self._accumulate_usage_from_output(output)
+            result = output.output
             # Combine feedback message with suggested approach for comprehensive feedback
             return f"{result.feedback_message}\n\nSuggested approach: {result.suggested_approach}"
         except Exception:

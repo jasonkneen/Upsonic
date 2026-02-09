@@ -55,12 +55,15 @@ class ReflectionConfig(BaseModel):
 
 class ReflectionResult(BaseModel):
     """Result of reflection processing containing input/output for message tracking."""
+    model_config = {"arbitrary_types_allowed": True}
+    
     evaluation_prompt: str = Field(description="The evaluation prompt sent to the LLM (FIRST INPUT)")
     improved_output: Any = Field(description="The improved output from the LLM (LAST OUTPUT)")
     improvement_made: bool = Field(default=False, description="Whether improvement was made")
     original_output: Any = Field(default=None, description="The original output before reflection")
     final_evaluation: Optional[EvaluationResult] = Field(default=None, description="Final evaluation result")
     termination_reason: Optional[str] = Field(default=None, description="Reason for termination")
+    sub_agent_usage: Optional[Any] = Field(default=None, description="Aggregated RunUsage from sub-agent calls")
 
 
 class ReflectionState(BaseModel):

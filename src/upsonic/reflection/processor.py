@@ -2,7 +2,7 @@
 Reflection processor for implementing self-evaluation logic.
 """
 
-from typing import Any, TYPE_CHECKING
+from typing import Any, Optional, Tuple, TYPE_CHECKING
 
 from .models import (
     ReflectionConfig, ReflectionState, EvaluationResult, 
@@ -12,6 +12,7 @@ from .models import (
 if TYPE_CHECKING:
     from upsonic.tasks.tasks import Task
     from upsonic.agent.agent import Agent
+    from upsonic.usage import RunUsage
 
 
 class ReflectionProcessor:
@@ -60,11 +61,17 @@ class ReflectionProcessor:
             context=evaluation_context
         )
         
+        # Aggregate usage from all sub-agent calls
+        from upsonic.usage import RunUsage
+        aggregated_usage: RunUsage = RunUsage()
+        
         while state.should_continue(self.config):
             # Evaluate current response
-            evaluation = await self._evaluate_response(
+            evaluation, eval_usage = await self._evaluate_response(
                 evaluator_agent, task, current_response, state
             )
+            if eval_usage is not None:
+                aggregated_usage.incr(eval_usage)
             
             # Log evaluation results
             from upsonic.utils.printing import reflection_evaluation
@@ -108,9 +115,11 @@ class ReflectionProcessor:
                     feedback=evaluation.feedback
                 )
                 
-                improved_response = await self._generate_improved_response(
+                improved_response, improve_usage = await self._generate_improved_response(
                     agent, task, current_response, evaluation, state
                 )
+                if improve_usage is not None:
+                    aggregated_usage.incr(improve_usage)
                 
                 if improved_response:
                     current_response = self._extract_response_text(improved_response)
@@ -147,7 +156,8 @@ class ReflectionProcessor:
             improvement_made=improvement_made,
             original_output=initial_response,
             final_evaluation=state.evaluations[-1] if state.evaluations else None,
-            termination_reason=state.terminated_reason
+            termination_reason=state.terminated_reason,
+            sub_agent_usage=aggregated_usage
         )
     
     def _create_evaluator_agent(self, main_agent: "Agent") -> "Agent":
@@ -175,8 +185,12 @@ class ReflectionProcessor:
         task: "Task", 
         response: str,
         state: ReflectionState
-    ) -> EvaluationResult:
-        """Evaluate a response using the evaluator agent."""
+    ) -> Tuple[EvaluationResult, Optional["RunUsage"]]:
+        """Evaluate a response using the evaluator agent.
+        
+        Returns:
+            Tuple of (EvaluationResult, optional RunUsage from sub-agent).
+        """
         from upsonic.tasks.tasks import Task
         
         # Build context for evaluation
@@ -197,12 +211,14 @@ class ReflectionProcessor:
         )
         
         try:
-            # Get evaluation from evaluator agent
-            evaluation = await evaluator.do_async(eval_task)
-            return evaluation
+            # Get evaluation from evaluator agent with full output for usage tracking
+            eval_output = await evaluator.do_async(eval_task, return_output=True)
+            evaluation: EvaluationResult = eval_output.output
+            sub_usage: Optional["RunUsage"] = eval_output.usage if hasattr(eval_output, 'usage') else None
+            return evaluation, sub_usage
         except Exception as e:
             # Fallback evaluation if agent fails
-            return self._create_fallback_evaluation(response, str(e))
+            return self._create_fallback_evaluation(response, str(e)), None
     
     async def _generate_improved_response(
         self, 
@@ -211,8 +227,12 @@ class ReflectionProcessor:
         previous_response: str,
         evaluation: EvaluationResult,
         state: ReflectionState
-    ) -> Any:
-        """Generate an improved response based on evaluation feedback."""
+    ) -> Tuple[Any, Optional["RunUsage"]]:
+        """Generate an improved response based on evaluation feedback.
+        
+        Returns:
+            Tuple of (improved response content or None, optional RunUsage from sub-agent).
+        """
         from upsonic.tasks.tasks import Task
         
         # Build context for improvement
@@ -237,11 +257,13 @@ class ReflectionProcessor:
         )
         
         try:
-            # Generate improved response
-            return await agent.do_async(improved_task)
+            # Generate improved response with full output for usage tracking
+            improved_output = await agent.do_async(improved_task, return_output=True)
+            sub_usage: Optional["RunUsage"] = improved_output.usage if hasattr(improved_output, 'usage') else None
+            return improved_output.output, sub_usage
         except Exception:
             # Return None if improvement fails
-            return None
+            return None, None
     
     def _extract_response_text(self, response: Any) -> str:
         """Extract text representation from response."""

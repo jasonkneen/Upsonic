@@ -153,6 +153,7 @@ class ContextManagementMiddleware:
         self.keep_recent_count: int = keep_recent_count
         self.safety_margin_ratio: float = safety_margin_ratio
         self.context_compression_model: Optional["Model"] = context_compression_model
+        self._last_summarization_usage: Optional[Any] = None
 
     def _get_summarization_model(self) -> "Model":
         """Return the model to use for the summarization LLM call."""
@@ -472,6 +473,9 @@ class ContextManagementMiddleware:
                 model_settings=summarization_model.settings,
                 model_request_parameters=model_params,
             )
+            # Store usage from the summarization LLM call for parent context aggregation
+            if hasattr(llm_response, 'usage') and llm_response.usage:
+                self._last_summarization_usage = llm_response.usage
         except Exception as exc:
             from upsonic.utils.printing import warning_log
             warning_log(
