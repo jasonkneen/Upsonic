@@ -376,19 +376,17 @@ class MCPHandler:
             cmd = parts[0]
             args = parts[1:] if len(parts) > 1 else []
             
-            # Merge with default environment
+            # Inherit the full current-process environment so that API keys,
+            # PYTHONPATH, and .env-loaded vars are available to the subprocess.
+            # User-provided env overrides take precedence.
+            inherited_env: Dict[str, str] = {**os.environ}
             if env is not None:
-                env = {
-                    **get_default_environment(),
-                    **env,
-                }
-            else:
-                env = get_default_environment()
+                inherited_env.update(env)
             
             self.server_params = StdioServerParameters(
                 command=cmd,
                 args=args,
-                env=env
+                env=inherited_env
             )
         else:
             raise ValueError("Invalid configuration for MCP handler")
@@ -964,14 +962,13 @@ class MultiMCPHandler:
             server_params_list or []
         )
         
-        # Merge env with defaults
+        # Inherit the full current-process environment so that API keys,
+        # PYTHONPATH, and .env-loaded vars are available to subprocesses.
+        # User-provided env overrides take precedence.
+        inherited_env: Dict[str, str] = {**os.environ}
         if env is not None:
-            env = {
-                **get_default_environment(),
-                **env,
-            }
-        else:
-            env = get_default_environment()
+            inherited_env.update(env)
+        env = inherited_env
         
         # Process commands
         if commands:

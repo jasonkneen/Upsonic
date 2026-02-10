@@ -25,7 +25,7 @@ def test_team_without_mode(capsys):
     )
     
     team = Team(
-        agents=[researcher, writer]
+        entities=[researcher, writer]
     )
     
     tasks = [
@@ -39,7 +39,7 @@ def test_team_without_mode(capsys):
     output = captured.out
     
     # Input assertions
-    assert len(team.agents) == 2
+    assert len(team.entities) == 2
     assert len(tasks) == 2
 
     assert "Agent Started" in output or "Agent Status" in output
@@ -85,7 +85,7 @@ def test_team_with_mode(capsys):
     )
     
     team = Team(
-        agents=[researcher, analyst, writer],
+        entities=[researcher, analyst, writer],
         mode="coordinate",
         model="openai/gpt-4o"
     )
@@ -101,7 +101,7 @@ def test_team_with_mode(capsys):
     captured = capsys.readouterr()
     output = captured.out
     
-    assert len(team.agents) == 3
+    assert len(team.entities) == 3
     assert len(tasks) == 3
 
     assert "Agent Started" in output or "Agent Status" in output
@@ -187,7 +187,7 @@ def test_team_with_response_format(capsys):
 
     
     team = Team(
-        agents=[analyst, summarizer],
+        entities=[analyst, summarizer],
         response_format=AnalysisResult
     )
     
@@ -205,7 +205,7 @@ def test_team_with_response_format(capsys):
     captured = capsys.readouterr()
     output = captured.out
     
-    assert len(team.agents) == 2
+    assert len(team.entities) == 2
     assert len(tasks) == 2
 
     assert "Agent Started" in output or "Agent Status" in output
@@ -241,12 +241,12 @@ def test_agent_name_verification_with_mock():
     assert editor.name == "Editor", f"Expected editor name to be 'Editor', got '{editor.name}'"
     
     # Create team with agents
-    team = Team(agents=[writer, editor], mode="sequential")
+    team = Team(entities=[writer, editor], mode="sequential")
     
     # Verify agents are in the team
-    assert len(team.agents) == 2, f"Expected 2 agents in team, got {len(team.agents)}"
-    assert team.agents[0].name == "Writer", f"Expected first agent to be 'Writer', got '{team.agents[0].name}'"
-    assert team.agents[1].name == "Editor", f"Expected second agent to be 'Editor', got '{team.agents[1].name}'"
+    assert len(team.entities) == 2, f"Expected 2 agents in team, got {len(team.entities)}"
+    assert team.entities[0].name == "Writer", f"Expected first agent to be 'Writer', got '{team.entities[0].name}'"
+    assert team.entities[1].name == "Editor", f"Expected second agent to be 'Editor', got '{team.entities[1].name}'"
     
     # Create tasks and explicitly assign agents
     task1 = Task(description="Write a product description")

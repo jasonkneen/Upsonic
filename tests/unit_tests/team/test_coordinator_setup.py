@@ -28,7 +28,7 @@ class MockAgent:
         self.system_prompt = system_prompt
         self.agent_id_ = f"agent-{name.lower()}"
 
-    def get_agent_id(self) -> str:
+    def get_entity_id(self) -> str:
         return self.name if self.name else f"Agent_{self.agent_id_[:8]}"
 
 
@@ -87,7 +87,7 @@ def test_coordinator_setup_initialization():
 # ============================================================================
 
 
-def test_coordinator_setup_format_agent_manifest():
+def test_coordinator_setup_format_entity_manifest():
     """
     Test agent manifest formatting.
 
@@ -116,7 +116,7 @@ def test_coordinator_setup_format_agent_manifest():
     members = [agent1, agent2]
 
     setup = CoordinatorSetup(members=members, tasks=[], mode="coordinate")
-    manifest = setup._format_agent_manifest()
+    manifest = setup._format_entity_manifest()
 
     assert "Researcher" in manifest, "Should include agent name"
     assert "Research Expert" in manifest, "Should include role"
@@ -128,14 +128,14 @@ def test_coordinator_setup_format_agent_manifest():
     setup_minimal = CoordinatorSetup(
         members=[agent_minimal], tasks=[], mode="coordinate"
     )
-    manifest_minimal = setup_minimal._format_agent_manifest()
+    manifest_minimal = setup_minimal._format_entity_manifest()
 
     assert "MinimalAgent" in manifest_minimal, "Should include agent name"
     assert "No specific role defined" in manifest_minimal, "Should handle missing role"
 
     # Test with empty members
     setup_empty = CoordinatorSetup(members=[], tasks=[], mode="coordinate")
-    manifest_empty = setup_empty._format_agent_manifest()
+    manifest_empty = setup_empty._format_entity_manifest()
 
     assert manifest_empty == "No team members are available.", (
         "Should handle empty members"

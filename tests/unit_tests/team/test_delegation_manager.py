@@ -21,22 +21,13 @@ class MockAgent:
         self.agent_id_ = f"agent-{name.lower()}"
         self.memory = None
 
-    def get_agent_id(self) -> str:
+    def get_entity_id(self) -> str:
         return self.name if self.name else f"Agent_{self.agent_id_[:8]}"
 
     async def do_async(self, task: Task) -> Any:
         """Mock async do method."""
         task._response = f"Response from {self.name}: {task.description}"
         return task.response
-
-
-class MockMemory:
-    """Mock memory for testing."""
-
-    def __init__(self):
-        self.storage = None
-        self.session_id = "test-session"
-        self.full_session_memory = True
 
 
 class MockTool:
@@ -61,7 +52,7 @@ def test_delegation_manager_initialization():
     This tests that:
     1. DelegationManager can be initialized with members and tool mapping
     2. All attributes are set correctly
-    3. routed_agent is None initially
+    3. routed_entity is None initially
     """
     print("\n" + "=" * 80)
     print("TEST 1: DelegationManager initialization")
@@ -79,7 +70,7 @@ def test_delegation_manager_initialization():
 
     assert manager.members == members, "Members should be set"
     assert manager.tool_mapping == tool_mapping, "Tool mapping should be set"
-    assert manager.routed_agent is None, "routed_agent should be None initially"
+    assert manager.routed_entity is None, "routed_entity should be None initially"
 
     print("✓ DelegationManager initialization works!")
 
@@ -97,7 +88,7 @@ async def test_delegation_manager_get_delegation_tool():
     This tests that:
     1. get_delegation_tool returns a callable function
     2. Delegation tool can delegate tasks to agents
-    3. Tool mapping is used correctly
+    3. Context and attachments are passed through
     """
     print("\n" + "=" * 80)
     print("TEST 2: DelegationManager get delegation tool")
@@ -111,13 +102,12 @@ async def test_delegation_manager_get_delegation_tool():
     tool_mapping = {"get_data": tool1}
 
     manager = DelegationManager(members=members, tool_mapping=tool_mapping)
-    memory = MockMemory()
 
-    delegation_tool = manager.get_delegation_tool(memory)
+    delegation_tool = manager.get_delegation_tool()
 
     assert callable(delegation_tool), "Should return a callable"
 
-    # Test delegation
+    # Test delegation with task-level tools
     result = await delegation_tool(
         member_id="Agent1",
         description="Test task",
@@ -151,8 +141,8 @@ async def test_delegation_manager_delegate_task():
 
     This tests that:
     1. Tasks are properly delegated to agents
-    2. Memory is temporarily assigned
-    3. Tools are correctly mapped and passed
+    2. Members execute without receiving shared memory
+    3. Task-level tools are forwarded via tool_mapping
     """
     print("\n" + "=" * 80)
     print("TEST 3: DelegationManager delegate task")
@@ -166,12 +156,10 @@ async def test_delegation_manager_delegate_task():
     tool_mapping = {"process_data": tool1}
 
     manager = DelegationManager(members=members, tool_mapping=tool_mapping)
-    memory = MockMemory()
 
-    delegation_tool = manager.get_delegation_tool(memory)
+    delegation_tool = manager.get_delegation_tool()
 
-    # Test delegation with tools
-    original_memory_agent1 = agent1.memory
+    # Test delegation with context, attachments and tools
     result = await delegation_tool(
         member_id="Agent1",
         description="Process the data",
@@ -180,16 +168,15 @@ async def test_delegation_manager_delegate_task():
         attachments=["data.txt"],
     )
 
-    # Verify memory was temporarily assigned
-    assert agent1.memory == original_memory_agent1, "Memory should be restored"
+    assert agent1.memory is None, "Member memory should remain untouched"
     assert "Response from Agent1" in result, "Should return agent response"
 
-    # Test delegation without tools
-    result_no_tools = await delegation_tool(
+    # Test delegation to second agent without tools
+    result_agent2 = await delegation_tool(
         member_id="Agent2", description="Simple task"
     )
 
-    assert "Response from Agent2" in result_no_tools, "Should work without tools"
+    assert "Response from Agent2" in result_agent2, "Should work for second agent"
 
     print("✓ DelegationManager delegate task works!")
 
@@ -205,8 +192,8 @@ def test_delegation_manager_tool_mapping():
 
     This tests that:
     1. Tools are correctly mapped by name
-    2. Tool mapping is used when delegating tasks
-    3. Missing tools are handled gracefully
+    2. Tool mapping is stored on the manager
+    3. Empty tool mapping is handled gracefully
     """
     print("\n" + "=" * 80)
     print("TEST 4: DelegationManager tool mapping")
@@ -245,7 +232,7 @@ async def test_delegation_manager_get_routing_tool():
     This tests that:
     1. get_routing_tool returns a callable function
     2. Routing tool selects an agent
-    3. routed_agent is set correctly
+    3. routed_entity is set correctly
     """
     print("\n" + "=" * 80)
     print("TEST 5: DelegationManager get routing tool")
@@ -264,7 +251,7 @@ async def test_delegation_manager_get_routing_tool():
     # Test routing to valid agent
     result = await routing_tool(member_id="Agent1")
 
-    assert manager.routed_agent == agent1, "routed_agent should be set"
+    assert manager.routed_entity == agent1, "routed_entity should be set"
     assert "successfully routed" in result.lower(), "Should return success message"
 
     # Test routing to invalid agent
@@ -273,8 +260,8 @@ async def test_delegation_manager_get_routing_tool():
 
     result_error = await routing_tool2(member_id="InvalidAgent")
 
-    assert manager2.routed_agent is None, (
-        "routed_agent should not be set for invalid agent"
+    assert manager2.routed_entity is None, (
+        "routed_entity should not be set for invalid agent"
     )
     assert "invalid" in result_error.lower() or "not found" in result_error.lower(), (
         "Should return error"
@@ -296,7 +283,7 @@ async def test_delegation_manager_error_handling():
     This tests that:
     1. Errors during task execution are caught
     2. Error messages are returned
-    3. Memory is restored even on error
+    3. Member memory remains untouched even on error
     """
     print("\n" + "=" * 80)
     print("TEST 6: DelegationManager error handling")
@@ -312,15 +299,12 @@ async def test_delegation_manager_error_handling():
     members = [agent]
 
     manager = DelegationManager(members=members, tool_mapping={})
-    memory = MockMemory()
 
-    delegation_tool = manager.get_delegation_tool(memory)
+    delegation_tool = manager.get_delegation_tool()
 
-    original_memory = agent.memory
     result = await delegation_tool(member_id="Agent1", description="Failing task")
 
-    # Verify memory was restored even on error
-    assert agent.memory == original_memory, "Memory should be restored even on error"
+    assert agent.memory is None, "Member memory should remain untouched even on error"
     assert "error occurred" in result.lower(), "Should return error message"
 
     print("✓ DelegationManager error handling works!")

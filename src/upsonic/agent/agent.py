@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from upsonic.culture.manager import CultureManager
     from upsonic.run.requirements import RunRequirement
     from upsonic.session.agent import RunData
+    from fastmcp import FastMCP
 else:
     Model = "Model"
     ModelRequest = "ModelRequest"
@@ -666,6 +667,10 @@ class Agent(BaseAgent):
         if self.name:
             return self.name
         return f"Agent_{self.agent_id[:8]}"
+    
+    def get_entity_id(self) -> str:
+        """Get entity ID for unified interface (Agent + Team)."""
+        return self.get_agent_id()
     
     def get_cache_stats(self) -> Dict[str, Any]:
         """Get cache statistics for this agent's session."""
@@ -2741,6 +2746,12 @@ class Agent(BaseAgent):
                 return validation_error
             return validation_error.output
         
+        # Reset price_id and tool_calls for fresh metric tracking
+        # Done after validation so failed-validation doesn't corrupt existing metrics
+        task.price_id_ = None
+        _ = task.price_id
+        task._tool_calls = []
+        
         # Update policy managers debug flag if debug is enabled
         if debug or self.debug:
             self.user_policy_manager.debug = True
@@ -2882,10 +2893,6 @@ class Agent(BaseAgent):
         from upsonic.tasks.tasks import Task as TaskClass
         if isinstance(task, str):
             task = TaskClass(description=task)
-        
-        task.price_id_ = None
-        _ = task.price_id
-        task._tool_calls = []
 
         try:
             loop = asyncio.get_running_loop()
@@ -2917,10 +2924,6 @@ class Agent(BaseAgent):
         from upsonic.tasks.tasks import Task as TaskClass
         if isinstance(task, str):
             task = TaskClass(description=task)
-        
-        task.price_id_ = None
-        _ = task.price_id
-        task._tool_calls = []
 
         try:
             loop = asyncio.get_running_loop()
@@ -2952,7 +2955,52 @@ class Agent(BaseAgent):
             Full AgentRunOutput if return_output=True
         """
         return await self.do_async(task, model, debug, retry, return_output, _print_method_default=True)
-    
+
+    def as_mcp(self, name: Optional[str] = None) -> "FastMCP":
+        """
+        Expose this agent as an MCP server.
+
+        Creates a FastMCP server with a ``do`` tool that delegates task
+        execution to this agent.  The returned server can be started with
+        any transport (stdio, sse, streamable-http) via its ``.run()``
+        method.
+
+        Args:
+            name: MCP server name. Defaults to the agent's name or
+                  ``"Upsonic Agent"``.
+
+        Returns:
+            A :class:`fastmcp.FastMCP` server instance ready to ``.run()``.
+        """
+        from fastmcp import FastMCP as _FastMCP
+
+        server_name: str = name or self.name or "Upsonic Agent"
+        server: _FastMCP = _FastMCP(server_name)
+
+        description_parts: List[str] = []
+        if self.role:
+            description_parts.append(f"Role: {self.role}")
+        if self.goal:
+            description_parts.append(f"Goal: {self.goal}")
+        if self.instructions:
+            description_parts.append(f"Instructions: {self.instructions}")
+
+        tool_description: str = f"Execute a task using the {server_name} agent."
+        if description_parts:
+            tool_description += " " + " | ".join(description_parts)
+
+        agent_ref: "Agent" = self
+
+        @server.tool(description=tool_description)
+        def do(task: str) -> str:
+            """Give a task to this agent and get the result."""
+            result: Any = agent_ref.print_do(task)
+            if result is None:
+                return ""
+            return str(result)
+
+        return server
+
     def stream(
         self,
         task: Union[str, "Task"],

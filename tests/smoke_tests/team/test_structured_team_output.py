@@ -41,7 +41,7 @@ async def test_structured_team_output_sequential():
     )
     
     team = Team(
-        agents=[researcher, writer],
+        entities=[researcher, writer],
         mode="sequential",
         response_format=TeamReport
     )
@@ -82,7 +82,7 @@ async def test_structured_team_output_coordinate():
     )
     
     team = Team(
-        agents=[data_analyst, report_writer],
+        entities=[data_analyst, report_writer],
         mode="coordinate",
         model="openai/gpt-4o",
         response_format=TeamReport
@@ -126,7 +126,7 @@ async def test_structured_team_output_route():
     )
     
     team = Team(
-        agents=[legal_expert, tech_expert],
+        entities=[legal_expert, tech_expert],
         mode="route",
         model="openai/gpt-4o",
         response_format=TeamReport

@@ -49,7 +49,7 @@ async def test_ask_other_team_members():
     # When ask_other_team_members=True, add_tool() is called in __init__
     # This adds agents to self.tasks (tasks passed during initialization)
     team = Team(
-        agents=[researcher, calculator_agent],
+        entities=[researcher, calculator_agent],
         tasks=[task],  # Pass tasks during initialization so add_tool() can modify them
         mode="sequential",
         ask_other_team_members=True

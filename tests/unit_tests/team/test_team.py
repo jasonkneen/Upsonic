@@ -39,7 +39,7 @@ class MockAgent:
         self.debug = False
         self.agent_id_ = f"agent-{name.lower()}"
 
-    def get_agent_id(self) -> str:
+    def get_entity_id(self) -> str:
         return self.name if self.name else f"Agent_{self.agent_id_[:8]}"
 
     async def do_async(self, task: Task, _print_method_default: bool = False) -> Any:
@@ -76,9 +76,9 @@ def test_team_initialization():
     print("=" * 80)
 
     agents = [MockAgent("Agent1"), MockAgent("Agent2")]
-    team = Team(agents=agents)
+    team = Team(entities=agents)
 
-    assert team.agents == agents, "Agents should be set"
+    assert team.entities == agents, "Agents should be set"
     assert team.tasks == [], "Tasks should default to empty list"
     assert team.mode == "sequential", "Mode should default to sequential"
     assert team.ask_other_team_members == False, (
@@ -106,11 +106,11 @@ def test_team_initialization_with_agents():
     agent2 = MockAgent("Writer", role="Writing", goal="Write content")
     agents = [agent1, agent2]
 
-    team = Team(agents=agents)
+    team = Team(entities=agents)
 
-    assert len(team.agents) == 2, "Should have 2 agents"
-    assert team.agents[0].name == "Researcher", "First agent should be Researcher"
-    assert team.agents[1].name == "Writer", "Second agent should be Writer"
+    assert len(team.entities) == 2, "Should have 2 agents"
+    assert team.entities[0].name == "Researcher", "First agent should be Researcher"
+    assert team.entities[1].name == "Writer", "Second agent should be Writer"
 
     print("✓ Team initialization with agents works!")
 
@@ -133,11 +133,11 @@ def test_team_initialization_with_tasks():
     task2 = Task(description="Task 2")
 
     # Test with list of tasks
-    team1 = Team(agents=agents, tasks=[task1, task2])
+    team1 = Team(entities=agents, tasks=[task1, task2])
     assert len(team1.tasks) == 2, "Should have 2 tasks"
 
     # Test with single task
-    team2 = Team(agents=agents, tasks=task1)
+    team2 = Team(entities=agents, tasks=task1)
     assert len(team2.tasks) == 1, "Single task should be converted to list"
     assert team2.tasks[0].description == "Task 1", "Task description should match"
 
@@ -158,7 +158,7 @@ def test_team_initialization_with_memory():
 
     agents = [MockAgent("Agent1")]
     memory = MockMemory()
-    team = Team(agents=agents, memory=memory)
+    team = Team(entities=agents, memory=memory)
 
     assert team.memory == memory, "Memory should be set"
     assert team.memory.session_id == "test-session", "Memory session_id should match"
@@ -191,7 +191,7 @@ async def test_team_sequential_mode():
     task1 = Task(description="Task 1")
     task2 = Task(description="Task 2")
 
-    team = Team(agents=agents, mode="sequential", model=MockModel())
+    team = Team(entities=agents, mode="sequential", model=MockModel())
 
     # Mock the sequential execution path components
     with (
@@ -205,11 +205,11 @@ async def test_team_sequential_mode():
         mock_context.return_value = mock_context_instance
 
         mock_assignment_instance = Mock()
-        mock_assignment_instance.prepare_agents_registry.return_value = (
+        mock_assignment_instance.prepare_entities_registry.return_value = (
             {agent1.name: agent1, agent2.name: agent2},
             [agent1.name, agent2.name],
         )
-        mock_assignment_instance.select_agent_for_task = AsyncMock(
+        mock_assignment_instance.select_entity_for_task = AsyncMock(
             return_value=agent1.name
         )
         mock_assignment.return_value = mock_assignment_instance
@@ -248,20 +248,22 @@ async def test_team_coordinate_mode():
     task = Task(description="Coordinate task")
     model = MockModel()
 
-    team = Team(agents=agents, mode="coordinate", model=model)
+    team = Team(entities=agents, mode="coordinate", model=model)
 
-    # Test that model is required
-    team_no_model = Team(agents=agents, mode="coordinate", model=None)
-    with pytest.raises(ValueError, match="A `model` must be set"):
+    # Test that model or leader is required
+    team_no_model = Team(entities=agents, mode="coordinate", model=None)
+    with pytest.raises(ValueError, match="either pass a `leader` Agent or set `model`"):
         await team_no_model.multi_agent_async(agents, [task])
 
-    # Mock the coordinate execution
-    with (
-        patch("upsonic.team.team.CoordinatorSetup") as mock_setup,
-        patch("upsonic.team.team.DelegationManager") as mock_delegation,
-        patch("upsonic.team.team.Memory") as mock_memory,
-        patch("upsonic.team.team.Agent") as mock_agent_class,
-    ):
+        # Mock the coordinate execution
+        with (
+            patch("upsonic.team.team.CoordinatorSetup") as mock_setup,
+            patch("upsonic.team.team.DelegationManager") as mock_delegation,
+            patch("upsonic.storage.in_memory.in_memory.InMemoryStorage") as mock_in_memory_storage,
+            patch("upsonic.storage.memory.memory.Memory") as mock_memory,
+            patch("upsonic.agent.agent.Agent") as mock_agent_class,
+        ):
+            mock_in_memory_storage.return_value = Mock()
         mock_leader = Mock()
         mock_leader.do_async = AsyncMock(return_value="Final response")
         mock_agent_class.return_value = mock_leader
@@ -303,18 +305,18 @@ async def test_team_route_mode():
     task = Task(description="Route task")
     model = MockModel()
 
-    team = Team(agents=agents, mode="route", model=model)
+    team = Team(entities=agents, mode="route", model=model)
 
-    # Test that model is required
-    team_no_model = Team(agents=agents, mode="route", model=None)
-    with pytest.raises(ValueError, match="A `model` must be set"):
+    # Test that model or router is required
+    team_no_model = Team(entities=agents, mode="route", model=None)
+    with pytest.raises(ValueError, match="either pass a `router` Agent or set `model`"):
         await team_no_model.multi_agent_async(agents, [task])
 
     # Mock the route execution
     with (
         patch("upsonic.team.team.CoordinatorSetup") as mock_setup,
         patch("upsonic.team.team.DelegationManager") as mock_delegation,
-        patch("upsonic.team.team.Agent") as mock_agent_class,
+        patch("upsonic.agent.agent.Agent") as mock_agent_class,
     ):
         mock_router = Mock()
         mock_router.do_async = AsyncMock()
@@ -326,7 +328,7 @@ async def test_team_route_mode():
 
         mock_delegation_instance = Mock()
         mock_delegation_instance.get_routing_tool.return_value = lambda: None
-        mock_delegation_instance.routed_agent = agent1
+        mock_delegation_instance.routed_entity = agent1
         mock_delegation.return_value = mock_delegation_instance
 
         # Mock agent1.do_async to set response on the task passed to it
@@ -342,6 +344,78 @@ async def test_team_route_mode():
         assert team.leader_agent is not None, "Router agent should be created"
 
     print("✓ Team route mode works!")
+
+
+@pytest.mark.asyncio
+async def test_team_coordinate_mode_with_custom_leader():
+    """Coordinate mode uses user-provided leader Agent when given."""
+    agent1 = MockAgent("Agent1")
+    agent2 = MockAgent("Agent2")
+    agents = [agent1, agent2]
+    task = Task(description="Coordinate task")
+    custom_leader = MockAgent("CustomLeader")
+
+    team = Team(entities=agents, mode="coordinate", leader=custom_leader)
+
+    with (
+        patch("upsonic.team.team.CoordinatorSetup") as mock_setup,
+        patch("upsonic.team.team.DelegationManager") as mock_delegation,
+        patch("upsonic.storage.in_memory.in_memory.InMemoryStorage") as mock_in_memory_storage,
+        patch("upsonic.storage.memory.memory.Memory") as mock_memory,
+    ):
+        mock_in_memory_storage.return_value = Mock()
+        mock_setup_instance = Mock()
+        mock_setup_instance.create_leader_prompt.return_value = "System prompt"
+        mock_setup.return_value = mock_setup_instance
+
+        mock_delegation_instance = Mock()
+        mock_delegation_instance.get_delegation_tool.return_value = lambda: None
+        mock_delegation.return_value = mock_delegation_instance
+
+        custom_leader.do_async = AsyncMock(return_value="Custom leader response")
+
+        result = await team.multi_agent_async(agents, [task])
+
+        assert result == "Custom leader response"
+        assert team.leader_agent is custom_leader
+
+
+@pytest.mark.asyncio
+async def test_team_route_mode_with_custom_router():
+    """Route mode uses user-provided router Agent when given."""
+    agent1 = MockAgent("Agent1")
+    agent2 = MockAgent("Agent2")
+    agents = [agent1, agent2]
+    task = Task(description="Route task")
+    custom_router = MockAgent("CustomRouter")
+
+    team = Team(entities=agents, mode="route", router=custom_router)
+
+    with (
+        patch("upsonic.team.team.CoordinatorSetup") as mock_setup,
+        patch("upsonic.team.team.DelegationManager") as mock_delegation,
+    ):
+        mock_setup_instance = Mock()
+        mock_setup_instance.create_leader_prompt.return_value = "Router prompt"
+        mock_setup.return_value = mock_setup_instance
+
+        mock_delegation_instance = Mock()
+        mock_delegation_instance.get_routing_tool.return_value = lambda: None
+        mock_delegation_instance.routed_entity = agent1
+        mock_delegation.return_value = mock_delegation_instance
+
+        custom_router.do_async = AsyncMock()
+
+        async def mock_do_async(t, _print_method_default: bool = False):
+            t._response = "Routed via custom router"
+            return t.response
+
+        agent1.do_async = mock_do_async
+
+        result = await team.multi_agent_async(agents, [task])
+
+        assert result == "Routed via custom router"
+        assert team.leader_agent is custom_router
 
 
 # ============================================================================
@@ -365,13 +439,13 @@ def test_team_do_single_task():
     agents = [agent]
     task = Task(description="Single task")
 
-    team = Team(agents=agents, tasks=task)
+    team = Team(entities=agents, tasks=task)
 
-    with patch.object(team, "multi_agent", return_value="Result") as mock_multi:
+    with patch.object(team, "_run_sync", return_value="Result") as mock_sync:
         result = team.do()
 
         assert result == "Result", "Should return result"
-        mock_multi.assert_called_once()
+        mock_sync.assert_called_once()
 
     print("✓ Team do() with single task works!")
 
@@ -393,15 +467,15 @@ def test_team_do_multiple_tasks():
     task1 = Task(description="Task 1")
     task2 = Task(description="Task 2")
 
-    team = Team(agents=agents)
+    team = Team(entities=agents)
 
     with patch.object(
-        team, "multi_agent", return_value="Combined result"
-    ) as mock_multi:
+        team, "_run_sync", return_value="Combined result"
+    ) as mock_sync:
         result = team.do([task1, task2])
 
         assert result == "Combined result", "Should return combined result"
-        mock_multi.assert_called_once()
+        mock_sync.assert_called_once()
 
     print("✓ Team do() with multiple tasks works!")
 
@@ -423,7 +497,7 @@ async def test_team_do_async():
     agents = [agent]
     task = Task(description="Async task")
 
-    team = Team(agents=agents, mode="sequential", model=MockModel())
+    team = Team(entities=agents, mode="sequential", model=MockModel())
 
     # Mock the sequential execution path
     with (
@@ -437,11 +511,11 @@ async def test_team_do_async():
         mock_context.return_value = mock_context_instance
 
         mock_assignment_instance = Mock()
-        mock_assignment_instance.prepare_agents_registry.return_value = (
+        mock_assignment_instance.prepare_entities_registry.return_value = (
             {agent.name: agent},
             [agent.name],
         )
-        mock_assignment_instance.select_agent_for_task = AsyncMock(
+        mock_assignment_instance.select_entity_for_task = AsyncMock(
             return_value=agent.name
         )
         mock_assignment.return_value = mock_assignment_instance
@@ -479,7 +553,7 @@ def test_team_complete():
     agents = [agent]
     task = Task(description="Complete task")
 
-    team = Team(agents=agents)
+    team = Team(entities=agents)
 
     with patch.object(team, "do", return_value="Result") as mock_do:
         result = team.complete(task)
@@ -506,7 +580,7 @@ def test_team_print_do():
     agents = [agent]
     task = Task(description="Print task")
 
-    team = Team(agents=agents)
+    team = Team(entities=agents)
 
     with patch.object(team, "do", return_value="Result") as mock_do:
         result = team.print_do(task)
@@ -539,7 +613,7 @@ def test_team_ask_other_team_members():
     agents = [agent1, agent2]
     task = Task(description="Task with tools")
 
-    team = Team(agents=agents, tasks=task, ask_other_team_members=True)
+    team = Team(entities=agents, tasks=task, ask_other_team_members=True)
 
     # Verify add_tool was called (agents should be in task.tools)
     # Note: This depends on implementation, but we can verify the flag is set
@@ -548,23 +622,23 @@ def test_team_ask_other_team_members():
     print("✓ Team ask_other_team_members works!")
 
 
-def test_team_multi_agent():
+def test_team_run_sync():
     """
-    Test multi_agent() method.
+    Test _run_sync() method.
 
     This tests that:
-    1. multi_agent() handles event loop correctly
-    2. Calls multi_agent_async appropriately
+    1. _run_sync() handles event loop correctly
+    2. Calls asyncio.run appropriately
     """
     print("\n" + "=" * 80)
-    print("TEST 14: Team multi_agent() method")
+    print("TEST 14: Team _run_sync() method")
     print("=" * 80)
 
     agent = MockAgent("Agent1")
     agents = [agent]
     task = Task(description="Multi agent task")
 
-    team = Team(agents=agents)
+    team = Team(entities=agents)
 
     with (
         patch("asyncio.get_running_loop", side_effect=RuntimeError),
@@ -572,12 +646,12 @@ def test_team_multi_agent():
     ):
         mock_run.return_value = "Result"
 
-        result = team.multi_agent(agents, [task])
+        result = team._run_sync(team.multi_agent_async(agents, [task]))
 
         assert result == "Result", "Should return result"
         mock_run.assert_called_once()
 
-    print("✓ Team multi_agent() method works!")
+    print("✓ Team _run_sync() method works!")
 
 
 @pytest.mark.asyncio
@@ -597,7 +671,7 @@ async def test_team_multi_agent_async():
     agents = [agent]
     task = Task(description="Async multi agent task")
 
-    team = Team(agents=agents, mode="sequential", model=MockModel())
+    team = Team(entities=agents, mode="sequential", model=MockModel())
 
     # Already tested in test_team_do_async, but verify it's callable
     assert callable(team.multi_agent_async), "multi_agent_async should be callable"
@@ -630,10 +704,10 @@ async def test_team_task_delegation():
     task = Task(description="Delegated task")
     model = MockModel()
 
-    team = Team(agents=agents, mode="coordinate", model=model)
+    team = Team(entities=agents, mode="coordinate", model=model)
 
     # This is tested through coordinate mode, but verify structure
-    assert len(team.agents) == 2, "Should have 2 agents for delegation"
+    assert len(team.entities) == 2, "Should have 2 agents for delegation"
 
     print("✓ Team task delegation works!")
 
@@ -656,7 +730,7 @@ async def test_team_result_combination():
     task1 = Task(description="Task 1")
     task2 = Task(description="Task 2")
 
-    team = Team(agents=agents, mode="sequential", model=MockModel())
+    team = Team(entities=agents, mode="sequential", model=MockModel())
 
     # Mock result combination
     with (
@@ -670,11 +744,11 @@ async def test_team_result_combination():
         mock_context.return_value = mock_context_instance
 
         mock_assignment_instance = Mock()
-        mock_assignment_instance.prepare_agents_registry.return_value = (
+        mock_assignment_instance.prepare_entities_registry.return_value = (
             {agent.name: agent},
             [agent.name],
         )
-        mock_assignment_instance.select_agent_for_task = AsyncMock(
+        mock_assignment_instance.select_entity_for_task = AsyncMock(
             return_value=agent.name
         )
         mock_assignment.return_value = mock_assignment_instance
@@ -712,7 +786,7 @@ async def test_team_context_sharing():
     task1 = Task(description="Task 1")
     task2 = Task(description="Task 2")
 
-    team = Team(agents=agents, mode="sequential", model=MockModel())
+    team = Team(entities=agents, mode="sequential", model=MockModel())
 
     # Mock context sharing
     with (
@@ -726,11 +800,11 @@ async def test_team_context_sharing():
         mock_context.return_value = mock_context_instance
 
         mock_assignment_instance = Mock()
-        mock_assignment_instance.prepare_agents_registry.return_value = (
+        mock_assignment_instance.prepare_entities_registry.return_value = (
             {agent.name: agent},
             [agent.name],
         )
-        mock_assignment_instance.select_agent_for_task = AsyncMock(
+        mock_assignment_instance.select_entity_for_task = AsyncMock(
             return_value=agent.name
         )
         mock_assignment.return_value = mock_assignment_instance
@@ -770,16 +844,16 @@ async def test_team_error_handling():
     agents = [agent]
     task = Task(description="Error task")
 
-    # Test mode without model
-    team = Team(agents=agents, mode="coordinate", model=None)
+    # Test coordinate mode without model or leader
+    team = Team(entities=agents, mode="coordinate", model=None)
 
-    with pytest.raises(ValueError, match="A `model` must be set"):
+    with pytest.raises(ValueError, match="either pass a `leader` Agent or set `model`"):
         await team.multi_agent_async(agents, [task])
 
-    # Test route mode without model
-    team_route = Team(agents=agents, mode="route", model=None)
+    # Test route mode without model or router
+    team_route = Team(entities=agents, mode="route", model=None)
 
-    with pytest.raises(ValueError, match="A `model` must be set"):
+    with pytest.raises(ValueError, match="either pass a `router` Agent or set `model`"):
         await team_route.multi_agent_async(agents, [task])
 
     print("✓ Team error handling works!")
