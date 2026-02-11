@@ -17,14 +17,22 @@ if TYPE_CHECKING:
         OCRFileNotFoundError,
         OCRUnsupportedFormatError,
         OCRProcessingError,
+        OCRTimeoutError,
+    )
+    from .layer_1.engines import (
+        EasyOCREngine,
+        RapidOCREngine,
+        TesseractOCREngine,
+        DeepSeekOCREngine,
+        DeepSeekOllamaOCREngine,
     )
     try:
-        from .paddleocr import (
+        from .layer_1.engines.paddleocr import (
             PaddleOCRConfig,
-            PaddleOCRProvider,
-            PPStructureV3Provider,
-            PPChatOCRv4Provider,
-            PaddleOCRVLProvider,
+            PaddleOCREngine,
+            PPStructureV3Engine,
+            PPChatOCRv4Engine,
+            PaddleOCRVLEngine,
             PaddleOCR,
             PPStructureV3,
             PPChatOCRv4,
@@ -44,7 +52,7 @@ def _get_base_classes():
         OCRTextBlock,
         BoundingBox,
     )
-    
+
     return {
         'OCR': OCR,
         'infer_provider': infer_provider,
@@ -64,37 +72,57 @@ def _get_exception_classes():
         OCRFileNotFoundError,
         OCRUnsupportedFormatError,
         OCRProcessingError,
+        OCRTimeoutError,
     )
-    
+
     return {
         'OCRError': OCRError,
         'OCRProviderError': OCRProviderError,
         'OCRFileNotFoundError': OCRFileNotFoundError,
         'OCRUnsupportedFormatError': OCRUnsupportedFormatError,
         'OCRProcessingError': OCRProcessingError,
+        'OCRTimeoutError': OCRTimeoutError,
+    }
+
+def _get_engine_classes():
+    """Lazy import of engine classes."""
+    from .layer_1.engines import (
+        EasyOCREngine,
+        RapidOCREngine,
+        TesseractOCREngine,
+        DeepSeekOCREngine,
+        DeepSeekOllamaOCREngine,
+    )
+
+    return {
+        'EasyOCREngine': EasyOCREngine,
+        'RapidOCREngine': RapidOCREngine,
+        'TesseractOCREngine': TesseractOCREngine,
+        'DeepSeekOCREngine': DeepSeekOCREngine,
+        'DeepSeekOllamaOCREngine': DeepSeekOllamaOCREngine,
     }
 
 def _get_paddleocr_classes():
     """Lazy import of PaddleOCR classes (optional dependency)."""
     try:
-        from .paddleocr import (
+        from .layer_1.engines.paddleocr import (
             PaddleOCRConfig,
-            PaddleOCRProvider,
-            PPStructureV3Provider,
-            PPChatOCRv4Provider,
-            PaddleOCRVLProvider,
+            PaddleOCREngine,
+            PPStructureV3Engine,
+            PPChatOCRv4Engine,
+            PaddleOCRVLEngine,
             PaddleOCR,
             PPStructureV3,
             PPChatOCRv4,
             PaddleOCRVL,
         )
-        
+
         return {
             'PaddleOCRConfig': PaddleOCRConfig,
-            'PaddleOCRProvider': PaddleOCRProvider,
-            'PPStructureV3Provider': PPStructureV3Provider,
-            'PPChatOCRv4Provider': PPChatOCRv4Provider,
-            'PaddleOCRVLProvider': PaddleOCRVLProvider,
+            'PaddleOCREngine': PaddleOCREngine,
+            'PPStructureV3Engine': PPStructureV3Engine,
+            'PPChatOCRv4Engine': PPChatOCRv4Engine,
+            'PaddleOCRVLEngine': PaddleOCRVLEngine,
             'PaddleOCR': PaddleOCR,
             'PPStructureV3': PPStructureV3,
             'PPChatOCRv4': PPChatOCRv4,
@@ -109,17 +137,22 @@ def __getattr__(name: str) -> Any:
     base_classes = _get_base_classes()
     if name in base_classes:
         return base_classes[name]
-    
+
     # Exception classes
     exception_classes = _get_exception_classes()
     if name in exception_classes:
         return exception_classes[name]
-    
+
+    # Engine classes
+    engine_classes = _get_engine_classes()
+    if name in engine_classes:
+        return engine_classes[name]
+
     # PaddleOCR classes (optional)
     paddleocr_classes = _get_paddleocr_classes()
     if name in paddleocr_classes:
         return paddleocr_classes[name]
-    
+
     raise AttributeError(
         f"module '{__name__}' has no attribute '{name}'. "
         f"Please import from the appropriate sub-module."
@@ -139,15 +172,21 @@ __all__ = [
     "OCRFileNotFoundError",
     "OCRUnsupportedFormatError",
     "OCRProcessingError",
+    "OCRTimeoutError",
+    # Engine classes
+    "EasyOCREngine",
+    "RapidOCREngine",
+    "TesseractOCREngine",
+    "DeepSeekOCREngine",
+    "DeepSeekOllamaOCREngine",
     # PaddleOCR classes (optional, available if paddleocr is installed)
     "PaddleOCRConfig",
-    "PaddleOCRProvider",
-    "PPStructureV3Provider",
-    "PPChatOCRv4Provider",
-    "PaddleOCRVLProvider",
+    "PaddleOCREngine",
+    "PPStructureV3Engine",
+    "PPChatOCRv4Engine",
+    "PaddleOCRVLEngine",
     "PaddleOCR",
     "PPStructureV3",
     "PPChatOCRv4",
     "PaddleOCRVL",
 ]
-
