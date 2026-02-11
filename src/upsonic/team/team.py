@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from upsonic.tasks.tasks import Task
-from typing import Any, Dict, List, Optional, Union, Literal, TYPE_CHECKING
+from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Union, Literal, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from upsonic.agent.agent import Agent
@@ -20,6 +20,7 @@ class Team:
     
     Supports both Agent and Team instances as entities, enabling
     hierarchical multi-agent workflows with nested teams.
+    Streaming (stream/astream) is text-only; no events are yielded.
     """
     
     def __init__(self,
@@ -112,6 +113,31 @@ class Team:
                 if nested_model:
                     return nested_model
         return None
+
+    def _format_stream_header(self, entity_id: str, entity_type: str) -> str:
+        """Build a visual header line that separates one entity's output from the next."""
+        return f"\n\n--- [{entity_type}] {entity_id} ---\n\n"
+
+    async def _entity_astream(
+        self,
+        entity: Union[Agent, "Team"],
+        task: Task,
+        *,
+        debug: bool = False,
+    ) -> AsyncIterator[str]:
+        """Stream text from an entity (Agent or Team). Yields str chunks only."""
+        from upsonic.agent.agent import Agent as AgentClass
+        if isinstance(entity, AgentClass):
+            async for chunk in entity.astream(task, events=False, debug=debug):
+                if isinstance(chunk, str):
+                    yield chunk
+        elif hasattr(entity, "astream"):
+            async for chunk in entity.astream(task, debug=debug):
+                yield chunk
+        else:
+            result: Any = await entity.do_async(task)
+            if result is not None:
+                yield str(result)
 
     def complete(self, tasks: Optional[Union[List[Task], Task]] = None) -> Any:
         return self.do(tasks)
@@ -408,6 +434,210 @@ class Team:
         """
         result = self.do(tasks, _print_method_default=True)
         return result
+
+    async def astream(
+        self,
+        tasks: Optional[Union[List[Task], Task, str]] = None,
+        *,
+        debug: bool = False,
+    ) -> AsyncIterator[str]:
+        """
+        Stream task execution asynchronously. Yields text chunks only (no events).
+        In coordinate mode, only the leader's output is streamed; delegated member outputs are not streamed.
+
+        Args:
+            tasks: Task, list of Tasks, string description, or None (falls back to self.tasks).
+            debug: Enable debug mode.
+
+        Yields:
+            str: Text chunks as they arrive.
+        """
+        from upsonic.tasks.tasks import Task as TaskClass
+        from upsonic.agent.agent import Agent as AgentClass
+        tasks_to_execute: Optional[Union[List[Task], Task, str]] = tasks if tasks is not None else self.tasks
+        if isinstance(tasks_to_execute, str):
+            tasks_to_execute = [TaskClass(description=tasks_to_execute)]
+        elif isinstance(tasks_to_execute, Task):
+            tasks_to_execute = [tasks_to_execute]
+        elif not isinstance(tasks_to_execute, list):
+            tasks_to_execute = [tasks_to_execute]
+        tasks_list: List[Task] = tasks_to_execute
+        mode_debug: bool = debug or self.debug
+
+        if self.mode == "sequential":
+            if self.memory:
+                for entity in self.entities:
+                    if isinstance(entity, AgentClass) and getattr(entity, "memory", None) is None:
+                        entity.memory = self.memory
+            context_sharing = ContextSharing()
+            task_assignment = TaskAssignment()
+            combiner_model: Optional[Any] = self.model or self._find_first_model()
+            last_debug = False
+            for entity in reversed(self.entities):
+                if isinstance(entity, AgentClass) and hasattr(entity, "debug"):
+                    last_debug = entity.debug
+                    break
+            result_combiner = ResultCombiner(model=combiner_model, debug=last_debug)
+            entities_registry, entity_names = task_assignment.prepare_entities_registry(self.entities)
+            all_results: List[Task] = []
+            for task_index, current_task in enumerate(tasks_list):
+                selection_context = context_sharing.build_selection_context(
+                    current_task, tasks_list, task_index, self.entities, all_results
+                )
+                selected_entity_name = await task_assignment.select_entity_for_task(
+                    current_task, selection_context, entities_registry, entity_names, self.entities
+                )
+                if selected_entity_name:
+                    context_sharing.enhance_task_context(
+                        current_task, tasks_list, task_index, self.entities, all_results
+                    )
+                    selected_entity = entities_registry[selected_entity_name]
+                    entity_type: str = "Team" if isinstance(selected_entity, Team) else "Agent"
+                    yield self._format_stream_header(selected_entity_name, entity_type)
+                    async for chunk in self._entity_astream(selected_entity, current_task, debug=mode_debug):
+                        yield chunk
+                    all_results.append(current_task)
+            if result_combiner.should_combine_results(all_results):
+                combined: Any = await result_combiner.combine_results(
+                    all_results, self.response_format, self.entities
+                )
+                if combined is not None:
+                    yield str(combined)
+
+        elif self.mode == "coordinate":
+            if self._leader is None and not self.model:
+                raise ValueError(f"For '{self.mode}' mode either pass a `leader` Agent or set `model` on the Team.")
+            tool_mapping: Dict[str, Any] = {}
+            for t in self.tasks:
+                if t.tools:
+                    for tool in t.tools:
+                        if callable(tool):
+                            tool_mapping[tool.__name__] = tool
+            setup_manager = CoordinatorSetup(self.entities, tasks_list, mode="coordinate")
+            delegation_manager = DelegationManager(self.entities, tool_mapping, debug=self.debug)
+            from upsonic.storage.memory.memory import Memory as MemoryClass
+            from upsonic.storage.in_memory.in_memory import InMemoryStorage as InMemoryStorageClass
+            if self._leader is not None:
+                self.leader_agent = self._leader
+                if self.leader_agent.memory is None:
+                    if self.memory is None:
+                        self.memory = MemoryClass(
+                            storage=InMemoryStorageClass(),
+                            full_session_memory=True,
+                            session_id="team_coordinator_session",
+                        )
+                    self.leader_agent.memory = self.memory
+            else:
+                if self.memory is None:
+                    self.memory = MemoryClass(
+                        storage=InMemoryStorageClass(),
+                        full_session_memory=True,
+                        session_id="team_coordinator_session",
+                    )
+                self.leader_agent = AgentClass(model=self.model, memory=self.memory)
+            leader_system_prompt = setup_manager.create_leader_prompt()
+            self.leader_agent.system_prompt = leader_system_prompt
+            master_description = (
+                "Begin your mission. Review your system prompt for the full list of tasks and your team roster. "
+                "Formulate your plan and start delegating tasks now."
+            )
+            all_attachments = [a for t in tasks_list if t.attachments for a in t.attachments]
+            delegation_tool = delegation_manager.get_delegation_tool()
+            master_task = Task(
+                description=master_description,
+                attachments=all_attachments or None,
+                tools=[delegation_tool],
+                response_format=self.response_format,
+            )
+            leader_id: str = self.leader_agent.name or self.leader_agent.get_entity_id() if hasattr(self.leader_agent, "get_entity_id") else "Leader"
+            yield self._format_stream_header(leader_id, "Leader")
+            async for chunk in self.leader_agent.astream(master_task, events=False, debug=mode_debug):
+                if isinstance(chunk, str):
+                    yield chunk
+
+        elif self.mode == "route":
+            if self._router is None and not self.model:
+                raise ValueError(f"For '{self.mode}' mode either pass a `router` Agent or set `model` on the Team.")
+            setup_manager = CoordinatorSetup(self.entities, tasks_list, mode="route")
+            delegation_manager = DelegationManager(self.entities, {}, debug=self.debug)
+            if self._router is not None:
+                self.leader_agent = self._router
+            else:
+                self.leader_agent = AgentClass(model=self.model)
+            leader_system_prompt = setup_manager.create_leader_prompt()
+            self.leader_agent.system_prompt = leader_system_prompt
+            routing_tool = delegation_manager.get_routing_tool()
+            router_task = Task(
+                description="Analyze the MISSION OBJECTIVES in your system prompt and route the request to the best specialist.",
+                tools=[routing_tool],
+            )
+            await self.leader_agent.do_async(router_task)
+            chosen_entity = delegation_manager.routed_entity
+            if not chosen_entity:
+                raise ValueError("Routing failed: The router agent did not select a team member.")
+            consolidated_description = " ".join([t.description for t in tasks_list])
+            all_attachments = [a for t in tasks_list if t.attachments for a in t.attachments]
+            all_tools = [tool for t in tasks_list if t.tools for tool in t.tools]
+            final_task = Task(
+                description=consolidated_description,
+                attachments=all_attachments or None,
+                tools=list(set(all_tools)) if all_tools else None,
+                response_format=self.response_format,
+            )
+            chosen_id: str = chosen_entity.get_entity_id()
+            chosen_type: str = "Team" if isinstance(chosen_entity, Team) else "Agent"
+            yield self._format_stream_header(chosen_id, chosen_type)
+            async for chunk in self._entity_astream(chosen_entity, final_task, debug=mode_debug):
+                yield chunk
+
+    def stream(
+        self,
+        tasks: Optional[Union[List[Task], Task, str]] = None,
+        *,
+        debug: bool = False,
+    ) -> Iterator[str]:
+        """
+        Stream task execution synchronously. Yields text chunks only (no events).
+        For async streaming use astream() instead.
+
+        Args:
+            tasks: Task, list of Tasks, string description, or None (falls back to self.tasks).
+            debug: Enable debug mode.
+
+        Yields:
+            str: Text chunks as they arrive.
+        """
+        import asyncio
+        import queue
+        import threading
+        result_queue: queue.Queue = queue.Queue()
+        error_holder: List[Exception] = []
+
+        async def stream_to_queue() -> None:
+            try:
+                async for chunk in self.astream(tasks, debug=debug):
+                    result_queue.put(chunk)
+            except Exception as e:
+                error_holder.append(e)
+            finally:
+                result_queue.put(None)
+
+        def run_async_stream() -> None:
+            asyncio.run(stream_to_queue())
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        thread = threading.Thread(target=run_async_stream, daemon=True)
+        thread.start()
+        while True:
+            item = result_queue.get()
+            if item is None:
+                if error_holder:
+                    raise error_holder[0]
+                break
+            yield item
 
     def as_mcp(self, name: Optional[str] = None) -> "FastMCP":
         """

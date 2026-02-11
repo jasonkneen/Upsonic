@@ -1,0 +1,45 @@
+"""
+Smoke test for Team streaming in coordinate mode with mixed Agent and Team entities.
+Verifies stream() yields non-empty text and leader header appears.
+"""
+
+import pytest
+from upsonic import Agent, Task, Team
+
+pytestmark = pytest.mark.timeout(120)
+
+
+def test_coordinate_streaming_mixed_entities() -> None:
+    """Coordinate mode: stream leader output; header and content should be present."""
+    data_analyst = Agent(
+        model="openai/gpt-4o",
+        name="Data Analyst",
+        role="Data Analysis Expert",
+        goal="Analyze data and extract insights",
+    )
+    report_writer = Agent(
+        model="openai/gpt-4o",
+        name="Report Writer",
+        role="Business Report Specialist",
+        goal="Create professional business reports",
+    )
+    report_team = Team(
+        entities=[report_writer],
+        mode="sequential",
+        name="ReportTeam",
+    )
+    team = Team(
+        entities=[data_analyst, report_team],
+        mode="coordinate",
+        model="openai/gpt-4o",
+    )
+    tasks = [
+        Task(description="Analyze Q4 sales data and identify trends"),
+        Task(description="Create executive summary of findings"),
+    ]
+    chunks: list[str] = []
+    for chunk in team.stream(tasks):
+        chunks.append(chunk)
+    output = "".join(chunks)
+    assert output, "Stream output should be non-empty"
+    assert "--- [" in output, "Leader stream header (--- [...) should appear in output"

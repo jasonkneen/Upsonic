@@ -102,6 +102,27 @@ class SlackTools:
             error_log(f"Error sending message: {e}")
             return json.dumps({"error": str(e)})
 
+    def update_message(self, channel: str, ts: str, text: str) -> str:
+        """
+        Update an existing message in a Slack channel.
+
+        Args:
+            channel (str): The channel ID where the message was posted.
+            ts (str): The timestamp of the message to update.
+            text (str): The new text for the message.
+
+        Returns:
+            str: A JSON string containing the response from the Slack API.
+        """
+        try:
+            response = self.client.chat_update(
+                channel=channel, ts=ts, text=text, mrkdwn=self.markdown
+            )
+            return json.dumps(response.data)
+        except SlackApiError as e:
+            error_log(f"Error updating message: {e}")
+            return json.dumps({"error": str(e)})
+
     def list_channels(self) -> str:
         """
         List all channels in the Slack workspace.
