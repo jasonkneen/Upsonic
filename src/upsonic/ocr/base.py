@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional, Union
 from pathlib import Path
@@ -115,46 +116,72 @@ class OCRProvider(ABC):
     
     @abstractmethod
     def _process_image(self, image, **kwargs) -> OCRResult:
-        """Process a single image and extract text.
-        
+        """Process a single image and extract text (sync).
+
         Args:
             image: PIL Image object
             **kwargs: Additional provider-specific arguments
-            
+
         Returns:
             OCRResult object
         """
         raise NotImplementedError()
-    
-    def get_text(self, file_path: Union[str, Path], **kwargs) -> str:
-        """Extract text from an image or PDF file.
-        
-        This is the main public method for text extraction.
-        
+
+    async def _process_image_async(self, image, **kwargs) -> OCRResult:
+        """Process a single image and extract text (async).
+
+        Runs the sync _process_image in a thread pool to avoid blocking.
+
+        Args:
+            image: PIL Image object
+            **kwargs: Additional provider-specific arguments
+
+        Returns:
+            OCRResult object
+        """
+        return await asyncio.to_thread(self._process_image, image, **kwargs)
+
+    async def get_text_async(self, file_path: Union[str, Path], **kwargs) -> str:
+        """Extract text from an image or PDF file (async).
+
+        This is the main public async method for text extraction.
+
         Args:
             file_path: Path to the file
             **kwargs: Additional provider-specific arguments
-            
+
         Returns:
             Extracted text as a string
         """
-        result = self.process_file(file_path, **kwargs)
+        result = await self.process_file_async(file_path, **kwargs)
         return result.text
-    
-    def process_file(self, file_path: Union[str, Path], **kwargs) -> OCRResult:
-        """Process a file and return detailed OCR results.
-        
+
+    def get_text(self, file_path: Union[str, Path], **kwargs) -> str:
+        """Extract text from an image or PDF file (sync wrapper).
+
         Args:
             file_path: Path to the file
             **kwargs: Additional provider-specific arguments
-            
+
+        Returns:
+            Extracted text as a string
+        """
+        return asyncio.run(self.get_text_async(file_path, **kwargs))
+
+    async def process_file_async(self, file_path: Union[str, Path], **kwargs) -> OCRResult:
+        """Process a file and return detailed OCR results (async).
+
+        Args:
+            file_path: Path to the file
+            **kwargs: Additional provider-specific arguments
+
         Returns:
             OCRResult object with detailed information
         """
         from upsonic.ocr.utils import prepare_file_for_ocr
-        
+
         start_time = time.time()
-        
+
         # Merge kwargs with config
         processing_config = {
             'rotation_fix': kwargs.get('rotation_fix', self.config.rotation_fix),
@@ -162,32 +189,32 @@ class OCRProvider(ABC):
             'remove_noise': kwargs.get('remove_noise', self.config.remove_noise),
             'pdf_dpi': kwargs.get('pdf_dpi', self.config.pdf_dpi),
         }
-        
-        # Prepare images from file
-        images = prepare_file_for_ocr(file_path, **processing_config)
-        
+
+        # Prepare images from file (run in thread to avoid blocking)
+        images = await asyncio.to_thread(prepare_file_for_ocr, file_path, **processing_config)
+
         # Process each image
         all_blocks = []
         all_text_parts = []
         total_confidence = 0.0
-        
+
         for page_num, image in enumerate(images, start=1):
-            page_result = self._process_image(image, **kwargs)
-            
+            page_result = await self._process_image_async(image, **kwargs)
+
             # Adjust page numbers in blocks
             for block in page_result.blocks:
                 block.page_number = page_num
                 all_blocks.append(block)
-            
+
             all_text_parts.append(page_result.text)
             total_confidence += page_result.confidence
-        
+
         # Combine results
         combined_text = "\n\n".join(all_text_parts) if len(all_text_parts) > 1 else all_text_parts[0]
         avg_confidence = total_confidence / len(images) if images else 0.0
-        
+
         processing_time = (time.time() - start_time) * 1000
-        
+
         result = OCRResult(
             text=combined_text,
             blocks=all_blocks,
@@ -200,7 +227,7 @@ class OCRProvider(ABC):
                 'config': self.config.model_dump(),
             }
         )
-        
+
         # Update metrics
         self._metrics.total_pages += len(images)
         self._metrics.total_characters += len(combined_text)
@@ -208,8 +235,20 @@ class OCRProvider(ABC):
         self._metrics.files_processed += 1
         if all_blocks:
             self._metrics.average_confidence = sum(b.confidence for b in all_blocks) / len(all_blocks)
-        
+
         return result
+
+    def process_file(self, file_path: Union[str, Path], **kwargs) -> OCRResult:
+        """Process a file and return detailed OCR results (sync wrapper).
+
+        Args:
+            file_path: Path to the file
+            **kwargs: Additional provider-specific arguments
+
+        Returns:
+            OCRResult object with detailed information
+        """
+        return asyncio.run(self.process_file_async(file_path, **kwargs))
     
     def get_metrics(self) -> OCRMetrics:
         """Get current metrics for this OCR provider."""

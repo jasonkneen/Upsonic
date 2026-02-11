@@ -13,20 +13,20 @@ except ImportError:
     _PYTESSERACT_AVAILABLE = False
 
 
-class TesseractOCR(OCRProvider):
-    """Tesseract OCR provider for text extraction.
-    
+class TesseractOCREngine(OCRProvider):
+    """Tesseract OCR engine for text extraction.
+
     Tesseract is Google's open-source OCR engine with support for 100+ languages.
     It's one of the most accurate open-source OCR engines available.
-    
+
     Note: Requires Tesseract to be installed on the system.
     - Ubuntu/Debian: sudo apt-get install tesseract-ocr
     - macOS: brew install tesseract
     - Windows: Download installer from GitHub
-    
+
     Example:
-        >>> from upsonic.ocr.tesseract import TesseractOCR
-        >>> ocr = TesseractOCR(languages=['eng'], rotation_fix=True)
+        >>> from upsonic.ocr.layer_1.engines import TesseractOCREngine
+        >>> ocr = TesseractOCREngine(languages=['eng'], rotation_fix=True)
         >>> text = ocr.get_text('document.pdf')
     """
     

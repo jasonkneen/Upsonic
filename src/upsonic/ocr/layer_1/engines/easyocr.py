@@ -14,15 +14,15 @@ except ImportError:
     _EASYOCR_AVAILABLE = False
 
 
-class EasyOCR(OCRProvider):
-    """EasyOCR provider for text extraction.
-    
+class EasyOCREngine(OCRProvider):
+    """EasyOCR engine for text extraction.
+
     EasyOCR is a ready-to-use OCR with 80+ supported languages.
     It uses deep learning models for high-accuracy text detection and recognition.
-    
+
     Example:
-        >>> from upsonic.ocr.easyocr import EasyOCR
-        >>> ocr = EasyOCR(languages=['en'], rotation_fix=True)
+        >>> from upsonic.ocr.layer_1.engines import EasyOCREngine
+        >>> ocr = EasyOCREngine(languages=['en'], rotation_fix=True)
         >>> text = ocr.get_text('document.pdf')
     """
     

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import List, Optional
 from pathlib import Path
 import tempfile
@@ -17,20 +18,20 @@ except ImportError:
     _OLLAMA_AVAILABLE = False
 
 
-class DeepSeekOllamaOCR(OCRProvider):
-    """DeepSeek OCR provider using Ollama with deepseek-ocr model.
-    
-    This provider uses DeepSeek's OCR model running locally via Ollama.
+class DeepSeekOllamaOCREngine(OCRProvider):
+    """DeepSeek OCR engine using Ollama with deepseek-ocr model.
+
+    This engine uses DeepSeek's OCR model running locally via Ollama.
     It provides high-quality OCR with support for complex layouts.
-    
+
     **Requirements:**
     - Ollama installed and running locally
     - DeepSeek OCR model: `ollama pull deepseek-ocr:3b`
     - Python ollama package: `pip install ollama`
-    
+
     Example:
-        >>> from upsonic.ocr.deepseek_ollama import DeepSeekOllamaOCR
-        >>> ocr = DeepSeekOllamaOCR(rotation_fix=True)
+        >>> from upsonic.ocr.layer_1.engines import DeepSeekOllamaOCREngine
+        >>> ocr = DeepSeekOllamaOCREngine(rotation_fix=True)
         >>> text = ocr.get_text('document.png')
     """
     
@@ -260,36 +261,35 @@ class DeepSeekOllamaOCR(OCRProvider):
                 original_error=e
             )
     
-    def process_file(self, file_path, **kwargs):
-        """Process a file and preserve timeout metadata.
-        
+    async def process_file_async(self, file_path, **kwargs):
+        """Process a file and preserve timeout metadata (async).
+
         Override base class to preserve streaming and timeout metadata.
-        
+
         Args:
             file_path: Path to the file
             **kwargs: Additional arguments (including timeout)
-            
+
         Returns:
             OCRResult object with timeout metadata
         """
         from upsonic.ocr.utils import prepare_file_for_ocr
-        import time
-        
+
         start_time = time.time()
-        
+
         processing_config = {
             'rotation_fix': kwargs.get('rotation_fix', self.config.rotation_fix),
             'enhance_contrast': kwargs.get('enhance_contrast', self.config.enhance_contrast),
             'remove_noise': kwargs.get('remove_noise', self.config.remove_noise),
             'pdf_dpi': kwargs.get('pdf_dpi', self.config.pdf_dpi),
         }
-        
-        images = prepare_file_for_ocr(file_path, **processing_config)
-        
+
+        images = await asyncio.to_thread(prepare_file_for_ocr, file_path, **processing_config)
+
         # Process first image (single page for now)
         if images:
-            result = self._process_image(images[0], **kwargs)
-            
+            result = await self._process_image_async(images[0], **kwargs)
+
             # Update metrics
             self._metrics.total_pages += 1
             self._metrics.total_characters += len(result.text)
@@ -297,13 +297,13 @@ class DeepSeekOllamaOCR(OCRProvider):
             self._metrics.files_processed += 1
             if result.blocks:
                 self._metrics.average_confidence = sum(b.confidence for b in result.blocks) / len(result.blocks)
-            
+
             # Add file_path to metadata
             result.metadata['file_path'] = str(file_path)
             result.metadata['config'] = self.config.model_dump()
-            
+
             return result
-        
+
         # Empty result if no images
         return OCRResult(
             text="",
@@ -313,4 +313,8 @@ class DeepSeekOllamaOCR(OCRProvider):
             provider=self.name,
             metadata={'file_path': str(file_path), 'error': 'No images found'}
         )
+
+    def process_file(self, file_path, **kwargs):
+        """Process a file and preserve timeout metadata (sync wrapper)."""
+        return asyncio.run(self.process_file_async(file_path, **kwargs))
 

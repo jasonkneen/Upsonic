@@ -42,3 +42,9 @@ class OCRProcessingError(OCRError):
 
     pass
 
+
+class OCRTimeoutError(OCRError):
+    """Exception raised when OCR processing exceeds the timeout."""
+
+    pass
+

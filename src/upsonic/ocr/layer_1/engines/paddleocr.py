@@ -11,14 +11,15 @@ All providers are fully compatible with the Upsonic AI agent framework.
 
 from __future__ import annotations
 
+import asyncio
 from typing import List, Dict, Any, Optional, Union
 from pathlib import Path
 import time
 
 from upsonic.ocr.base import (
-    OCRProvider, 
-    OCRConfig, 
-    OCRResult, 
+    OCRProvider,
+    OCRConfig,
+    OCRResult,
     OCRTextBlock,
     BoundingBox
 )
@@ -71,7 +72,7 @@ class PaddleOCRConfig(OCRConfig):
     ocr_version: Optional[str] = None
 
 
-class BasePaddleOCRProvider(OCRProvider):
+class BasePaddleOCREngine(OCRProvider):
     """Base class for all PaddleOCR providers with shared functionality.
     
     This abstract base class provides common functionality for all PaddleOCR
@@ -371,7 +372,7 @@ class BasePaddleOCRProvider(OCRProvider):
         return v5_langs
 
 
-class PaddleOCRProvider(BasePaddleOCRProvider):
+class PaddleOCREngine(BasePaddleOCREngine):
     """General OCR Pipeline using PaddleOCR (PP-OCRv3/v4/v5).
     
     This provider wraps the general PaddleOCR pipeline which supports:
@@ -381,95 +382,87 @@ class PaddleOCRProvider(BasePaddleOCRProvider):
     
     Example:
         >>> from upsonic import OCR
-        >>> from upsonic.ocr.paddleocr import PaddleOCRProvider
+        >>> from upsonic.ocr.layer_1.engines.paddleocr import PaddleOCREngine
         >>> 
-        >>> ocr = OCR(PaddleOCRProvider, lang='en', ocr_version='PP-OCRv5')
+        >>> ocr = OCR(PaddleOCREngine, lang='en', ocr_version='PP-OCRv5')
         >>> text = ocr.get_text('document.pdf')
         >>> print(text)
     """
     
-    def process_file(self, file_path: Union[str, Path], **kwargs) -> OCRResult:
-        """Process a file directly using PaddleOCR.
-        
+    async def process_file_async(self, file_path: Union[str, Path], **kwargs) -> OCRResult:
+        """Process a file directly using PaddleOCR (async).
+
         Override the base class method to work directly with file paths.
-        PaddleOCR can handle PDFs directly, but we optimize for better reliability.
-        
+
         Args:
             file_path: Path to the file
             **kwargs: Additional provider-specific arguments
-            
+
+        Returns:
+            OCRResult object with detailed information
+        """
+        return await asyncio.to_thread(self._process_file_sync, file_path, **kwargs)
+
+    def _process_file_sync(self, file_path: Union[str, Path], **kwargs) -> OCRResult:
+        """Process a file directly using PaddleOCR (sync implementation).
+
+        Args:
+            file_path: Path to the file
+            **kwargs: Additional provider-specific arguments
+
         Returns:
             OCRResult object with detailed information
         """
         from upsonic.ocr.utils import validate_file_path, is_pdf, pdf_to_images
         import tempfile
         import os
-        
+
         start_time = time.time()
-        
+
         # Validate file exists
         path = validate_file_path(file_path)
-        
+
         try:
             # Check if it's a PDF
             if is_pdf(path):
-                # Use lower DPI for faster processing while maintaining accuracy
-                # PaddleOCR works well with 200 DPI, which is much faster than 300
                 dpi = min(self.config.pdf_dpi, 200)
-                
-                print(f"📄 Converting PDF to images (DPI={dpi})...")
+
                 images = pdf_to_images(path, dpi=dpi)
-                print(f"  ✓ Converted to {len(images)} page(s)")
-                
+
                 # Process each page as an image
                 all_results = []
-                print(f"🔍 Processing pages with PaddleOCR...")
-                
+
                 for page_num, image in enumerate(images, 1):
-                    print(f"  • Page {page_num}/{len(images)}...", end=' ', flush=True)
-                    
                     # Save image to temp file
                     with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
-                        # Use JPEG for faster I/O and smaller temp files
                         image.save(tmp.name, format='PNG')
                         tmp_path = tmp.name
-                    
+
                     try:
-                        # Process with PaddleOCR
                         paddle_result = self._paddle_instance.predict(tmp_path, **kwargs)
                         all_results.extend(paddle_result)
-                        print("✓")
                     finally:
-                        # Clean up temp file immediately
                         try:
                             os.unlink(tmp_path)
                         except:
                             pass
-                
-                # Extract text and metadata from all results
+
                 text, blocks, confidence = self._extract_paddle_predict_result(all_results)
-                
-                # Update page numbers for blocks
+
                 if blocks and len(images) > 1:
                     blocks_per_page = len(blocks) // len(images)
                     for i, block in enumerate(blocks):
                         block.page_number = (i // blocks_per_page) + 1 if blocks_per_page > 0 else (i % len(images)) + 1
-                
+
                 page_count = len(images)
-                
+
             else:
-                # For images, process directly without temp files
-                print(f"🖼️  Processing image with PaddleOCR...")
                 paddle_result = self._paddle_instance.predict(str(path), **kwargs)
-                
-                # Extract text and metadata from result
                 text, blocks, confidence = self._extract_paddle_predict_result(paddle_result)
-                
                 page_count = len(paddle_result) if paddle_result else 1
-                print(f"  ✓ Complete!")
-            
+
             processing_time = (time.time() - start_time) * 1000
-            
+
             result = OCRResult(
                 text=text,
                 blocks=blocks,
@@ -482,7 +475,7 @@ class PaddleOCRProvider(BasePaddleOCRProvider):
                     'config': self.config.model_dump()
                 }
             )
-            
+
             # Update metrics
             self._metrics.total_pages += page_count
             self._metrics.total_characters += len(text)
@@ -490,15 +483,19 @@ class PaddleOCRProvider(BasePaddleOCRProvider):
             self._metrics.files_processed += 1
             if blocks:
                 self._metrics.average_confidence = sum(b.confidence for b in blocks) / len(blocks)
-            
+
             return result
-            
+
         except Exception as e:
             raise OCRProcessingError(
                 f"PaddleOCR processing failed: {str(e)}",
                 error_code="PADDLE_PROCESSING_FAILED",
                 original_error=e
             )
+
+    def process_file(self, file_path: Union[str, Path], **kwargs) -> OCRResult:
+        """Process a file directly using PaddleOCR (sync wrapper)."""
+        return asyncio.run(self.process_file_async(file_path, **kwargs))
     
     def __init__(
         self,
@@ -614,7 +611,7 @@ class PaddleOCRProvider(BasePaddleOCRProvider):
         return self._paddle_instance.predict(str(input), **kwargs)
 
 
-class PPStructureV3Provider(BasePaddleOCRProvider):
+class PPStructureV3Engine(BasePaddleOCREngine):
     """PP-StructureV3 Pipeline for advanced document structure recognition.
     
     This provider includes comprehensive document analysis capabilities:
@@ -627,9 +624,9 @@ class PPStructureV3Provider(BasePaddleOCRProvider):
     
     Example:
         >>> from upsonic import OCR
-        >>> from upsonic.ocr.paddleocr import PPStructureV3Provider
+        >>> from upsonic.ocr.layer_1.engines.paddleocr import PPStructureV3Engine
         >>> 
-        >>> ocr = OCR(PPStructureV3Provider, 
+        >>> ocr = OCR(PPStructureV3Engine, 
         ...           use_table_recognition=True,
         ...           use_formula_recognition=True,
         ...           lang='en')
@@ -825,7 +822,7 @@ class PPStructureV3Provider(BasePaddleOCRProvider):
         return self._paddle_instance.concatenate_markdown_pages(markdown_list)
 
 
-class PPChatOCRv4Provider(BasePaddleOCRProvider):
+class PPChatOCRv4Engine(BasePaddleOCREngine):
     """PP-ChatOCRv4 Pipeline for document understanding with chat capabilities.
     
     This provider combines OCR with multimodal language models for:
@@ -837,9 +834,9 @@ class PPChatOCRv4Provider(BasePaddleOCRProvider):
     
     Example:
         >>> from upsonic import OCR
-        >>> from upsonic.ocr.paddleocr import PPChatOCRv4Provider
+        >>> from upsonic.ocr.layer_1.engines.paddleocr import PPChatOCRv4Engine
         >>> 
-        >>> ocr = OCR(PPChatOCRv4Provider,
+        >>> ocr = OCR(PPChatOCRv4Engine,
         ...           use_table_recognition=True,
         ...           use_seal_recognition=True,
         ...           mllm_chat_bot_config={'api_key': 'your-key'})
@@ -1280,7 +1277,7 @@ class PPChatOCRv4Provider(BasePaddleOCRProvider):
         return self._paddle_instance.load_visual_info_list(data_path=str(data_path))
 
 
-class PaddleOCRVLProvider(BasePaddleOCRProvider):
+class PaddleOCRVLEngine(BasePaddleOCREngine):
     """PaddleOCR-VL Pipeline for Vision-Language document understanding.
     
     This provider leverages vision-language models for:
@@ -1292,9 +1289,9 @@ class PaddleOCRVLProvider(BasePaddleOCRProvider):
     
     Example:
         >>> from upsonic import OCR
-        >>> from upsonic.ocr.paddleocr import PaddleOCRVLProvider
+        >>> from upsonic.ocr.layer_1.engines.paddleocr import PaddleOCRVLEngine
         >>> 
-        >>> ocr = OCR(PaddleOCRVLProvider,
+        >>> ocr = OCR(PaddleOCRVLEngine,
         ...           use_layout_detection=True,
         ...           use_chart_recognition=True,
         ...           format_block_content=True,
@@ -1460,7 +1457,7 @@ class PaddleOCRVLProvider(BasePaddleOCRProvider):
         return self._paddle_instance.concatenate_markdown_pages(markdown_list)
 
 
-PaddleOCR = PaddleOCRProvider
-PPStructureV3 = PPStructureV3Provider
-PPChatOCRv4 = PPChatOCRv4Provider
-PaddleOCRVL = PaddleOCRVLProvider
+PaddleOCR = PaddleOCREngine
+PPStructureV3 = PPStructureV3Engine
+PPChatOCRv4 = PPChatOCRv4Engine
+PaddleOCRVL = PaddleOCRVLEngine
