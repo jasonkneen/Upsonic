@@ -194,15 +194,6 @@ def _get_policy_classes():
         CybersecurityRaiseExceptionPolicy,
         CybersecurityRaiseExceptionPolicy_LLM,
         
-        # Data Privacy Policies
-        DataPrivacyBlockPolicy,
-        DataPrivacyBlockPolicy_LLM,
-        DataPrivacyBlockPolicy_LLM_Finder,
-        DataPrivacyAnonymizePolicy,
-        DataPrivacyReplacePolicy,
-        DataPrivacyRaiseExceptionPolicy,
-        DataPrivacyRaiseExceptionPolicy_LLM,
-        
         # Fraud Detection Policies
         FraudDetectionBlockPolicy,
         FraudDetectionBlockPolicy_LLM,
@@ -369,15 +360,6 @@ def _get_policy_classes():
         'CybersecurityReplacePolicy': CybersecurityReplacePolicy,
         'CybersecurityRaiseExceptionPolicy': CybersecurityRaiseExceptionPolicy,
         'CybersecurityRaiseExceptionPolicy_LLM': CybersecurityRaiseExceptionPolicy_LLM,
-        
-        # Data Privacy Policies
-        'DataPrivacyBlockPolicy': DataPrivacyBlockPolicy,
-        'DataPrivacyBlockPolicy_LLM': DataPrivacyBlockPolicy_LLM,
-        'DataPrivacyBlockPolicy_LLM_Finder': DataPrivacyBlockPolicy_LLM_Finder,
-        'DataPrivacyAnonymizePolicy': DataPrivacyAnonymizePolicy,
-        'DataPrivacyReplacePolicy': DataPrivacyReplacePolicy,
-        'DataPrivacyRaiseExceptionPolicy': DataPrivacyRaiseExceptionPolicy,
-        'DataPrivacyRaiseExceptionPolicy_LLM': DataPrivacyRaiseExceptionPolicy_LLM,
         
         # Fraud Detection Policies
         'FraudDetectionBlockPolicy': FraudDetectionBlockPolicy,
@@ -595,15 +577,6 @@ __all__ = [
     "CybersecurityReplacePolicy",
     "CybersecurityRaiseExceptionPolicy",
     "CybersecurityRaiseExceptionPolicy_LLM",
-    
-    # Data Privacy Policies
-    "DataPrivacyBlockPolicy",
-    "DataPrivacyBlockPolicy_LLM",
-    "DataPrivacyBlockPolicy_LLM_Finder",
-    "DataPrivacyAnonymizePolicy",
-    "DataPrivacyReplacePolicy",
-    "DataPrivacyRaiseExceptionPolicy",
-    "DataPrivacyRaiseExceptionPolicy_LLM",
     
     # Fraud Detection Policies
     "FraudDetectionBlockPolicy",

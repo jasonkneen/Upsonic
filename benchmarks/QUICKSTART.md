@@ -1,8 +1,8 @@
 # Benchmark Quick Start Guide
 
-En hızlı şekilde benchmark'ları çalıştırmak için bu rehberi takip edin.
+Follow this guide to run benchmarks as quickly as possible.
 
-## ⚡ Hızlı Başlangıç (3 Adım)
+## ⚡ Quick Start (3 Steps)
 
 ### 1. Setup
 ```bash
@@ -10,63 +10,63 @@ cd benchmarks
 make setup
 ```
 
-Bu komut:
-- ✅ Virtual environment oluşturur
-- ✅ Tüm bağımlılıkları yükler
-- ✅ Upsonic'i editable mode'da yükler
+This command will:
+- ✅ Create virtual environment
+- ✅ Install all dependencies
+- ✅ Install Upsonic in editable mode
 
 ### 2. API Key
-Ana dizinde `.env` dosyası oluşturun:
+Create a `.env` file in the root directory:
 ```bash
 cd ..
 echo "OPENAI_API_KEY=sk-your-key-here" > .env
 cd benchmarks
 ```
 
-### 3. Çalıştır
+### 3. Run
 ```bash
 make run
 ```
 
-Hepsi bu kadar! 🎉
+That's it! 🎉
 
 ---
 
-## 📚 Diğer Komutlar
+## 📚 Other Commands
 
-### Test Case'leri Göster
+### Show Test Cases
 ```bash
 make list
 ```
 
-### Tüm Testleri Çalıştır
+### Run All Tests
 ```bash
-make run-all  # Dikkat: 5+ dakika sürebilir
+make run-all  # Warning: May take 5+ minutes
 ```
 
-### Belirli Bir Test
+### Run Specific Test
 ```bash
 make run-math           # Math problem
 make run-structured     # Structured output
 make run-analysis       # Text analysis
 ```
 
-### Özel İterasyon Sayısı
+### Custom Iteration Count
 ```bash
-make run-iterations N=10  # 10 iterasyon
+make run-iterations N=10  # 10 iterations
 ```
 
-### Sonuçları Göster
+### Show Results
 ```bash
 make results
 ```
 
-### Environment Kontrolü
+### Environment Check
 ```bash
 make test-env
 ```
 
-Çıktı:
+Output:
 ```
 ✓ Virtual environment exists
 ✓ .env file exists
@@ -75,7 +75,7 @@ make test-env
 
 ---
 
-## 🔧 Sorun Giderme
+## 🔧 Troubleshooting
 
 ### "Virtual environment not found"
 ```bash
@@ -85,16 +85,16 @@ make setup
 ### ".env file not found"
 ```bash
 cd ..
-nano .env  # OPENAI_API_KEY ekle
+nano .env  # Add OPENAI_API_KEY
 cd benchmarks
 ```
 
-### Bağımlılık Hatası
+### Dependency Error
 ```bash
 make install
 ```
 
-### Her Şeyi Sıfırla
+### Reset Everything
 ```bash
 make clean-all
 make setup
@@ -102,70 +102,70 @@ make setup
 
 ---
 
-## 📊 Örnek Workflow
+## 📊 Example Workflow
 
 ```bash
-# İlk kurulum
+# Initial setup
 cd benchmarks
 make setup
 cd .. && echo "OPENAI_API_KEY=sk-xxx" > .env && cd benchmarks
 
-# Hızlı test
-make list       # Test case'leri gör
-make run        # Basit test çalıştır
+# Quick test
+make list       # View test cases
+make run        # Run simple test
 
-# Detaylı analiz
-make run-all    # Tüm testleri çalıştır
+# Detailed analysis
+make run-all    # Run all tests
 
-# Sonuçları görüntüle
-make results    # JSON dosyaları listele
-cat overhead_analysis/results/*.json | jq .  # JSON içeriği gör
+# View results
+make results    # List JSON files
+cat overhead_analysis/results/*.json | jq .  # View JSON content
 
-# Temizlik
-make clean      # Cache temizle
+# Cleanup
+make clean      # Clear cache
 ```
 
 ---
 
-## 🎯 Sonuçları Anlama
+## 🎯 Understanding Results
 
-Benchmark sonuçları şunları gösterir:
+Benchmark results show:
 
 **Detailed Comparison Table:**
 - Speed Metrics: Mean, Median, Stdev, Min, Max (ms)
 - Memory: Object size (bytes)
-- Cost: Per iteration ve total cost
-- Token Usage: Mean ve total token sayıları
+- Cost: Per iteration and total cost
+- Token Usage: Mean and total token counts
 
 **Three-Way Comparison:**
 - Direct: Minimum overhead
-- Agent (no prompt): System prompt olmadan
-- Agent (with prompt): Default system prompt ile
+- Agent (no prompt): Without system prompt
+- Agent (with prompt): With default system prompt
 
 **Sample Outputs:**
-- Her approach'un gerçek cevapları
-- Kalite farklarını görebilirsiniz
+- Actual responses from each approach
+- You can see quality differences
 
 ---
 
-## 💡 İpuçları
+## 💡 Tips
 
-1. **İlk çalıştırma daha yavaş**: Model yükleme, cache oluşturma
-2. **API maliyeti**: Her test ~$0.00001-0.0001 arası
-3. **İterasyon sayısı**: Daha fazla iterasyon = daha güvenilir sonuçlar
-4. **Network bağlantısı gerekli**: LLM API çağrıları için
+1. **First run is slower**: Model loading, cache creation
+2. **API cost**: Each test ~$0.00001-0.0001
+3. **Iteration count**: More iterations = more reliable results
+4. **Network connection required**: For LLM API calls
 
 ---
 
-## 🆘 Yardım
+## 🆘 Help
 
-Tüm komutları görmek için:
+To see all commands:
 ```bash
 make help
 ```
 
-Detaylı dokümantasyon için:
-- `README.md` - Ana README
-- `SETUP.md` - Detaylı kurulum
-- `overhead_analysis/README.md` - Proje specific
+For detailed documentation:
+- `README.md` - Main README
+- `SETUP.md` - Detailed setup
+- `overhead_analysis/README.md` - Project specific
 
