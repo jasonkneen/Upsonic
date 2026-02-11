@@ -13,6 +13,7 @@ classifiers = [
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
 ]
 
 requires-python = ">=3.10"
@@ -49,7 +50,8 @@ qdrant = [
     "qdrant-client>=1.12.1",
 ]
 milvus = [
-    "pymilvus[milvus-lite]>=2.6.1",
+    "pymilvus>=2.6.1",
+    "milvus-lite>=2.4.0; sys_platform != 'win32'",
 ]
 weaviate = [
     "weaviate-client>=4.16.9",
@@ -72,7 +74,8 @@ vectordb = [
     "faiss-cpu>=1.12.0",
     "pinecone>=7.3.0",
     "psycopg>=3.2.9",
-    "pymilvus[milvus-lite]>=2.6.1",
+    "pymilvus>=2.6.1",
+    "milvus-lite>=2.4.0; sys_platform != 'win32'",
     "qdrant-client>=1.12.1",
     "weaviate-client>=4.16.9",
     "scipy>=1.13.0",
@@ -137,12 +140,12 @@ embeddings = [
     "azure-identity>=1.25.0",
     "boto3>=1.40.45",
     "botocore>=1.40.45",
-    "fastembed>=0.7.3; python_version < '3.14'",
+    "fastembed>=0.7.3; python_version >= '3.11' and python_version < '3.14'",
     "google-auth>=2.40.3",
     "google-genai>=1.41.0",
     "huggingface-hub>=0.34.4",
     "numpy>=2.2.6",
-    "onnxruntime>=1.22.1; python_version < '3.14'",
+    "onnxruntime>=1.22.1; python_version >= '3.11' and python_version < '3.14'",
     "openai>=2.1.0",
     "requests>=2.32.5",
     "torch>=2.8.0",
