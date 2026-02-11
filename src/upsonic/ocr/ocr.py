@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import time
 from typing import Union, Optional, Dict, Any, List
 from pathlib import Path
@@ -81,6 +82,30 @@ class OCR:
         """
         return asyncio.run(self.get_text_async(file_path, **kwargs))
 
+    async def _run_with_timeout(self, image, page_num: int, **kwargs) -> OCRResult:
+        """Run Layer 1 OCR on a single page with a hard thread-level timeout.
+
+        Uses a dedicated thread so that on timeout the main flow
+        raises immediately.  The orphaned worker thread will eventually
+        finish on its own but its result is discarded.
+        """
+        loop = asyncio.get_running_loop()
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        try:
+            future = loop.run_in_executor(
+                executor,
+                self.layer_1_ocr_engine._process_image,
+                image,
+            )
+            return await asyncio.wait_for(future, timeout=self.layer_1_timeout)
+        except asyncio.TimeoutError:
+            raise OCRTimeoutError(
+                f"Layer 1 OCR timed out after {self.layer_1_timeout}s on page {page_num}",
+                error_code="LAYER1_TIMEOUT",
+            )
+        finally:
+            executor.shutdown(wait=False)
+
     async def process_file_async(self, file_path: Union[str, Path], **kwargs) -> OCRResult:
         """Process a file and return detailed OCR results (async).
 
@@ -111,18 +136,10 @@ class OCR:
         total_confidence = 0.0
 
         for page_num, image in enumerate(images, start=1):
-            coro = self.layer_1_ocr_engine._process_image_async(image, **kwargs)
-
             if self.layer_1_timeout is not None:
-                try:
-                    page_result = await asyncio.wait_for(coro, timeout=self.layer_1_timeout)
-                except asyncio.TimeoutError:
-                    raise OCRTimeoutError(
-                        f"Layer 1 OCR timed out after {self.layer_1_timeout}s on page {page_num}",
-                        error_code="LAYER1_TIMEOUT",
-                    )
+                page_result = await self._run_with_timeout(image, page_num, **kwargs)
             else:
-                page_result = await coro
+                page_result = await self.layer_1_ocr_engine._process_image_async(image, **kwargs)
 
             for block in page_result.blocks:
                 block.page_number = page_num

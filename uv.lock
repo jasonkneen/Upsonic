@@ -4387,18 +4387,6 @@ wheels = [
 ]
 
 [[package]]
-name = "pdf2image"
-version = "1.17.0"
-source = { registry = "https://pypi.org/simple/" }
-dependencies = [
-    { name = "pillow" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/00/d8/b280f01045555dc257b8153c00dee3bc75830f91a744cd5f84ef3a0a64b1/pdf2image-1.17.0.tar.gz", hash = "sha256:eaa959bc116b420dd7ec415fcae49b98100dda3dd18cd2fdfa86d09f112f6d57", size = 12811, upload-time = "2024-01-07T20:33:01.965Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/62/33/61766ae033518957f877ab246f87ca30a85b778ebaad65b7f74fa7e52988/pdf2image-1.17.0-py3-none-any.whl", hash = "sha256:ecdd58d7afb810dffe21ef2b1bbc057ef434dabbac6c33778a38a3f7744a27e2", size = 11618, upload-time = "2024-01-07T20:32:59.957Z" },
-]
-
-[[package]]
 name = "pdfminer-six"
 version = "20251230"
 source = { registry = "https://pypi.org/simple/" }
@@ -8166,8 +8154,8 @@ mongo-storage = [
 ocr = [
     { name = "easyocr" },
     { name = "paddleocr" },
-    { name = "pdf2image" },
     { name = "pillow" },
+    { name = "pymupdf" },
     { name = "pytesseract" },
     { name = "rapidocr-onnxruntime", marker = "python_full_version < '3.13'" },
 ]
@@ -8363,7 +8351,6 @@ requires-dist = [
     { name = "outlines", marker = "extra == 'models'", specifier = ">=1.2.9" },
     { name = "paddleocr", marker = "extra == 'ocr'", specifier = ">=2.10.0" },
     { name = "pandas", marker = "extra == 'tools'", specifier = ">=2.3.2" },
-    { name = "pdf2image", marker = "extra == 'ocr'", specifier = ">=1.17.0" },
     { name = "pdfplumber", marker = "extra == 'loaders'", specifier = ">=0.11.7" },
     { name = "pdfplumber", marker = "extra == 'pdfplumber-loader'", specifier = ">=0.11.7" },
     { name = "pgvector", marker = "extra == 'pgvector'", specifier = ">=0.4.1" },
@@ -8386,6 +8373,7 @@ requires-dist = [
     { name = "pymilvus", extras = ["milvus-lite"], marker = "extra == 'vectordb'", specifier = ">=2.6.1" },
     { name = "pymongo", marker = "extra == 'mongo-storage'", specifier = ">=4.9.0" },
     { name = "pymupdf", marker = "extra == 'loaders'", specifier = ">=1.26.4" },
+    { name = "pymupdf", marker = "extra == 'ocr'", specifier = ">=1.26.4" },
     { name = "pymupdf", marker = "extra == 'pymupdf-loader'", specifier = ">=1.26.4" },
     { name = "pypdf", marker = "extra == 'loaders'", specifier = ">=6.1.1" },
     { name = "pypdf", marker = "extra == 'pdf-loader'", specifier = ">=6.1.1" },
