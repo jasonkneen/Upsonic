@@ -156,6 +156,7 @@ class TelegramTools:
         method: str,
         data: Optional[Dict[str, Any]] = None,
         files: Optional[Dict[str, Any]] = None,
+        raise_on_client_error: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """
         Make a request to the Telegram Bot API.
@@ -164,6 +165,8 @@ class TelegramTools:
             method: API method name (e.g., "sendMessage")
             data: Request data
             files: Files to upload
+            raise_on_client_error: If True, re-raise HTTP 4xx errors so callers
+                can implement retry/fallback logic.
             
         Returns:
             API response data or None on error
@@ -191,6 +194,8 @@ class TelegramTools:
             return result.get("result")
             
         except httpx.HTTPStatusError as e:
+            if raise_on_client_error and e.response.status_code >= 400 and e.response.status_code < 500:
+                raise
             error_log(f"Telegram API HTTP error: {e}")
             return None
         except Exception as e:
@@ -212,7 +217,7 @@ class TelegramTools:
     
 
     
-    async def send_message(
+    def _build_send_message_data(
         self,
         chat_id: Union[int, str],
         text: str,
@@ -223,43 +228,29 @@ class TelegramTools:
         reply_to_message_id: Optional[int] = None,
         reply_markup: Optional[Dict[str, Any]] = None,
         message_thread_id: Optional[int] = None,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Dict[str, Any]:
         """
-        Send a text message to a chat.
+        Build the data dict for a sendMessage API call.
         
         Args:
-            chat_id: Unique identifier for the target chat or username.
-            text: Text of the message to send.
-            parse_mode: Mode for parsing entities ("HTML", "Markdown", "MarkdownV2").
-            disable_web_page_preview: Disables link previews.
-            disable_notification: Sends message silently.
-            protect_content: Protects message from forwarding/saving.
-            reply_to_message_id: ID of the original message to reply to.
-            reply_markup: Inline keyboard, reply keyboard, or other markup.
-            message_thread_id: Unique identifier for the message thread (forum topics).
+            chat_id: Target chat identifier.
+            text: Message text.
+            parse_mode: Parse mode override.
+            disable_web_page_preview: Disable link previews override.
+            disable_notification: Silent send override.
+            protect_content: Forward/save protection override.
+            reply_to_message_id: Message ID to reply to.
+            reply_markup: Keyboard markup.
+            message_thread_id: Thread ID for forum topics.
             
         Returns:
-            The sent Message on success, None on failure.
+            Data dictionary ready for the API request.
         """
-        # Handle long messages by splitting
-        if len(text) > self.max_message_length:
-            return await self._send_long_message(
-                chat_id=chat_id,
-                text=text,
-                parse_mode=parse_mode,
-                disable_web_page_preview=disable_web_page_preview,
-                disable_notification=disable_notification,
-                protect_content=protect_content,
-                reply_to_message_id=reply_to_message_id,
-                message_thread_id=message_thread_id,
-            )
-        
         data: Dict[str, Any] = {
             "chat_id": chat_id,
             "text": text,
         }
         
-        # Apply defaults or overrides
         if parse_mode is not None:
             data["parse_mode"] = parse_mode
         elif self.parse_mode:
@@ -289,6 +280,123 @@ class TelegramTools:
         if reply_markup:
             data["reply_markup"] = reply_markup
         
+        return data
+
+    @staticmethod
+    def _sanitize_text_for_telegram(text: str) -> str:
+        """
+        Sanitize text to be safe for Telegram's sendMessage API.
+        
+        Strips HTML entities and control characters that may cause
+        400 Bad Request errors.
+        
+        Args:
+            text: Raw text that may contain problematic characters.
+            
+        Returns:
+            Sanitized plain text safe for Telegram.
+        """
+        import html
+        import re
+        sanitized: str = html.unescape(text)
+        sanitized = re.sub(r"<[^>]+>", "", sanitized)
+        sanitized = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", sanitized)
+        sanitized = sanitized.strip()
+        return sanitized if sanitized else "(empty response)"
+
+    async def send_message(
+        self,
+        chat_id: Union[int, str],
+        text: str,
+        parse_mode: Optional[str] = None,
+        disable_web_page_preview: Optional[bool] = None,
+        disable_notification: Optional[bool] = None,
+        protect_content: Optional[bool] = None,
+        reply_to_message_id: Optional[int] = None,
+        reply_markup: Optional[Dict[str, Any]] = None,
+        message_thread_id: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Send a text message to a chat with automatic retry on failure.
+        
+        On a 400 Bad Request (commonly caused by parse_mode issues or special
+        characters), the method retries up to two times:
+        1. First retry: strips parse_mode (sends as plain text).
+        2. Second retry: sanitizes the text (removes HTML tags, control chars).
+        
+        Args:
+            chat_id: Unique identifier for the target chat or username.
+            text: Text of the message to send.
+            parse_mode: Mode for parsing entities ("HTML", "Markdown", "MarkdownV2").
+            disable_web_page_preview: Disables link previews.
+            disable_notification: Sends message silently.
+            protect_content: Protects message from forwarding/saving.
+            reply_to_message_id: ID of the original message to reply to.
+            reply_markup: Inline keyboard, reply keyboard, or other markup.
+            message_thread_id: Unique identifier for the message thread (forum topics).
+            
+        Returns:
+            The sent Message on success, None on failure.
+        """
+        if not text or not text.strip():
+            error_log("send_message called with empty text, skipping")
+            return None
+
+        # Handle long messages by splitting
+        if len(text) > self.max_message_length:
+            return await self._send_long_message(
+                chat_id=chat_id,
+                text=text,
+                parse_mode=parse_mode,
+                disable_web_page_preview=disable_web_page_preview,
+                disable_notification=disable_notification,
+                protect_content=protect_content,
+                reply_to_message_id=reply_to_message_id,
+                message_thread_id=message_thread_id,
+            )
+        
+        data: Dict[str, Any] = self._build_send_message_data(
+            chat_id=chat_id,
+            text=text,
+            parse_mode=parse_mode,
+            disable_web_page_preview=disable_web_page_preview,
+            disable_notification=disable_notification,
+            protect_content=protect_content,
+            reply_to_message_id=reply_to_message_id,
+            reply_markup=reply_markup,
+            message_thread_id=message_thread_id,
+        )
+        
+        # Attempt 1: send as-is
+        try:
+            result: Optional[Dict[str, Any]] = await self._api_request(
+                "sendMessage", data, raise_on_client_error=True,
+            )
+            return result
+        except httpx.HTTPStatusError:
+            pass
+        
+        # Attempt 2: strip parse_mode → plain text
+        if "parse_mode" in data:
+            data.pop("parse_mode")
+            from upsonic.utils.printing import debug_log
+            debug_log("sendMessage 400 retry: stripped parse_mode")
+            try:
+                result = await self._api_request(
+                    "sendMessage", data, raise_on_client_error=True,
+                )
+                return result
+            except httpx.HTTPStatusError:
+                pass
+        
+        # Attempt 3: sanitize text (remove HTML tags, control chars)
+        sanitized_text: str = self._sanitize_text_for_telegram(text)
+        data["text"] = sanitized_text
+        data.pop("parse_mode", None)
+        from upsonic.utils.printing import debug_log
+        debug_log("sendMessage 400 retry: sanitized text")
+        
+        # Final attempt — no raise, let _api_request handle the error
         return await self._api_request("sendMessage", data)
     
     async def _send_long_message(
@@ -859,7 +967,10 @@ class TelegramTools:
         reply_markup: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         """
-        Edit text of a message.
+        Edit text of a message with automatic retry on 400 errors.
+        
+        On a 400 Bad Request, retries by stripping parse_mode and then
+        sanitizing the text content.
         
         Args:
             text: New text of the message.
@@ -871,8 +982,11 @@ class TelegramTools:
             reply_markup: Inline keyboard.
             
         Returns:
-            The edited Message on success.
+            The edited Message on success, None on failure.
         """
+        if not text or not text.strip():
+            return None
+
         data: Dict[str, Any] = {"text": text}
         
         if chat_id and message_id:
@@ -892,6 +1006,34 @@ class TelegramTools:
             data["disable_web_page_preview"] = True
         if reply_markup:
             data["reply_markup"] = reply_markup
+        
+        # Attempt 1: send as-is
+        try:
+            result: Optional[Dict[str, Any]] = await self._api_request(
+                "editMessageText", data, raise_on_client_error=True,
+            )
+            return result
+        except httpx.HTTPStatusError:
+            pass
+        
+        # Attempt 2: strip parse_mode
+        if "parse_mode" in data:
+            data.pop("parse_mode")
+            from upsonic.utils.printing import debug_log
+            debug_log("editMessageText 400 retry: stripped parse_mode")
+            try:
+                result = await self._api_request(
+                    "editMessageText", data, raise_on_client_error=True,
+                )
+                return result
+            except httpx.HTTPStatusError:
+                pass
+        
+        # Attempt 3: sanitize text
+        data["text"] = self._sanitize_text_for_telegram(text)
+        data.pop("parse_mode", None)
+        from upsonic.utils.printing import debug_log
+        debug_log("editMessageText 400 retry: sanitized text")
         
         return await self._api_request("editMessageText", data)
     

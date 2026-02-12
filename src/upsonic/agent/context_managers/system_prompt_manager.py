@@ -30,11 +30,15 @@ class SystemPromptManager:
         memory_handler: Optional["MemoryManager"] = None,
     ) -> str:
         """Builds the complete system prompt string by assembling its components."""
+        from datetime import datetime
         from upsonic.tools import Thought, AnalysisResult
         from upsonic.context.agent import turn_agent_to_string
         from upsonic.context.default_prompt import default_prompt
         
         prompt_parts = []
+
+        current_date: str = datetime.now().strftime("%A, %B %d, %Y")
+        prompt_parts.append(f"Today's date: {current_date}")
     
         is_thinking_enabled = self.agent.enable_thinking_tool
         if self.task.enable_thinking_tool is not None:
@@ -224,7 +228,7 @@ class SystemPromptManager:
                 if culture_formatted:
                     has_culture = True
 
-        # Add workspace Agents.md content if available (high priority, before other prompts)
+        # Add workspace AGENTS.md content if available (high priority, before other prompts)
         if hasattr(self.agent, '_workspace_agents_md_content') and self.agent._workspace_agents_md_content:
             prompt_parts.append(f"<AgentConfiguration>\n{self.agent._workspace_agents_md_content}\n</AgentConfiguration>")
         

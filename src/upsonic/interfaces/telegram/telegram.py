@@ -459,8 +459,9 @@ class TelegramInterface(Interface):
         was_reset = await self.areset_chat_session(str(user_id))
         
         if was_reset:
-            # Check if agent has workspace and execute greeting
             if self.agent.workspace:
+                if hasattr(self.agent, "_workspace_greeting_executed"):
+                    self.agent._workspace_greeting_executed = False
                 greeting_result = await self.agent.execute_workspace_greeting_async()
                 if greeting_result:
                     reply_text = str(greeting_result)

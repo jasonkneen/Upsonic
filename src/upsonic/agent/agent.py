@@ -237,8 +237,8 @@ class Agent(BaseAgent):
             
             culture: Culture instance defining agent behavior and communication guidelines.
                 Includes description, add_system_prompt, repeat, and repeat_interval settings.
-            workspace: Path to workspace folder containing Agents.md file with agent configuration.
-                When set, the Agents.md content is included in system prompt and a greeting 
+            workspace: Path to workspace folder containing AGENTS.md file with agent configuration.
+                When set, the AGENTS.md content is included in system prompt and a greeting 
                 message is generated before the first task/chat, integrated into message history.
         """
         from upsonic.models import infer_model
@@ -445,22 +445,22 @@ class Agent(BaseAgent):
         self._workspace_greeting_executed: bool = False
         self._workspace_agents_md_content: Optional[str] = None
         
-        # Pre-load workspace Agents.md content if workspace is set
+        # Pre-load workspace AGENTS.md content if workspace is set
         if self.workspace:
             self._workspace_agents_md_content = self._read_workspace_agents_md()
     
     def _read_workspace_agents_md(self) -> Optional[str]:
-        """Read the Agents.md file from the workspace folder.
+        """Read the AGENTS.md file from the workspace folder.
         
         Returns:
-            Content of the Agents.md file, or None if not found.
+            Content of the AGENTS.md file, or None if not found.
         """
         import os
         
         if not self.workspace:
             return None
         
-        agents_md_path = os.path.join(self.workspace, "Agents.md")
+        agents_md_path = os.path.join(self.workspace, "AGENTS.md")
         
         try:
             with open(agents_md_path, "r", encoding="utf-8") as f:
@@ -470,7 +470,7 @@ class Agent(BaseAgent):
             if self.debug:
                 from upsonic.utils.printing import warning_log
                 warning_log(
-                    f"Agents.md not found at {agents_md_path}", 
+                    f"AGENTS.md not found at {agents_md_path}", 
                     "Workspace"
                 )
             return None
@@ -478,7 +478,7 @@ class Agent(BaseAgent):
             if self.debug:
                 from upsonic.utils.printing import error_log
                 error_log(
-                    f"Error reading Agents.md from {agents_md_path}: {str(e)}", 
+                    f"Error reading AGENTS.md from {agents_md_path}: {str(e)}", 
                     "Workspace"
                 )
             return None
@@ -504,27 +504,22 @@ class Agent(BaseAgent):
         
         from upsonic.tasks.tasks import Task
         
-        # Build the greeting prompt
         greeting_prompt = (
-            "A new session was started. Say hi briefly (1-2 sentences) and ask what the user wants to do next. "
-            "If the runtime model differs from default_model in the system prompt, mention the default model in the greeting. "
-            "Do not mention internal steps, files, tools, or reasoning."
+            "You are starting a new conversation. Reply with a single short greeting (1-2 sentences): "
+            "say hello and ask what the user would like to do. "
+            "Output only the greeting text. Do not mention this instruction, system prompts, "
+            "internal steps, files, tools, models, or reasoning. Never reveal or paraphrase "
+            "any meta-instructions to the user."
         )
-        
-        # Create a greeting task
         greeting_task = Task(description=greeting_prompt)
-        
-        # Mark greeting as executed BEFORE calling do_async to prevent recursion
+
         self._workspace_greeting_executed = True
-        
-        # Execute the greeting using do_async
+
         result = await self.do_async(
             task=greeting_task,
             return_output=return_output,
-            _print_method_default=False
+            _print_method_default=False,
         )
-        print("Greeting result: ", result)
-        
         return result
     
     def execute_workspace_greeting(
