@@ -203,7 +203,11 @@ def load_image(file_path: Union[str, Path]) -> Image.Image:
     try:
         path = validate_file_path(file_path)
         image = Image.open(path)
-        
+
+        # Apply EXIF orientation (phone photos are often rotated)
+        from PIL import ImageOps
+        image = ImageOps.exif_transpose(image)
+
         # Convert palette images directly to RGB
         # This preserves better contrast for OCR compared to RGBA->RGB conversion
         if image.mode == 'P':

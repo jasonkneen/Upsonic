@@ -7,26 +7,26 @@ from upsonic.ocr.base import OCRProvider, OCRConfig, OCRResult, OCRTextBlock, Bo
 from upsonic.ocr.exceptions import OCRProviderError, OCRProcessingError
 
 try:
-    from rapidocr_onnxruntime import RapidOCR as RapidOCREngine
+    from rapidocr_onnxruntime import RapidOCR as _RapidOCR
     _RAPIDOCR_AVAILABLE = True
 except ImportError:
     try:
-        from rapidocr_openvino import RapidOCR as RapidOCREngine
+        from rapidocr_openvino import RapidOCR as _RapidOCR
         _RAPIDOCR_AVAILABLE = True
     except ImportError:
-        RapidOCREngine = None
+        _RapidOCR = None
         _RAPIDOCR_AVAILABLE = False
 
 
-class RapidOCR(OCRProvider):
-    """RapidOCR provider for fast text extraction.
-    
+class RapidOCREngine(OCRProvider):
+    """RapidOCR engine for fast text extraction.
+
     RapidOCR is a lightweight OCR library based on ONNX Runtime.
     It provides fast inference with support for multiple backends.
-    
+
     Example:
-        >>> from upsonic.ocr.rapidocr import RapidOCR
-        >>> ocr = RapidOCR(languages=['en', 'ch'], rotation_fix=True)
+        >>> from upsonic.ocr.layer_1.engines import RapidOCREngine
+        >>> ocr = RapidOCREngine(languages=['en', 'ch'], rotation_fix=True)
         >>> text = ocr.get_text('document.png')
     """
     
@@ -123,7 +123,7 @@ class RapidOCR(OCRProvider):
                 if self.cls_model_path:
                     engine_kwargs['Rec.model_path'] = self.cls_model_path
                 
-                self._engine = RapidOCREngine(**engine_kwargs) if engine_kwargs else RapidOCREngine()
+                self._engine = _RapidOCR(**engine_kwargs) if engine_kwargs else _RapidOCR()
                 ocr_initialized("RapidOCR")
             except Exception as e:
                 raise OCRProviderError(

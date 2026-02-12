@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import List, Optional, Dict, Any
 import os
 
@@ -25,25 +26,25 @@ except ImportError:
     _NGRAM_PROCESSOR_AVAILABLE = False
 
 
-class DeepSeekOCR(OCRProvider):
-    """DeepSeek OCR provider using DeepSeek-OCR model with vLLM.
-    
-    This provider uses DeepSeek's specialized OCR model (deepseek-ai/DeepSeek-OCR)
+class DeepSeekOCREngine(OCRProvider):
+    """DeepSeek OCR engine using DeepSeek-OCR model with vLLM.
+
+    This engine uses DeepSeek's specialized OCR model (deepseek-ai/DeepSeek-OCR)
     running locally via vLLM. It provides high-quality OCR with support for complex
     layouts and table structures.
-    
+
     **Requirements:**
     - vLLM with DeepSeek-OCR support (may require specific vLLM version or custom build)
     - Additional dependencies: `pip install addict matplotlib`
     - Sufficient GPU memory to run the model (typically 16GB+ VRAM)
-    
+
     **Note:** DeepSeek-OCR model architecture may not be supported in all vLLM versions.
     As of vLLM 0.11.0, the DeepseekOCRForCausalLM architecture is not in the standard
     supported list. You may need a custom vLLM build or an updated version.
-    
+
     Example:
-        >>> from upsonic.ocr.deepseek import DeepSeekOCR
-        >>> ocr = DeepSeekOCR(rotation_fix=True)
+        >>> from upsonic.ocr.layer_1.engines import DeepSeekOCREngine
+        >>> ocr = DeepSeekOCREngine(rotation_fix=True)
         >>> text = ocr.get_text('document.png')
     """
     
@@ -264,28 +265,40 @@ class DeepSeekOCR(OCRProvider):
                 original_error=e
             )
     
-    def process_images_batch(self, images: List, **kwargs) -> List[OCRResult]:
-        """Process multiple images in a batch for better performance.
-        
+    async def process_images_batch_async(self, images: List, **kwargs) -> List[OCRResult]:
+        """Process multiple images in a batch for better performance (async).
+
         Args:
             images: List of PIL Image objects
             **kwargs: Additional arguments
-            
+
+        Returns:
+            List of OCRResult objects
+        """
+        return await asyncio.to_thread(self._process_images_batch_sync, images, **kwargs)
+
+    def _process_images_batch_sync(self, images: List, **kwargs) -> List[OCRResult]:
+        """Process multiple images in a batch (sync implementation).
+
+        Args:
+            images: List of PIL Image objects
+            **kwargs: Additional arguments
+
         Returns:
             List of OCRResult objects
         """
         if not images:
             return []
-        
+
         try:
             processed_images = []
             for img in images:
                 if img.mode not in ('RGB', 'L'):
                     img = img.convert('RGB')
                 processed_images.append(img)
-            
+
             prompt = kwargs.get('prompt', self.prompt)
-            
+
             model_inputs = [
                 {
                     "prompt": prompt,
@@ -293,16 +306,16 @@ class DeepSeekOCR(OCRProvider):
                 }
                 for img in processed_images
             ]
-            
+
             llm = self._get_llm()
             sampling_params = self._get_sampling_params()
-            
+
             model_outputs = llm.generate(model_inputs, sampling_params)
-            
+
             results = []
             for i, output in enumerate(model_outputs):
                 extracted_text = output.outputs[0].text.strip()
-                
+
                 block = OCRTextBlock(
                     text=extracted_text,
                     confidence=1.0,
@@ -310,7 +323,7 @@ class DeepSeekOCR(OCRProvider):
                     language=None,
                     page_number=i + 1
                 )
-                
+
                 result = OCRResult(
                     text=extracted_text,
                     blocks=[block],
@@ -324,9 +337,9 @@ class DeepSeekOCR(OCRProvider):
                     }
                 )
                 results.append(result)
-            
+
             return results
-            
+
         except Exception as e:
             if isinstance(e, OCRProviderError):
                 raise
@@ -335,60 +348,64 @@ class DeepSeekOCR(OCRProvider):
                 error_code="DEEPSEEK_BATCH_PROCESSING_FAILED",
                 original_error=e
             )
-    
-    def process_file(self, file_path, **kwargs):
-        """Process a file with optimized batch processing for PDFs.
-        
+
+    def process_images_batch(self, images: List, **kwargs) -> List[OCRResult]:
+        """Process multiple images in a batch (sync wrapper)."""
+        return asyncio.run(self.process_images_batch_async(images, **kwargs))
+
+    async def process_file_async(self, file_path, **kwargs):
+        """Process a file with optimized batch processing for PDFs (async).
+
         This override provides efficient batch processing when dealing with
         multi-page PDFs, processing all pages in a single batch.
-        
+
         Args:
             file_path: Path to the file
             **kwargs: Additional arguments
-            
+
         Returns:
             OCRResult object
         """
         from upsonic.ocr.utils import prepare_file_for_ocr
         import time
-        
+
         start_time = time.time()
-        
+
         processing_config = {
             'rotation_fix': kwargs.get('rotation_fix', self.config.rotation_fix),
             'enhance_contrast': kwargs.get('enhance_contrast', self.config.enhance_contrast),
             'remove_noise': kwargs.get('remove_noise', self.config.remove_noise),
             'pdf_dpi': kwargs.get('pdf_dpi', self.config.pdf_dpi),
         }
-        
-        images = prepare_file_for_ocr(file_path, **processing_config)
-        
+
+        images = await asyncio.to_thread(prepare_file_for_ocr, file_path, **processing_config)
+
         if len(images) > 1:
-            page_results = self.process_images_batch(images, **kwargs)
-            
+            page_results = await self.process_images_batch_async(images, **kwargs)
+
             all_blocks = []
             all_text_parts = []
             total_confidence = 0.0
-            
+
             for page_num, result in enumerate(page_results, start=1):
                 for block in result.blocks:
                     block.page_number = page_num
                     all_blocks.append(block)
-                
+
                 all_text_parts.append(result.text)
                 total_confidence += result.confidence
-            
+
             combined_text = "\n\n".join(all_text_parts)
             avg_confidence = total_confidence / len(page_results) if page_results else 0.0
-            
+
         else:
-            result = self._process_image(images[0], **kwargs)
+            result = await self._process_image_async(images[0], **kwargs)
             combined_text = result.text
             all_blocks = result.blocks
             avg_confidence = result.confidence
-        
+
         processing_time = (time.time() - start_time) * 1000
-        
+
         final_result = OCRResult(
             text=combined_text,
             blocks=all_blocks,
@@ -403,13 +420,17 @@ class DeepSeekOCR(OCRProvider):
                 'config': self.config.model_dump(),
             }
         )
-        
+
         self._metrics.total_pages += len(images)
         self._metrics.total_characters += len(combined_text)
         self._metrics.processing_time_ms += processing_time
         self._metrics.files_processed += 1
         if all_blocks:
             self._metrics.average_confidence = sum(b.confidence for b in all_blocks) / len(all_blocks)
-        
+
         return final_result
+
+    def process_file(self, file_path, **kwargs):
+        """Process a file with optimized batch processing (sync wrapper)."""
+        return asyncio.run(self.process_file_async(file_path, **kwargs))
 
