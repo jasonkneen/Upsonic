@@ -162,44 +162,39 @@ def _get_mongo_classes() -> dict[str, Any]:
     }
 
 
+def _safe_get(loader: Any) -> dict[str, Any]:
+    """Call a lazy-loader function, returning an empty dict when its optional dependency is missing."""
+    try:
+        return loader()
+    except (ImportError, ModuleNotFoundError):
+        return {}
+
+
+# Ordered list of lazy loaders.
+# Core loaders (base, in_memory, json, memory) should never fail because they
+# have no third-party dependencies.  Optional-backend loaders (sqlite,
+# postgres, redis, mem0, mongo) are guarded by _safe_get so a missing
+# dependency doesn't prevent importing unrelated classes from the same package.
+_LOADERS: list[tuple[bool, Any]] = [
+    (False, _get_base_classes),
+    (False, _get_json_classes),
+    (False, _get_in_memory_classes),
+    (False, _get_memory_classes),
+    (True, _get_sqlite_classes),
+    (True, _get_postgres_classes),
+    (True, _get_redis_classes),
+    (True, _get_mem0_classes),
+    (True, _get_mongo_classes),
+]
+
+
 def __getattr__(name: str) -> Any:
     """Lazy loading of storage modules and classes."""
-    base_classes = _get_base_classes()
-    if name in base_classes:
-        return base_classes[name]
-    
-    json_classes = _get_json_classes()
-    if name in json_classes:
-        return json_classes[name]
-    
-    in_memory_classes = _get_in_memory_classes()
-    if name in in_memory_classes:
-        return in_memory_classes[name]
-    
-    sqlite_classes = _get_sqlite_classes()
-    if name in sqlite_classes:
-        return sqlite_classes[name]
-    
-    postgres_classes = _get_postgres_classes()
-    if name in postgres_classes:
-        return postgres_classes[name]
-    
-    memory_classes = _get_memory_classes()
-    if name in memory_classes:
-        return memory_classes[name]
-    
-    redis_classes = _get_redis_classes()
-    if name in redis_classes:
-        return redis_classes[name]
-    
-    mem0_classes = _get_mem0_classes()
-    if name in mem0_classes:
-        return mem0_classes[name]
-    
-    mongo_classes = _get_mongo_classes()
-    if name in mongo_classes:
-        return mongo_classes[name]
-    
+    for is_optional, loader in _LOADERS:
+        classes: dict[str, Any] = _safe_get(loader) if is_optional else loader()
+        if name in classes:
+            return classes[name]
+
     raise AttributeError(
         f"module '{__name__}' has no attribute '{name}'. "
         f"Please import from the appropriate sub-module."
