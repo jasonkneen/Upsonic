@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import hmac
 import json
@@ -53,6 +54,7 @@ class SlackInterface(Interface):
         storage: Optional["Storage"] = None,
         allowed_user_ids: Optional[List[str]] = None,
         stream: bool = False,
+        heartbeat_channel: Optional[str] = None,
     ):
         """
         Initialize the Slack interface.
@@ -73,6 +75,8 @@ class SlackInterface(Interface):
                              User IDs are in format like "U01ABC123". If None, all users are allowed.
             stream: Whether to stream agent responses in real-time by progressively
                    updating the message as tokens arrive. Default: False.
+            heartbeat_channel: Slack channel ID to send heartbeat responses to.
+                Required when the agent has heartbeat enabled (e.g. "C01ABC123").
         """
         super().__init__(
             agent=agent,
@@ -83,6 +87,9 @@ class SlackInterface(Interface):
         )
 
         self.stream: bool = stream
+        self.heartbeat_channel: Optional[str] = heartbeat_channel
+        self._heartbeat_task: Optional[asyncio.Task[None]] = None
+        self._auto_heartbeat_channel: Optional[str] = None
 
         self.signing_secret = signing_secret or os.getenv("SLACK_SIGNING_SECRET")
         if not self.signing_secret:
@@ -382,7 +389,10 @@ class SlackInterface(Interface):
             ts = event.get("thread_ts")  # Will be None if not in a thread
 
             info_log(f"Processing Slack event from {user} in {channel} (mode={self.mode.value}): {text[:50]}...")
-            
+
+            if self._auto_heartbeat_channel is None and channel:
+                self._auto_heartbeat_channel = channel
+
             # Check whitelist - if user is not allowed, skip processing
             if not self.is_user_allowed(user):
                 info_log(self.get_unauthorized_message())
@@ -579,6 +589,81 @@ class SlackInterface(Interface):
                 message=error_msg,
             )
 
+    def _resolve_heartbeat_channel(self) -> Optional[str]:
+        """
+        Resolve the Slack channel for heartbeat delivery.
+
+        Priority:
+            1. Explicitly set ``heartbeat_channel``
+            2. Auto-detected channel from the first incoming message
+
+        Returns:
+            Channel ID string, or None if no target is known yet.
+        """
+        return self.heartbeat_channel or self._auto_heartbeat_channel
+
+    async def _heartbeat_loop(self) -> None:
+        """
+        Background coroutine that periodically executes the agent's heartbeat
+        and sends the result to the resolved Slack channel.
+
+        The target channel is resolved each tick so that an auto-detected
+        channel (captured from the first incoming message) can be picked up
+        even when no explicit ``heartbeat_channel`` was provided.
+        """
+        from upsonic.agent.autonomous_agent.autonomous_agent import AutonomousAgent
+
+        if not isinstance(self.agent, AutonomousAgent):
+            return
+        if not self.agent.heartbeat:
+            return
+
+        period_seconds: int = self.agent.heartbeat_period * 60
+
+        while True:
+            await asyncio.sleep(period_seconds)
+
+            target_channel: Optional[str] = self._resolve_heartbeat_channel()
+            if not target_channel:
+                debug_log("Heartbeat tick skipped: no target channel known yet")
+                continue
+
+            try:
+                result: Optional[str] = await self.agent.aexecute_heartbeat()
+                if result:
+                    await self._send_slack_message(
+                        channel=target_channel,
+                        thread_ts=None,
+                        message=result,
+                    )
+                    info_log(f"Heartbeat response sent to Slack channel {target_channel}")
+            except Exception as exc:
+                error_log(f"Slack heartbeat error: {exc}")
+
+    def _start_heartbeat(self) -> None:
+        """
+        Start the heartbeat background task if conditions are met.
+
+        Creates an asyncio task running ``_heartbeat_loop``.  The loop itself
+        handles the case where no target channel is known yet (skips the tick
+        until a channel is auto-detected from incoming traffic or explicitly
+        set).  Safe to call multiple times.
+        """
+        from upsonic.agent.autonomous_agent.autonomous_agent import AutonomousAgent
+
+        if not isinstance(self.agent, AutonomousAgent):
+            return
+        if not self.agent.heartbeat:
+            return
+        if self._heartbeat_task is not None and not self._heartbeat_task.done():
+            return
+
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+        info_log(
+            f"Slack heartbeat started: period={self.agent.heartbeat_period}min, "
+            f"channel={self.heartbeat_channel or '(auto-detect)'}"
+        )
+
     def attach_routes(self) -> APIRouter:
         """
         Create and attach Slack routes to the FastAPI application.
@@ -647,6 +732,10 @@ class SlackInterface(Interface):
         async def health_check_endpoint():
             """Health check endpoint for Slack interface."""
             return await self.health_check()
+
+        @router.on_event("startup")
+        async def start_heartbeat() -> None:
+            self._start_heartbeat()
 
         info_log("Slack routes attached with prefix: /slack")
         return router

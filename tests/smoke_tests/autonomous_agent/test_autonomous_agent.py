@@ -8,6 +8,7 @@ Tests cover:
 - Shell toolkit operations
 - Real LLM integration with tools
 - Workspace sandboxing
+- Heartbeat configuration and execution
 
 All tests use REAL LLM requests - no mocking.
 """
@@ -16,6 +17,7 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
@@ -202,6 +204,29 @@ class TestAutonomousAgentInitialization:
         assert agent.name == "TestAgent"
         assert agent.agent_id is not None
         assert agent.model is not None
+    
+    def test_default_heartbeat_disabled(self, temp_workspace):
+        """Verify heartbeat is disabled by default."""
+        agent = AutonomousAgent(
+            model="openai/gpt-4o-mini",
+            workspace=temp_workspace,
+        )
+        assert agent.heartbeat is False
+        assert agent.heartbeat_period == 30
+        assert agent.heartbeat_message == ""
+    
+    def test_heartbeat_custom_values(self, temp_workspace):
+        """Verify heartbeat attributes accept custom values."""
+        agent = AutonomousAgent(
+            model="openai/gpt-4o-mini",
+            workspace=temp_workspace,
+            heartbeat=True,
+            heartbeat_period=15,
+            heartbeat_message="Status update please.",
+        )
+        assert agent.heartbeat is True
+        assert agent.heartbeat_period == 15
+        assert agent.heartbeat_message == "Status update please."
 
 
 # ---------------------------------------------------------------------------
@@ -734,6 +759,85 @@ class TestMemoryIntegration:
         )
         
         assert agent.user_id == "test_user_456"
+
+
+# ---------------------------------------------------------------------------
+# Test: Heartbeat Execution
+# ---------------------------------------------------------------------------
+
+class TestHeartbeatExecution:
+    """Tests for heartbeat execution methods."""
+    
+    def test_execute_heartbeat_disabled_returns_none(self, temp_workspace):
+        """Verify execute_heartbeat returns None when heartbeat is disabled."""
+        agent = AutonomousAgent(
+            model="openai/gpt-4o-mini",
+            workspace=temp_workspace,
+            heartbeat=False,
+            heartbeat_message="Hello",
+        )
+        result: Optional[str] = agent.execute_heartbeat()
+        assert result is None
+    
+    @pytest.mark.asyncio
+    async def test_aexecute_heartbeat_disabled_returns_none(self, temp_workspace):
+        """Verify aexecute_heartbeat returns None when heartbeat is disabled."""
+        agent = AutonomousAgent(
+            model="openai/gpt-4o-mini",
+            workspace=temp_workspace,
+            heartbeat=False,
+            heartbeat_message="Hello",
+        )
+        result: Optional[str] = await agent.aexecute_heartbeat()
+        assert result is None
+    
+    def test_execute_heartbeat_empty_message_returns_none(self, temp_workspace):
+        """Verify execute_heartbeat returns None when heartbeat_message is empty."""
+        agent = AutonomousAgent(
+            model="openai/gpt-4o-mini",
+            workspace=temp_workspace,
+            heartbeat=True,
+            heartbeat_message="",
+        )
+        result: Optional[str] = agent.execute_heartbeat()
+        assert result is None
+    
+    @pytest.mark.asyncio
+    async def test_aexecute_heartbeat_empty_message_returns_none(self, temp_workspace):
+        """Verify aexecute_heartbeat returns None when heartbeat_message is empty."""
+        agent = AutonomousAgent(
+            model="openai/gpt-4o-mini",
+            workspace=temp_workspace,
+            heartbeat=True,
+            heartbeat_message="",
+        )
+        result: Optional[str] = await agent.aexecute_heartbeat()
+        assert result is None
+    
+    def test_execute_heartbeat_with_llm(self, temp_workspace):
+        """Verify execute_heartbeat sends the message to the LLM and returns a response."""
+        agent = AutonomousAgent(
+            model="openai/gpt-4o-mini",
+            workspace=temp_workspace,
+            heartbeat=True,
+            heartbeat_message="Say 'heartbeat ok' and nothing else.",
+        )
+        result: Optional[str] = agent.execute_heartbeat()
+        assert result is not None
+        assert len(result) > 0
+    
+    @pytest.mark.asyncio
+    async def test_aexecute_heartbeat_with_llm(self, temp_workspace):
+        """Verify aexecute_heartbeat sends the message to the LLM and returns a response."""
+        agent = AutonomousAgent(
+            model="openai/gpt-4o-mini",
+            workspace=temp_workspace,
+            heartbeat=True,
+            heartbeat_message="Say 'heartbeat ok' and nothing else.",
+        )
+        result: Optional[str] = await agent.aexecute_heartbeat()
+        assert result is not None
+        assert len(result) > 0
 
 
 # ---------------------------------------------------------------------------

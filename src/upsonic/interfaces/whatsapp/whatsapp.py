@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import binascii
 import hashlib
@@ -66,6 +67,7 @@ class WhatsAppInterface(Interface):
         reset_command: Optional[str] = "/reset",
         storage: Optional["Storage"] = None,
         allowed_numbers: Optional[List[str]] = None,
+        heartbeat_recipient: Optional[str] = None,
     ):
         """
         Initialize the WhatsApp interface.
@@ -84,6 +86,8 @@ class WhatsAppInterface(Interface):
                             these numbers will be processed. Others receive "This operation not allowed".
                             Numbers should be in international format (e.g., "905551234567").
                             If None, all numbers are allowed.
+            heartbeat_recipient: WhatsApp phone number to send heartbeat responses to.
+                Required when the agent has heartbeat enabled (e.g. "905551234567").
         """
         super().__init__(
             agent=agent,
@@ -117,6 +121,10 @@ class WhatsAppInterface(Interface):
         if allowed_numbers is not None:
             self._allowed_numbers = {self._normalize_phone_number(num) for num in allowed_numbers}
             info_log(f"WhatsApp whitelist enabled with {len(self._allowed_numbers)} allowed number(s)")
+        
+        self.heartbeat_recipient: Optional[str] = heartbeat_recipient
+        self._heartbeat_task: Optional[asyncio.Task[None]] = None
+        self._auto_heartbeat_recipient: Optional[str] = None
         
         info_log(f"WhatsApp interface initialized: mode={self.mode.value}, agent={agent}")
     
@@ -864,7 +872,10 @@ class WhatsAppInterface(Interface):
             return
         
         debug_log(f"Processing {message_type} message from {sender}")
-        
+
+        if self._auto_heartbeat_recipient is None and sender:
+            self._auto_heartbeat_recipient = sender
+
         # Route to appropriate handler
         if message_type == "text":
             await self._process_text_message(message, sender, message_id)
@@ -873,6 +884,80 @@ class WhatsAppInterface(Interface):
         else:
             debug_log(f"Unsupported message type: {message_type}")
     
+    def _resolve_heartbeat_recipient(self) -> Optional[str]:
+        """
+        Resolve the WhatsApp recipient for heartbeat delivery.
+
+        Priority:
+            1. Explicitly set ``heartbeat_recipient``
+            2. Auto-detected sender from the first incoming message
+
+        Returns:
+            Phone number string, or None if no target is known yet.
+        """
+        return self.heartbeat_recipient or self._auto_heartbeat_recipient
+
+    async def _heartbeat_loop(self) -> None:
+        """
+        Background coroutine that periodically executes the agent's heartbeat
+        and sends the result to the resolved WhatsApp recipient.
+
+        The target recipient is resolved each tick so that an auto-detected
+        sender (captured from the first incoming message) can be picked up
+        even when no explicit ``heartbeat_recipient`` was provided.
+        """
+        from upsonic.agent.autonomous_agent.autonomous_agent import AutonomousAgent
+
+        if not isinstance(self.agent, AutonomousAgent):
+            return
+        if not self.agent.heartbeat:
+            return
+
+        period_seconds: int = self.agent.heartbeat_period * 60
+
+        while True:
+            await asyncio.sleep(period_seconds)
+
+            target_recipient: Optional[str] = self._resolve_heartbeat_recipient()
+            if not target_recipient:
+                debug_log("Heartbeat tick skipped: no target recipient known yet")
+                continue
+
+            try:
+                result: Optional[str] = await self.agent.aexecute_heartbeat()
+                if result:
+                    await self._send_whatsapp_message(
+                        recipient=target_recipient,
+                        message=result,
+                    )
+                    info_log(f"Heartbeat response sent to WhatsApp recipient {target_recipient}")
+            except Exception as exc:
+                error_log(f"WhatsApp heartbeat error: {exc}")
+
+    def _start_heartbeat(self) -> None:
+        """
+        Start the heartbeat background task if conditions are met.
+
+        Creates an asyncio task running ``_heartbeat_loop``.  The loop itself
+        handles the case where no target recipient is known yet (skips the
+        tick until a recipient is auto-detected from incoming traffic or
+        explicitly set).  Safe to call multiple times.
+        """
+        from upsonic.agent.autonomous_agent.autonomous_agent import AutonomousAgent
+
+        if not isinstance(self.agent, AutonomousAgent):
+            return
+        if not self.agent.heartbeat:
+            return
+        if self._heartbeat_task is not None and not self._heartbeat_task.done():
+            return
+
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+        info_log(
+            f"WhatsApp heartbeat started: period={self.agent.heartbeat_period}min, "
+            f"recipient={self.heartbeat_recipient or '(auto-detect)'}"
+        )
+
     def attach_routes(self) -> APIRouter:
         """
         Create and attach WhatsApp routes to the FastAPI application.
@@ -1011,6 +1096,10 @@ class WhatsAppInterface(Interface):
         async def health_check_endpoint():
             """Health check endpoint for WhatsApp interface."""
             return await self.health_check()
+
+        @router.on_event("startup")
+        async def start_heartbeat() -> None:
+            self._start_heartbeat()
         
         info_log(f"WhatsApp routes attached with prefix: /whatsapp")
         return router
