@@ -6,41 +6,28 @@ on:
   pull_request:
     branches: [ master, main ]
 
-concurrency:
-  group: unit-tests-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     strategy:
-      fail-fast: false
       matrix:
         python-version: ['3.10', '3.11', '3.12', '3.13']
 
     steps:
-      - uses: actions/checkout@v4
+    - uses: actions/checkout@v4
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
-        with:
-          version: "latest"
+    - name: Install uv
+      uses: astral-sh/setup-uv@v3
+      with:
+        version: "latest"
 
-      - name: Set up Python ${{ matrix.python-version }}
-        run: uv python install ${{ matrix.python-version }}
+    - name: Set up Python ${{ matrix.python-version }}
+      run: uv python install ${{ matrix.python-version }}
 
-      - name: Install dependencies
-        run: uv sync --all-extras --python ${{ matrix.python-version }}
+    - name: Install dependencies
+      run: |
+        uv sync --all-extras
 
-      - name: Run unit tests
-        run: |
-          uv run --no-sync --python ${{ matrix.python-version }} pytest tests/unit_tests; rc=$?
-          # Exit code 139 (SIGSEGV) can occur during Python interpreter shutdown
-          # from native C extensions (onnxruntime, chromadb, protobuf) cleaning up.
-          # If pytest reported all tests passed before the crash, treat it as success.
-          if [ $rc -eq 139 ]; then
-            echo "::warning::pytest exited with 139 (SIGSEGV during interpreter shutdown) — all tests passed before crash"
-            exit 0
-          fi
-          exit $rc
+    - name: Run unit tests
+      run: |
+        uv run pytest tests/unit_tests
