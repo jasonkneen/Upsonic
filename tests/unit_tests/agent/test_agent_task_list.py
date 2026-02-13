@@ -48,6 +48,10 @@ class TestHandleTaskListSync(unittest.TestCase):
     """Unit tests for Agent._handle_task_list (synchronous helper)."""
 
     def setUp(self) -> None:
+        self._infer_patcher: Any = patch("upsonic.models.infer_model")
+        mock_infer: MagicMock = self._infer_patcher.start()
+        mock_infer.return_value = MagicMock()
+        self.addCleanup(self._infer_patcher.stop)
         self.agent: Agent = Agent(name="TestAgent")
 
     def test_non_list_returns_unhandled(self) -> None:
@@ -145,6 +149,10 @@ class TestHandleTaskListAsync(unittest.TestCase):
     """Unit tests for Agent._handle_task_list_async (asynchronous helper)."""
 
     def setUp(self) -> None:
+        self._infer_patcher: Any = patch("upsonic.models.infer_model")
+        mock_infer: MagicMock = self._infer_patcher.start()
+        mock_infer.return_value = MagicMock()
+        self.addCleanup(self._infer_patcher.stop)
         self.agent: Agent = Agent(name="TestAgent")
 
     @pytest.mark.asyncio
@@ -283,7 +291,9 @@ class TestDoTaskListDispatch(unittest.TestCase):
         self.assertNotIsInstance(result, list)
         self.assertEqual(result, "mock answer")
 
-    def test_do_empty_list_returns_empty(self) -> None:
+    @patch("upsonic.models.infer_model")
+    def test_do_empty_list_returns_empty(self, mock_infer_model: MagicMock) -> None:
+        mock_infer_model.return_value = MagicMock()
         agent: Agent = Agent(name="TestAgent")
 
         result: List[Any] = agent.do([])
@@ -341,7 +351,9 @@ class TestDoTaskListDispatch(unittest.TestCase):
         self.assertNotIsInstance(result, list)
 
     @pytest.mark.asyncio
-    async def test_do_async_empty_list(self) -> None:
+    @patch("upsonic.models.infer_model")
+    async def test_do_async_empty_list(self, mock_infer_model: MagicMock) -> None:
+        mock_infer_model.return_value = MagicMock()
         agent: Agent = Agent(name="TestAgent")
 
         result: List[Any] = await agent.do_async([])
