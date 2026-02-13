@@ -347,10 +347,10 @@ class AutonomousAgent(Agent):
         Returns:
             The effective system prompt to use
         """
-        # If user provides custom prompt, use it directly
+        # If user provides custom prompt, wrap and return
         if user_system_prompt is not None:
-            return user_system_prompt
-        
+            return f"<AutonomousAgent>\n{user_system_prompt}\n</AutonomousAgent>"
+
         # If no tools enabled, no special prompt needed
         if not enable_filesystem and not enable_shell:
             return None
@@ -451,8 +451,9 @@ You can execute commands in the workspace directory:
         
         # Closing
         prompt_parts.append("\nWhen given a task, think about what tools you need and use them methodically to accomplish the goal.")
-        
-        return "\n".join(prompt_parts)
+
+        body: str = "\n".join(prompt_parts)
+        return f"<AutonomousAgent>\n{body}\n</AutonomousAgent>"
     
     @property
     def autonomous_storage(self) -> Optional["Storage"]:
