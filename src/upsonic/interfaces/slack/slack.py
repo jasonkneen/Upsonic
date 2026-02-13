@@ -1,9 +1,11 @@
+import asyncio
 import hashlib
 import hmac
+import json
 import re
 import time
 import os
-from typing import TYPE_CHECKING, Dict, List, Optional, Set, Union, Any
+from typing import TYPE_CHECKING, AsyncIterator, Dict, List, Optional, Set, Union, Any
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
 
@@ -51,6 +53,8 @@ class SlackInterface(Interface):
         reset_command: Optional[str] = "/reset",
         storage: Optional["Storage"] = None,
         allowed_user_ids: Optional[List[str]] = None,
+        stream: bool = False,
+        heartbeat_channel: Optional[str] = None,
     ):
         """
         Initialize the Slack interface.
@@ -69,6 +73,10 @@ class SlackInterface(Interface):
             allowed_user_ids: List of allowed Slack user IDs. If provided, only messages from
                              these users will be processed. Others receive "This operation not allowed".
                              User IDs are in format like "U01ABC123". If None, all users are allowed.
+            stream: Whether to stream agent responses in real-time by progressively
+                   updating the message as tokens arrive. Default: False.
+            heartbeat_channel: Slack channel ID to send heartbeat responses to.
+                Required when the agent has heartbeat enabled (e.g. "C01ABC123").
         """
         super().__init__(
             agent=agent,
@@ -77,6 +85,11 @@ class SlackInterface(Interface):
             reset_command=reset_command,
             storage=storage,
         )
+
+        self.stream: bool = stream
+        self.heartbeat_channel: Optional[str] = heartbeat_channel
+        self._heartbeat_task: Optional[asyncio.Task[None]] = None
+        self._auto_heartbeat_channel: Optional[str] = None
 
         self.signing_secret = signing_secret or os.getenv("SLACK_SIGNING_SECRET")
         if not self.signing_secret:
@@ -101,7 +114,7 @@ class SlackInterface(Interface):
             self._allowed_user_ids = {uid.strip() for uid in allowed_user_ids}
             info_log(f"Slack whitelist enabled with {len(self._allowed_user_ids)} allowed user(s)")
         
-        info_log(f"Slack interface initialized: mode={self.mode.value}, agent={agent}")
+        info_log(f"Slack interface initialized: mode={self.mode.value}, stream={self.stream}, agent={agent}")
     
     def is_user_allowed(self, user_id: str) -> bool:
         """
@@ -245,6 +258,65 @@ class SlackInterface(Interface):
                     channel=channel, text=batch_message
                 )
 
+    async def _stream_to_slack(
+        self,
+        channel: str,
+        thread_ts: Optional[str],
+        stream_iterator: AsyncIterator[str],
+    ) -> None:
+        """
+        Stream agent response to Slack by sending an initial message and
+        progressively updating it with accumulated text chunks.
+
+        Args:
+            channel: Slack channel ID
+            thread_ts: Thread timestamp to reply in (None for direct channel post)
+            stream_iterator: Async iterator yielding text chunks from the agent
+        """
+        accumulated_text: str = ""
+        message_ts: Optional[str] = None
+        last_update_time: float = 0.0
+        update_interval: float = 0.5
+
+        async for chunk in stream_iterator:
+            if not chunk:
+                continue
+
+            accumulated_text += chunk
+
+            now = time.monotonic()
+
+            if message_ts is None:
+                if thread_ts:
+                    response_str = self.slack_tools.send_message_thread(
+                        channel=channel, text=accumulated_text, thread_ts=thread_ts
+                    )
+                else:
+                    response_str = self.slack_tools.send_message(
+                        channel=channel, text=accumulated_text
+                    )
+                try:
+                    response_data = json.loads(response_str)
+                    message_ts = response_data.get("ts")
+                except (json.JSONDecodeError, TypeError):
+                    pass
+                last_update_time = now
+            elif now - last_update_time >= update_interval:
+                if message_ts:
+                    self.slack_tools.update_message(
+                        channel=channel, ts=message_ts, text=accumulated_text
+                    )
+                last_update_time = now
+
+        if message_ts and accumulated_text:
+            self.slack_tools.update_message(
+                channel=channel, ts=message_ts, text=accumulated_text
+            )
+        elif not message_ts and accumulated_text:
+            await self._send_slack_message(
+                channel=channel, thread_ts=thread_ts, message=accumulated_text
+            )
+
     def _cleanup_processed_events(self):
         """Remove old events from the deduplication cache."""
         current_time = time.time()
@@ -317,7 +389,10 @@ class SlackInterface(Interface):
             ts = event.get("thread_ts")  # Will be None if not in a thread
 
             info_log(f"Processing Slack event from {user} in {channel} (mode={self.mode.value}): {text[:50]}...")
-            
+
+            if self._auto_heartbeat_channel is None and channel:
+                self._auto_heartbeat_channel = channel
+
             # Check whitelist - if user is not allowed, skip processing
             if not self.is_user_allowed(user):
                 info_log(self.get_unauthorized_message())
@@ -359,7 +434,6 @@ class SlackInterface(Interface):
         
         # Send confirmation
         if was_reset:
-            # Check if agent has workspace and execute greeting
             if self.agent.workspace:
                 greeting_result = await self.agent.execute_workspace_greeting_async()
                 if greeting_result:
@@ -397,17 +471,29 @@ class SlackInterface(Interface):
         """
         Process a Slack event in TASK mode (independent task per message).
         
+        When streaming is enabled, uses agent.astream() and progressively
+        updates the Slack message. Otherwise, uses agent.do_async() and
+        sends the complete response.
+        
         Args:
             text: Message text
             user: Slack user ID
             channel: Slack channel ID
             thread_ts: Thread timestamp (if in a thread)
         """
-        # Execute agent
         task = Task(text)
+
+        if self.stream:
+            stream_iterator: AsyncIterator[str] = await self.agent.astream(task, events=False)
+            await self._stream_to_slack(
+                channel=channel,
+                thread_ts=thread_ts,
+                stream_iterator=stream_iterator,
+            )
+            return
+
         await self.agent.do_async(task)
 
-        # Get result
         run_result = self.agent.get_run_output()
         if not run_result:
             error_log("No run result from agent")
@@ -416,7 +502,6 @@ class SlackInterface(Interface):
         model_response = run_result.get_last_model_response()
         
         if model_response:
-            # Send reasoning if available
             if hasattr(model_response, "thinking") and model_response.thinking:
                 await self._send_slack_message(
                     channel=channel,
@@ -425,7 +510,6 @@ class SlackInterface(Interface):
                     italics=True,
                 )
             
-            # Send content
             content = model_response.text
             if content:
                 await self._send_slack_message(
@@ -434,7 +518,6 @@ class SlackInterface(Interface):
                     message=content,
                 )
         elif run_result.output:
-            # Fallback to generic output
             await self._send_slack_message(
                 channel=channel,
                 thread_ts=thread_ts,
@@ -454,6 +537,10 @@ class SlackInterface(Interface):
         In CHAT mode, each user has a persistent conversation session.
         Messages are accumulated and the agent has access to the full history.
         
+        When streaming is enabled, uses chat.stream() and progressively
+        updates the Slack message. Otherwise, uses chat.invoke() and
+        sends the complete response.
+        
         Args:
             text: Message text
             user: Slack user ID (used as user_id for session)
@@ -461,12 +548,20 @@ class SlackInterface(Interface):
             thread_ts: Thread timestamp (if in a thread)
         """
         try:
-            # Get or create chat session for this user
             chat = await self.aget_chat_session(user)
             
             info_log(f"Processing Slack message in CHAT mode for user {user}")
-            
-            # Use the chat session to process the message
+
+            if self.stream:
+                stream_iterator: AsyncIterator[str] = chat.stream(text, events=False)
+                await self._stream_to_slack(
+                    channel=channel,
+                    thread_ts=thread_ts,
+                    stream_iterator=stream_iterator,
+                )
+                info_log(f"Streamed chat response to user {user} in channel {channel}")
+                return
+
             response_text = await chat.invoke(text)
             
             if response_text:
@@ -483,7 +578,6 @@ class SlackInterface(Interface):
             import traceback
             error_log(f"Error in chat mode processing for user {user}: {e}\n{traceback.format_exc()}")
             
-            # Send error message
             error_msg = (
                 "Sorry, there was an error processing your message. "
                 "Please try again or send '/reset' to start a new conversation."
@@ -493,6 +587,81 @@ class SlackInterface(Interface):
                 thread_ts=thread_ts,
                 message=error_msg,
             )
+
+    def _resolve_heartbeat_channel(self) -> Optional[str]:
+        """
+        Resolve the Slack channel for heartbeat delivery.
+
+        Priority:
+            1. Explicitly set ``heartbeat_channel``
+            2. Auto-detected channel from the first incoming message
+
+        Returns:
+            Channel ID string, or None if no target is known yet.
+        """
+        return self.heartbeat_channel or self._auto_heartbeat_channel
+
+    async def _heartbeat_loop(self) -> None:
+        """
+        Background coroutine that periodically executes the agent's heartbeat
+        and sends the result to the resolved Slack channel.
+
+        The target channel is resolved each tick so that an auto-detected
+        channel (captured from the first incoming message) can be picked up
+        even when no explicit ``heartbeat_channel`` was provided.
+        """
+        from upsonic.agent.autonomous_agent.autonomous_agent import AutonomousAgent
+
+        if not isinstance(self.agent, AutonomousAgent):
+            return
+        if not self.agent.heartbeat:
+            return
+
+        period_seconds: int = self.agent.heartbeat_period * 60
+
+        while True:
+            await asyncio.sleep(period_seconds)
+
+            target_channel: Optional[str] = self._resolve_heartbeat_channel()
+            if not target_channel:
+                debug_log("Heartbeat tick skipped: no target channel known yet")
+                continue
+
+            try:
+                result: Optional[str] = await self.agent.aexecute_heartbeat()
+                if result:
+                    await self._send_slack_message(
+                        channel=target_channel,
+                        thread_ts=None,
+                        message=result,
+                    )
+                    info_log(f"Heartbeat response sent to Slack channel {target_channel}")
+            except Exception as exc:
+                error_log(f"Slack heartbeat error: {exc}")
+
+    def _start_heartbeat(self) -> None:
+        """
+        Start the heartbeat background task if conditions are met.
+
+        Creates an asyncio task running ``_heartbeat_loop``.  The loop itself
+        handles the case where no target channel is known yet (skips the tick
+        until a channel is auto-detected from incoming traffic or explicitly
+        set).  Safe to call multiple times.
+        """
+        from upsonic.agent.autonomous_agent.autonomous_agent import AutonomousAgent
+
+        if not isinstance(self.agent, AutonomousAgent):
+            return
+        if not self.agent.heartbeat:
+            return
+        if self._heartbeat_task is not None and not self._heartbeat_task.done():
+            return
+
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+        info_log(
+            f"Slack heartbeat started: period={self.agent.heartbeat_period}min, "
+            f"channel={self.heartbeat_channel or '(auto-detect)'}"
+        )
 
     def attach_routes(self) -> APIRouter:
         """
@@ -562,6 +731,10 @@ class SlackInterface(Interface):
         async def health_check_endpoint():
             """Health check endpoint for Slack interface."""
             return await self.health_check()
+
+        @router.on_event("startup")
+        async def start_heartbeat() -> None:
+            self._start_heartbeat()
 
         info_log("Slack routes attached with prefix: /slack")
         return router

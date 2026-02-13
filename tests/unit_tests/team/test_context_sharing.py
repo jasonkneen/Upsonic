@@ -15,12 +15,18 @@ from upsonic.agent.agent import Agent
 class MockAgent:
     """Mock agent for testing."""
 
-    def __init__(self, name: str = "TestAgent"):
+    def __init__(self, name: str = "TestAgent", role: str = None, goal: str = None):
         self.name = name
+        self.role = role
+        self.goal = goal
+        self.tools = None
         self.agent_id_ = f"agent-{name.lower()}"
 
     def get_agent_id(self) -> str:
         return self.name if self.name else f"Agent_{self.agent_id_[:8]}"
+
+    def get_entity_id(self) -> str:
+        return self.get_agent_id()
 
 
 # ============================================================================
@@ -87,7 +93,7 @@ def test_context_sharing_share_context():
         current_task=task2,
         all_tasks=all_tasks,
         task_index=1,
-        agent_configurations=agent_configurations,
+        entity_configurations=agent_configurations,
         completed_results=completed_results,
     )
 
@@ -149,7 +155,7 @@ def test_context_sharing_build_selection_context():
         current_task=task2,
         all_tasks=all_tasks,
         task_index=1,
-        agent_configurations=agent_configurations,
+        entity_configurations=agent_configurations,
         completed_results=completed_results,
     )
 
@@ -163,9 +169,11 @@ def test_context_sharing_build_selection_context():
     assert task1 in context, "Should include Task 1"
     assert task3 in context, "Should include Task 3"
 
-    # Verify agents are included
-    assert agent1 in context, "Should include Agent1"
-    assert agent2 in context, "Should include Agent2"
+    # Verify entity descriptions are included as strings
+    entity_strings = [item for item in context if isinstance(item, str)]
+    assert len(entity_strings) == 2, "Should include 2 entity description strings"
+    assert any("Agent1" in s for s in entity_strings), "Should include Agent1 description"
+    assert any("Agent2" in s for s in entity_strings), "Should include Agent2 description"
 
     print("✓ ContextSharing build selection context works!")
 
@@ -205,7 +213,7 @@ def test_context_sharing_shared_memory():
         current_task=task2,
         all_tasks=all_tasks,
         task_index=1,
-        agent_configurations=agent_configurations,
+        entity_configurations=agent_configurations,
         completed_results=completed_results,
     )
 
@@ -221,7 +229,7 @@ def test_context_sharing_shared_memory():
         current_task=task3,
         all_tasks=all_tasks,
         task_index=2,
-        agent_configurations=agent_configurations,
+        entity_configurations=agent_configurations,
         completed_results=completed_results,
     )
 
@@ -257,7 +265,7 @@ def test_context_sharing_context_initialization():
         current_task=task_none,
         all_tasks=[task_none],
         task_index=0,
-        agent_configurations=[],
+        entity_configurations=[],
         completed_results=[],
     )
 
@@ -271,7 +279,7 @@ def test_context_sharing_context_initialization():
         current_task=task_string,
         all_tasks=[task_string],
         task_index=0,
-        agent_configurations=[],
+        entity_configurations=[],
         completed_results=[],
     )
 
@@ -288,7 +296,7 @@ def test_context_sharing_context_initialization():
         current_task=task_list,
         all_tasks=[task_list],
         task_index=0,
-        agent_configurations=[],
+        entity_configurations=[],
         completed_results=[],
     )
 
@@ -326,7 +334,7 @@ def test_context_sharing_multiple_tasks():
         current_task=tasks[2],
         all_tasks=tasks,
         task_index=2,
-        agent_configurations=agents,
+        entity_configurations=agents,
         completed_results=[],
     )
 
@@ -369,7 +377,7 @@ def test_context_sharing_empty_context():
         current_task=task,
         all_tasks=[task],
         task_index=0,
-        agent_configurations=[],
+        entity_configurations=[],
         completed_results=[],
     )
 
@@ -382,7 +390,7 @@ def test_context_sharing_empty_context():
         current_task=task,
         all_tasks=[task],
         task_index=0,
-        agent_configurations=[],
+        entity_configurations=[],
         completed_results=[],
     )
 

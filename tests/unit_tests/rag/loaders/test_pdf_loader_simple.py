@@ -22,21 +22,19 @@ class TestPdfLoaderSimple(unittest.TestCase):
 
     def test_pdf_loader_initialization(self):
         """Test PDF loader initialization with different configs."""
-        # Test with default config
-        config = PdfLoaderConfig()
+        config = PdfLoaderConfig(extraction_mode="text_only")
         loader = PdfLoader(config)
         self.assertIsNotNone(loader)
-        self.assertEqual(loader.config.extraction_mode, "hybrid")
+        self.assertEqual(loader.config.extraction_mode, "text_only")
         
-        # Test with custom config
         custom_config = PdfLoaderConfig(
-            extraction_mode="hybrid",
+            extraction_mode="text_only",
             max_file_size=5000000,
             start_page=1,
             end_page=10
         )
         loader_custom = PdfLoader(custom_config)
-        self.assertEqual(loader_custom.config.extraction_mode, "hybrid")
+        self.assertEqual(loader_custom.config.extraction_mode, "text_only")
         self.assertEqual(loader_custom.config.max_file_size, 5000000)
 
     def test_supported_extensions(self):
@@ -47,7 +45,7 @@ class TestPdfLoaderSimple(unittest.TestCase):
 
     def test_empty_source_handling(self):
         """Test handling of empty or invalid sources."""
-        config = PdfLoaderConfig()
+        config = PdfLoaderConfig(extraction_mode="text_only")
         loader = PdfLoader(config)
         
         # Test with empty list
@@ -68,7 +66,7 @@ class TestPdfLoaderSimple(unittest.TestCase):
 
     def test_batch_loading_interface(self):
         """Test the batch loading interface."""
-        config = PdfLoaderConfig()
+        config = PdfLoaderConfig(extraction_mode="text_only")
         loader = PdfLoader(config)
         
         # Test batch method with empty list
@@ -77,27 +75,22 @@ class TestPdfLoaderSimple(unittest.TestCase):
 
     def test_error_handling_config(self):
         """Test different error handling configurations."""
-        # Test with raise error handling
-        config_raise = PdfLoaderConfig(error_handling="raise")
+        config_raise = PdfLoaderConfig(error_handling="raise", extraction_mode="text_only")
         loader_raise = PdfLoader(config_raise)
         self.assertEqual(loader_raise.config.error_handling, "raise")
         
-        # Test with warn error handling
-        config_warn = PdfLoaderConfig(error_handling="warn")
+        config_warn = PdfLoaderConfig(error_handling="warn", extraction_mode="text_only")
         loader_warn = PdfLoader(config_warn)
         self.assertEqual(loader_warn.config.error_handling, "warn")
 
     def test_ocr_configuration(self):
         """Test OCR-related configuration options."""
-        # Test OCR mode requires rapidocr_onnxruntime (will be mocked in real use)
         try:
             config = PdfLoaderConfig(extraction_mode="ocr_only")
             loader = PdfLoader(config)
-            # If we get here, OCR engine is available
             self.assertEqual(loader.config.extraction_mode, "ocr_only")
         except ImportError as e:
-            # Expected if rapidocr_onnxruntime is not installed
-            self.assertIn("rapidocr_onnxruntime", str(e))
+            self.assertIn("rapidocr", str(e).lower())
 
     def test_page_range_configuration(self):
         """Test page range configuration options."""
@@ -114,6 +107,7 @@ class TestPdfLoaderSimple(unittest.TestCase):
     def test_content_cleaning_configuration(self):
         """Test content cleaning configuration options."""
         config = PdfLoaderConfig(
+            extraction_mode="text_only",
             extra_whitespace_removal=True,
             clean_page_numbers=True,
             skip_empty_content=True

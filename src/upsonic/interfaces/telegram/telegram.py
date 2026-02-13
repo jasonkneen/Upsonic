@@ -15,8 +15,10 @@ This module provides a comprehensive Telegram Bot integration with support for:
 Based on the official Telegram Bot API: https://core.telegram.org/bots/api
 """
 
+import asyncio
 import os
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Union
+import time
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Set, Union
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
 
@@ -87,6 +89,8 @@ class TelegramInterface(Interface):
         process_callback_queries: bool = True,
         typing_indicator: bool = True,
         max_message_length: int = 4096,
+        stream: bool = False,
+        heartbeat_chat_id: Optional[int] = None,
     ):
         """
         Initialize the Telegram interface.
@@ -118,6 +122,10 @@ class TelegramInterface(Interface):
             process_callback_queries: Whether to process inline keyboard callbacks (default: True).
             typing_indicator: Whether to send typing indicator before responding (default: True).
             max_message_length: Maximum message length before splitting (default: 4096).
+            stream: Whether to stream agent responses in real-time by progressively
+                   editing the message as tokens arrive. Default: False.
+            heartbeat_chat_id: Telegram chat ID to send heartbeat responses to.
+                Required when the agent has heartbeat enabled.
         """
         super().__init__(
             agent=agent,
@@ -151,13 +159,17 @@ class TelegramInterface(Interface):
             info_log(f"Telegram whitelist enabled with {len(self._allowed_user_ids)} allowed user(s)")
         
         # Behavior options
-        self.reply_in_groups = reply_in_groups
-        self.reply_in_channels = reply_in_channels
-        self.process_edited_messages = process_edited_messages
-        self.process_callback_queries = process_callback_queries
-        self.typing_indicator = typing_indicator
-        
-        info_log(f"Telegram interface initialized: mode={self.mode.value}, agent={agent}")
+        self.reply_in_groups: bool = reply_in_groups
+        self.reply_in_channels: bool = reply_in_channels
+        self.process_edited_messages: bool = process_edited_messages
+        self.process_callback_queries: bool = process_callback_queries
+        self.typing_indicator: bool = typing_indicator
+        self.stream: bool = stream
+        self.heartbeat_chat_id: Optional[int] = heartbeat_chat_id
+        self._heartbeat_task: Optional[asyncio.Task[None]] = None
+        self._auto_heartbeat_chat_id: Optional[int] = None
+
+        info_log(f"Telegram interface initialized: mode={self.mode.value}, stream={self.stream}, agent={agent}")
     
     def is_user_allowed(self, user_id: int) -> bool:
         """
@@ -301,6 +313,10 @@ class TelegramInterface(Interface):
         async def auto_set_webhook():
             """Automatically set webhook on startup if webhook_url is configured."""
             await self._auto_set_webhook()
+
+        @router.on_event("startup")
+        async def start_heartbeat() -> None:
+            self._start_heartbeat()
         
         info_log("Telegram routes attached with prefix: /telegram")
         return router
@@ -390,7 +406,10 @@ class TelegramInterface(Interface):
         text = message.text or message.caption or ""
         
         info_log(f"Processing Telegram message from {user_id} in {chat_id} (mode={self.mode.value}): {text[:50]}...")
-        
+
+        if self._auto_heartbeat_chat_id is None:
+            self._auto_heartbeat_chat_id = chat_id
+
         # Check for reset command in CHAT mode
         if self.is_chat_mode() and self.is_reset_command(text):
             await self._handle_reset_command(chat_id, user_id, message.message_thread_id)
@@ -440,7 +459,6 @@ class TelegramInterface(Interface):
         was_reset = await self.areset_chat_session(str(user_id))
         
         if was_reset:
-            # Check if agent has workspace and execute greeting
             if self.agent.workspace:
                 greeting_result = await self.agent.execute_workspace_greeting_async()
                 if greeting_result:
@@ -458,6 +476,151 @@ class TelegramInterface(Interface):
             message_thread_id=message_thread_id,
         )
     
+    async def _stream_to_telegram(
+        self,
+        chat_id: int,
+        stream_iterator: AsyncIterator[str],
+        reply_to_message_id: Optional[int] = None,
+        message_thread_id: Optional[int] = None,
+    ) -> None:
+        """
+        Stream agent response to Telegram by sending an initial message and
+        progressively editing it with accumulated text chunks.
+
+        Telegram rate-limits editMessageText to ~30 edits per minute per chat,
+        so updates are throttled to ~1 second intervals.
+
+        Args:
+            chat_id: Telegram chat ID to send message to
+            stream_iterator: Async iterator yielding text chunks from the agent
+            reply_to_message_id: Original message ID to reply to
+            message_thread_id: Message thread ID (for forum topics)
+        """
+        accumulated_text: str = ""
+        sent_message_id: Optional[int] = None
+        last_update_time: float = 0.0
+        update_interval: float = 1.0
+
+        async for chunk in stream_iterator:
+            if not chunk:
+                continue
+
+            accumulated_text += chunk
+
+            now = time.monotonic()
+
+            if sent_message_id is None:
+                result = await self.telegram_tools.send_message(
+                    chat_id=chat_id,
+                    text=accumulated_text,
+                    reply_to_message_id=reply_to_message_id,
+                    message_thread_id=message_thread_id,
+                    parse_mode=None,
+                )
+                if result:
+                    sent_message_id = result.get("message_id")
+                last_update_time = now
+            elif now - last_update_time >= update_interval:
+                if sent_message_id:
+                    await self.telegram_tools.edit_message_text(
+                        text=accumulated_text,
+                        chat_id=chat_id,
+                        message_id=sent_message_id,
+                        parse_mode=None,
+                    )
+                last_update_time = now
+
+        if sent_message_id and accumulated_text:
+            await self.telegram_tools.edit_message_text(
+                text=accumulated_text,
+                chat_id=chat_id,
+                message_id=sent_message_id,
+                parse_mode=None,
+            )
+        elif not sent_message_id and accumulated_text:
+            await self.telegram_tools.send_message(
+                chat_id=chat_id,
+                text=accumulated_text,
+                reply_to_message_id=reply_to_message_id,
+                message_thread_id=message_thread_id,
+            )
+
+    def _resolve_heartbeat_chat_id(self) -> Optional[int]:
+        """
+        Resolve the Telegram chat ID for heartbeat delivery.
+
+        Priority:
+            1. Explicitly set ``heartbeat_chat_id``
+            2. Auto-detected chat ID from the first incoming message
+
+        Returns:
+            Chat ID integer, or None if no target is known yet.
+        """
+        if self.heartbeat_chat_id is not None:
+            return self.heartbeat_chat_id
+        return self._auto_heartbeat_chat_id
+
+    async def _heartbeat_loop(self) -> None:
+        """
+        Background coroutine that periodically executes the agent's heartbeat
+        and sends the result to the resolved Telegram chat.
+
+        The target chat ID is resolved each tick so that an auto-detected
+        chat ID (captured from the first incoming message) can be picked up
+        even when no explicit ``heartbeat_chat_id`` was provided.
+        """
+        from upsonic.agent.autonomous_agent.autonomous_agent import AutonomousAgent
+
+        if not isinstance(self.agent, AutonomousAgent):
+            return
+        if not self.agent.heartbeat:
+            return
+
+        period_seconds: int = self.agent.heartbeat_period * 60
+
+        while True:
+            await asyncio.sleep(period_seconds)
+
+            target_chat_id: Optional[int] = self._resolve_heartbeat_chat_id()
+            if target_chat_id is None:
+                debug_log("Heartbeat tick skipped: no target chat_id known yet")
+                continue
+
+            try:
+                result: Optional[str] = await self.agent.aexecute_heartbeat()
+                if result:
+                    await self.telegram_tools.send_message(
+                        chat_id=target_chat_id,
+                        text=result,
+                    )
+                    info_log(f"Heartbeat response sent to Telegram chat {target_chat_id}")
+            except Exception as exc:
+                error_log(f"Telegram heartbeat error: {exc}")
+
+    def _start_heartbeat(self) -> None:
+        """
+        Start the heartbeat background task if conditions are met.
+
+        Creates an asyncio task running ``_heartbeat_loop``.  The loop itself
+        handles the case where no target chat ID is known yet (skips the tick
+        until a chat ID is auto-detected from incoming traffic or explicitly
+        set).  Safe to call multiple times.
+        """
+        from upsonic.agent.autonomous_agent.autonomous_agent import AutonomousAgent
+
+        if not isinstance(self.agent, AutonomousAgent):
+            return
+        if not self.agent.heartbeat:
+            return
+        if self._heartbeat_task is not None and not self._heartbeat_task.done():
+            return
+
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+        info_log(
+            f"Telegram heartbeat started: period={self.agent.heartbeat_period}min, "
+            f"chat_id={self.heartbeat_chat_id or '(auto-detect)'}"
+        )
+
     async def _process_text_message(
         self,
         message: TelegramMessage,
@@ -485,11 +648,28 @@ class TelegramInterface(Interface):
         chat_id: int,
         message: TelegramMessage,
     ) -> None:
-        """Process message in TASK mode."""
+        """
+        Process message in TASK mode.
+        
+        When streaming is enabled, uses agent.astream() and progressively
+        edits the Telegram message. Otherwise, uses agent.do_async() and
+        sends the complete response.
+        """
         from upsonic.tasks.tasks import Task
         
         task = Task(text)
-        await self.agent.do_async(task)
+
+        if self.stream:
+            stream_iterator: AsyncIterator[str] = await self.agent.astream(task, events=False)
+            await self._stream_to_telegram(
+                chat_id=chat_id,
+                stream_iterator=stream_iterator,
+                reply_to_message_id=message.message_id,
+                message_thread_id=message.message_thread_id,
+            )
+            return
+
+        await self.agent.print_do(task)
         
         run_result = self.agent.get_run_output()
         if not run_result:
@@ -501,7 +681,6 @@ class TelegramInterface(Interface):
         
         if model_response:
             if hasattr(model_response, "thinking") and model_response.thinking:
-                # Optionally send reasoning
                 pass
             response_text = model_response.text
         elif run_result.output:
@@ -522,9 +701,26 @@ class TelegramInterface(Interface):
         chat_id: int,
         message: TelegramMessage,
     ) -> None:
-        """Process message in CHAT mode."""
+        """
+        Process message in CHAT mode.
+        
+        When streaming is enabled, uses chat.stream() and progressively
+        edits the Telegram message. Otherwise, uses chat.invoke() and
+        sends the complete response.
+        """
         try:
             chat = await self.aget_chat_session(str(user_id))
+
+            if self.stream:
+                stream_iterator: AsyncIterator[str] = chat.stream(text, events=False)
+                await self._stream_to_telegram(
+                    chat_id=chat_id,
+                    stream_iterator=stream_iterator,
+                    reply_to_message_id=message.message_id,
+                    message_thread_id=message.message_thread_id,
+                )
+                return
+
             response_text = await chat.invoke(text)
             
             if response_text:
@@ -972,7 +1168,7 @@ class TelegramInterface(Interface):
             
             if self.is_task_mode():
                 try:
-                    await self.agent.do_async(task)
+                    await self.agent.print_do(task)
                     
                     run_result = self.agent.get_run_output()
                     if run_result:
@@ -1056,7 +1252,7 @@ class TelegramInterface(Interface):
             if self.is_task_mode():
                 from upsonic.tasks.tasks import Task
                 task = Task(text)
-                await self.agent.do_async(task)
+                await self.agent.print_do(task)
                 
                 run_result = self.agent.get_run_output()
                 if run_result and run_result.output:

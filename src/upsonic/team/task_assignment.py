@@ -1,105 +1,136 @@
 """
-Task assignment module for selecting appropriate agents for tasks in multi-agent workflows.
+Task assignment module for selecting appropriate entities for tasks in multi-agent workflows.
+Supports both Agent and Team entities.
 """
+from __future__ import annotations
 
 from pydantic import BaseModel
 
-from typing import List, Any, Optional, Dict
+from typing import List, Any, Optional, Dict, Union, TYPE_CHECKING
 from upsonic.tasks.tasks import Task
 
-from upsonic.agent.agent import Agent
+if TYPE_CHECKING:
+    from upsonic.agent.agent import Agent
+    from upsonic.team.team import Team
 
 
 class TaskAssignment:
-    """Handles task assignment and agent selection in multi-agent workflows."""
+    """Handles task assignment and entity selection in multi-agent workflows."""
     
-    def __init__(self):
-        """Initialize the task assignment handler."""
+    def __init__(self) -> None:
         pass
     
-    def prepare_agents_registry(self, agent_configurations: List[Any]) -> tuple[Dict[str, Any], List[str]]:
+    def prepare_entities_registry(
+        self, entity_configurations: List[Union[Agent, Team]]
+    ) -> tuple[Dict[str, Union[Agent, Team]], List[str]]:
         """
-        Prepare a registry of agents indexed by their names.
+        Prepare a registry of entities indexed by their IDs.
         
         Args:
-            agent_configurations: List of agent configurations
+            entity_configurations: List of Agent and/or Team instances.
             
         Returns:
-            Tuple of (agents_dict, agent_names_list)
+            Tuple of (entities_dict, entity_names_list)
         """
-        agents_registry = {}
+        entities_registry: Dict[str, Union[Agent, Team]] = {}
         
-        for agent in agent_configurations:
-            agent_name = agent.get_agent_id()
-            agents_registry[agent_name] = agent
+        for entity in entity_configurations:
+            entity_name: str = entity.get_entity_id()
+            entities_registry[entity_name] = entity
         
-        agent_names = list(agents_registry.keys())
-        return agents_registry, agent_names
+        entity_names: List[str] = list(entities_registry.keys())
+        return entities_registry, entity_names
     
-    async def select_agent_for_task(
+    def _find_selection_model(self, entity_configurations: List[Union[Agent, Team]]) -> Optional[Any]:
+        """
+        Find the first usable model from the entity list for the selection agent.
+        Traverses Agent-like entities first, then falls back to Team models.
+        
+        Args:
+            entity_configurations: List of Agent and/or Team instances.
+            
+        Returns:
+            A model identifier or None.
+        """
+        for entity in entity_configurations:
+            if not hasattr(entity, 'entities') and hasattr(entity, 'model') and entity.model:
+                return entity.model
+        for entity in entity_configurations:
+            if hasattr(entity, 'entities') and hasattr(entity, 'model') and entity.model:
+                return entity.model
+        for entity in entity_configurations:
+            if hasattr(entity, '_find_first_model'):
+                nested_model = entity._find_first_model()
+                if nested_model:
+                    return nested_model
+        return None
+
+    async def select_entity_for_task(
         self, 
         current_task: Task, 
         context: List[Any], 
-        agents_registry: Dict[str, Any], 
-        agent_names: List[str], 
-        agent_configurations: List[Any]
+        entities_registry: Dict[str, Union[Agent, Team]], 
+        entity_names: List[str], 
+        entity_configurations: List[Union[Agent, Team]]
     ) -> Optional[str]:
         """
-        Select the most appropriate agent for a given task.
+        Select the most appropriate entity for a given task.
         
         Args:
-            current_task: The task that needs an agent
-            context: Context for agent selection
-            agents_registry: Dictionary of available agents
-            agent_names: List of agent names
-            agent_configurations: Original agent configurations
+            current_task: The task that needs an entity.
+            context: Context for entity selection.
+            entities_registry: Dictionary of available entities.
+            entity_names: List of entity names.
+            entity_configurations: Original entity configurations.
             
         Returns:
-            Selected agent name or None if selection fails
+            Selected entity name or None if selection fails.
         """
+        from upsonic.agent.agent import Agent as AgentClass
+
         if current_task.agent is not None:
-            for agent_name, agent_instance in agents_registry.items():
-                if agent_instance == current_task.agent:
-                    return agent_name
+            for entity_name, entity_instance in entities_registry.items():
+                if entity_instance == current_task.agent:
+                    return entity_name
             
-            predefined_agent_id = getattr(current_task.agent, 'get_agent_id', lambda: None)()
-            if predefined_agent_id and predefined_agent_id in agents_registry:
-                return predefined_agent_id
+            predefined_entity_id: Optional[str] = getattr(current_task.agent, 'get_entity_id', lambda: None)()
+            if predefined_entity_id and predefined_entity_id in entities_registry:
+                return predefined_entity_id
         
-        class SelectedAgent(BaseModel):
+        class SelectedEntity(BaseModel):
             selected_agent: str
         
-        max_attempts = 3
-        attempts = 0
-        if not agent_configurations or not hasattr(agent_configurations[0], 'model'):
-            raise ValueError("Cannot perform agent selection: The first agent in the team must have a valid model.")
-        
-        selection_model = agent_configurations[0].model
+        max_attempts: int = 3
+        attempts: int = 0
+
+        selection_model = self._find_selection_model(entity_configurations)
+        if not selection_model:
+            raise ValueError("Cannot perform entity selection: No entity in the team has a valid model.")
 
         while attempts < max_attempts:
             selecting_task = Task(
-                description=f"Select the most appropriate agent from the available agents to handle the current task. Consider all tasks in the workflow and previous results to make the best choice. Return only the exact agent name from the list.",
+                description="Select the most appropriate agent or team from the available entities to handle the current task. Consider all tasks in the workflow and previous results to make the best choice. Return only the exact entity name from the list.",
                 attachments=current_task.attachments, 
-                response_format=SelectedAgent, 
+                response_format=SelectedEntity, 
                 context=context
             )
             
-            await Agent(model=selection_model).do_async(selecting_task)
+            await AgentClass(model=selection_model).do_async(selecting_task)
 
-            if not isinstance(selecting_task.response, SelectedAgent):
+            if not isinstance(selecting_task.response, SelectedEntity):
                 attempts += 1
                 continue
 
-            selected_name = selecting_task.response.selected_agent
+            selected_name: str = selecting_task.response.selected_agent
             
-            if selected_name in agents_registry:
+            if selected_name in entities_registry:
                 return selected_name
             
-            for agent_name in agent_names:
-                if (agent_name.lower() in selected_name.lower() or 
-                    selected_name.lower() in agent_name.lower()):
-                    return agent_name
+            for entity_name in entity_names:
+                if (entity_name.lower() in selected_name.lower() or 
+                    selected_name.lower() in entity_name.lower()):
+                    return entity_name
             
             attempts += 1
         
-        return agent_names[0] if agent_names else None 
+        return entity_names[0] if entity_names else None

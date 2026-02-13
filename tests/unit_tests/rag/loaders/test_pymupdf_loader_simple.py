@@ -107,15 +107,12 @@ class TestPyMuPDFLoaderSimple(unittest.TestCase):
 
     def test_ocr_configuration(self):
         """Test OCR-related configuration options."""
-        # Test OCR mode requires rapidocr_onnxruntime (will be mocked in real use)
         try:
             config = PyMuPDFLoaderConfig(extraction_mode="ocr_only")
             loader = PyMuPDFLoader(config)
-            # If we get here, OCR engine is available
             self.assertEqual(loader.config.extraction_mode, "ocr_only")
         except ImportError as e:
-            # Expected if rapidocr_onnxruntime is not installed
-            self.assertIn("rapidocr_onnxruntime", str(e))
+            self.assertIn("rapidocr", str(e).lower())
 
     def test_page_range_configuration(self):
         """Test page range configuration options."""

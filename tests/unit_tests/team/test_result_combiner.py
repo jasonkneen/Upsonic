@@ -388,7 +388,7 @@ async def test_result_combiner_debug_setting():
         mock_agent_class.return_value = mock_agent
 
         await combiner_fallback.combine_results(
-            results, response_format=str, agents=[agent]
+            results, response_format=str, entities=[agent]
         )
 
         # Verify Agent was created with correct debug setting

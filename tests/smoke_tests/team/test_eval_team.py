@@ -32,7 +32,7 @@ async def test_team_accuracy_evaluation(capsys):
     
     # Create team
     team = Team(
-        agents=[researcher, writer],
+        entities=[researcher, writer],
         mode="sequential"
     )
     
@@ -119,7 +119,7 @@ async def test_team_performance_evaluation(capsys):
     
     # Create simple team
     team = Team(
-        agents=[analyst],
+        entities=[analyst],
         mode="sequential"
     )
     
@@ -198,7 +198,7 @@ def test_team_evaluator_validation():
     """Test Team evaluator parameter validation."""
     
     team = Team(
-        agents=[Agent(model="openai/gpt-4o-mini", name="Agent1")],
+        entities=[Agent(model="openai/gpt-4o-mini", name="Agent1")],
         mode="sequential"
     )
     

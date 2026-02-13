@@ -2,7 +2,9 @@ import unittest
 import pytest
 import uuid
 import os
-import pytest
+
+fastembed = pytest.importorskip("fastembed", reason="fastembed requires onnxruntime which is not available on Python <3.11")
+
 from upsonic.text_splitter.semantic import SemanticChunker, SemanticChunkingConfig
 from upsonic.schemas.data_models import Document, Chunk
 from upsonic.embeddings.fastembed_provider import FastEmbedProvider

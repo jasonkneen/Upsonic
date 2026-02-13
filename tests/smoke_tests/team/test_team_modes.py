@@ -39,7 +39,7 @@ async def test_sequential_mode_agent_name_logging():
     )
     
     team = Team(
-        agents=[researcher, writer],
+        entities=[researcher, writer],
         mode="sequential"
     )
     
@@ -91,7 +91,7 @@ async def test_route_mode_selected_agent_logging():
     )
     
     team = Team(
-        agents=[legal_expert, tech_expert],
+        entities=[legal_expert, tech_expert],
         mode="route",
         model="openai/gpt-4o"
     )
@@ -135,7 +135,7 @@ async def test_coordinate_mode_agent_name_logging():
     )
     
     team = Team(
-        agents=[data_analyst, report_writer],
+        entities=[data_analyst, report_writer],
         mode="coordinate",
         model="openai/gpt-4o"
     )

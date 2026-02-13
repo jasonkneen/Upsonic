@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Type, Union, TYPE_CHECKING
 
@@ -143,6 +144,9 @@ class AutonomousAgent(Agent):
         reasoning_format: Optional[Literal["hidden", "raw", "parsed"]] = None,
         culture: Optional["Culture"] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        heartbeat: bool = False,
+        heartbeat_period: int = 30,
+        heartbeat_message: str = "",
     ) -> None:
         """
         Initialize AutonomousAgent with default storage, memory, and tools.
@@ -175,6 +179,13 @@ class AutonomousAgent(Agent):
             shell_timeout: Default timeout for shell commands in seconds (default: 120)
             shell_max_output: Maximum output length before truncation (default: 10000)
             blocked_commands: List of command patterns to block for security
+            
+            # Heartbeat configuration
+            heartbeat: Enable periodic heartbeat execution (default: False).
+                When True, interfaces will periodically send heartbeat_message to
+                this agent and forward the response through the interface channel.
+            heartbeat_period: Heartbeat interval in minutes (default: 30).
+            heartbeat_message: Message to send to the agent on each heartbeat tick.
             
             # Standard Agent parameters - see Agent class for full documentation
         """
@@ -254,6 +265,10 @@ class AutonomousAgent(Agent):
             enable_shell=enable_shell,
         )
         
+        self.heartbeat: bool = heartbeat
+        self.heartbeat_period: int = heartbeat_period
+        self.heartbeat_message: str = heartbeat_message
+        
         super().__init__(
             model=model,
             name=name,
@@ -332,10 +347,10 @@ class AutonomousAgent(Agent):
         Returns:
             The effective system prompt to use
         """
-        # If user provides custom prompt, use it directly
+        # If user provides custom prompt, wrap and return
         if user_system_prompt is not None:
-            return user_system_prompt
-        
+            return f"<AutonomousAgent>\n{user_system_prompt}\n</AutonomousAgent>"
+
         # If no tools enabled, no special prompt needed
         if not enable_filesystem and not enable_shell:
             return None
@@ -436,8 +451,9 @@ You can execute commands in the workspace directory:
         
         # Closing
         prompt_parts.append("\nWhen given a task, think about what tools you need and use them methodically to accomplish the goal.")
-        
-        return "\n".join(prompt_parts)
+
+        body: str = "\n".join(prompt_parts)
+        return f"<AutonomousAgent>\n{body}\n</AutonomousAgent>"
     
     @property
     def autonomous_storage(self) -> Optional["Storage"]:
@@ -459,6 +475,57 @@ You can execute commands in the workspace directory:
         if self.filesystem_toolkit:
             self.filesystem_toolkit.reset_read_tracking()
     
+    async def aexecute_heartbeat(self) -> Optional[str]:
+        """
+        Execute the heartbeat message as a task and return the agent's response.
+        
+        Sends ``self.heartbeat_message`` to this agent via ``do_async`` and
+        extracts the textual response.  Returns ``None`` when heartbeat is
+        disabled, the message is empty, or the agent produces no output.
+        
+        Returns:
+            The agent's text response, or None.
+        """
+        if not self.heartbeat or not self.heartbeat_message:
+            return None
+
+        from upsonic.tasks.tasks import Task
+
+        task: Task = Task(self.heartbeat_message)
+        await self.do_async(task, _print_method_default=False)
+
+        run_result = self.get_run_output()
+        if not run_result:
+            return None
+
+        model_response = run_result.get_last_model_response()
+        if model_response and hasattr(model_response, "text") and model_response.text:
+            return str(model_response.text)
+        if run_result.output:
+            return str(run_result.output)
+        return None
+
+    def execute_heartbeat(self) -> Optional[str]:
+        """
+        Execute the heartbeat message as a task and return the agent's response (sync).
+        
+        Synchronous wrapper around :meth:`aexecute_heartbeat`.
+        
+        Returns:
+            The agent's text response, or None.
+        """
+        if not self.heartbeat or not self.heartbeat_message:
+            return None
+
+        try:
+            loop = asyncio.get_running_loop()
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(asyncio.run, self.aexecute_heartbeat())
+                return future.result()
+        except RuntimeError:
+            return asyncio.run(self.aexecute_heartbeat())
+
     def __repr__(self) -> str:
         """String representation of AutonomousAgent."""
         return (

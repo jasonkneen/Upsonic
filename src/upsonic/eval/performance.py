@@ -116,7 +116,7 @@ class PerformanceEvaluator:
             await agent.run_async(verbose=False, show_progress=False)
         elif isinstance(agent, Team):
             await agent.multi_agent_async(
-                agent_configurations=agent.agents,
+                agent_configurations=agent.entities,
                 tasks=task,
             )
 

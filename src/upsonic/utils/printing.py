@@ -1012,15 +1012,7 @@ def connected_to_server(server_type: str, status: str, total_time: float = None)
     spacing()
 
 def call_end(result: Any, model: Any, response_format: str, start_time: float, end_time: float, usage: dict, tool_usage: list, debug: bool = False, price_id: str = None, print_output: bool = False):
-    # Only display output when print_output is enabled
-    if not print_output:
-        return
-    
-    # Display tool calls in magnificent table
-    if tool_usage and len(tool_usage) > 0:
-        display_tool_calls_table(tool_usage, debug=debug)
-    
-    # Handle price_id tracking
+    # Handle price_id tracking regardless of print_output
     if price_id:
         estimated_cost = get_estimated_cost(usage['input_tokens'], usage['output_tokens'], model)
         if price_id not in price_id_summary:
@@ -1041,6 +1033,13 @@ def call_end(result: Any, model: Any, response_format: str, start_time: float, e
         except Exception as e:
             if debug:
                 pass  # Error calculating cost
+
+    if not print_output:
+        return
+    
+    # Display tool calls in magnificent table
+    if tool_usage and len(tool_usage) > 0:
+        display_tool_calls_table(tool_usage, debug=debug)
     
     # Display LLM result in magnificent table
     # Calculate execution time, ensuring both timestamps are valid
@@ -1113,15 +1112,7 @@ def call_end(result: Any, model: Any, response_format: str, start_time: float, e
 
 
 def agent_end(result: Any, model: Any, response_format: str, start_time: float, end_time: float, usage: dict, tool_usage: list, tool_count: int, context_count: int, debug: bool = False, price_id:str = None, print_output: bool = False):
-    # Only display output when print_output is enabled
-    if not print_output:
-        return
-    
-    # Display tool calls in magnificent table
-    if tool_usage and len(tool_usage) > 0:
-        display_tool_calls_table(tool_usage, debug=debug)
-    
-    # Handle price_id tracking
+    # Handle price_id tracking regardless of print_output
     if price_id:
         estimated_cost = get_estimated_cost(usage['input_tokens'], usage['output_tokens'], model)
         if price_id not in price_id_summary:
@@ -1141,6 +1132,13 @@ def agent_end(result: Any, model: Any, response_format: str, start_time: float, 
         except Exception as e:
             if debug:
                 console.print(f"[bold red]Warning: Could not parse cost value: {estimated_cost}. Error: {e}[/bold red]")
+
+    if not print_output:
+        return
+    
+    # Display tool calls in magnificent table
+    if tool_usage and len(tool_usage) > 0:
+        display_tool_calls_table(tool_usage, debug=debug)
     
     # Display LLM result in magnificent table
     execution_time = end_time - start_time

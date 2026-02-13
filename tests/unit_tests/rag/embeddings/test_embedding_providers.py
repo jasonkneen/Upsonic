@@ -323,6 +323,7 @@ class TestEmbeddingProviders:
     
     def test_fastembed_embedding_creation(self, mock_fastembed_model):
         """Test FastEmbed provider creation."""
+        pytest.importorskip("fastembed", reason="fastembed requires onnxruntime which is not available on Python <3.11")
         with patch('upsonic.embeddings.fastembed_provider.TextEmbedding', return_value=mock_fastembed_model):
             config = FastEmbedConfig(
                 model_name="BAAI/bge-small-en-v1.5"
@@ -609,6 +610,7 @@ class TestEmbeddingProviderFactory:
     
     def test_create_embedding_provider_fastembed(self):
         """Test creating FastEmbed provider via factory."""
+        pytest.importorskip("fastembed", reason="fastembed requires onnxruntime which is not available on Python <3.11")
         with patch('upsonic.embeddings.fastembed_provider.TextEmbedding'):
             provider = create_embedding_provider("fastembed", model_name="BAAI/bge-small-en-v1.5")
             

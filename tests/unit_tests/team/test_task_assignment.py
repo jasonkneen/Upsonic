@@ -28,7 +28,7 @@ class MockAgent:
         self.agent_id_ = f"agent-{name.lower()}"
         self.agent = None
 
-    def get_agent_id(self) -> str:
+    def get_entity_id(self) -> str:
         return self.name if self.name else f"Agent_{self.agent_id_[:8]}"
 
 
@@ -61,9 +61,9 @@ def test_task_assignment_initialization():
 # ============================================================================
 
 
-def test_task_assignment_prepare_agents_registry():
+def test_task_assignment_prepare_entities_registry():
     """
-    Test prepare_agents_registry method.
+    Test prepare_entities_registry method.
 
     This tests that:
     1. Agents registry is created correctly
@@ -80,7 +80,7 @@ def test_task_assignment_prepare_agents_registry():
     agents = [agent1, agent2, agent3]
 
     assignment = TaskAssignment()
-    registry, names = assignment.prepare_agents_registry(agents)
+    registry, names = assignment.prepare_entities_registry(agents)
 
     assert isinstance(registry, dict), "Registry should be a dict"
     assert isinstance(names, list), "Names should be a list"
@@ -121,18 +121,18 @@ async def test_task_assignment_assign_task():
     agents = [agent1, agent2]
 
     assignment = TaskAssignment()
-    registry, names = assignment.prepare_agents_registry(agents)
+    registry, names = assignment.prepare_entities_registry(agents)
 
     # Test with predefined agent
     task_with_agent = Task(description="Task with agent")
     task_with_agent.agent = agent1
 
-    selected = await assignment.select_agent_for_task(
+    selected = await assignment.select_entity_for_task(
         current_task=task_with_agent,
         context=[],
-        agents_registry=registry,
-        agent_names=names,
-        agent_configurations=agents,
+        entities_registry=registry,
+        entity_names=names,
+        entity_configurations=agents,
     )
 
     assert selected == "Agent1", "Should select predefined agent"
@@ -149,7 +149,7 @@ async def test_task_assignment_assign_task():
     mock_task_response = Task(description="Selection task")
     mock_task_response._response = SelectedAgent(selected_agent="Agent2")
 
-    with patch("upsonic.team.task_assignment.Agent") as mock_agent_class:
+    with patch("upsonic.agent.agent.Agent") as mock_agent_class:
         mock_agent_instance = Mock()
         mock_agent_instance.do_async = AsyncMock()
 
@@ -160,12 +160,12 @@ async def test_task_assignment_assign_task():
         mock_agent_instance.do_async = AsyncMock(side_effect=mock_do_async)
         mock_agent_class.return_value = mock_agent_instance
 
-        selected = await assignment.select_agent_for_task(
+        selected = await assignment.select_entity_for_task(
             current_task=task_no_agent,
             context=[],
-            agents_registry=registry,
-            agent_names=names,
-            agent_configurations=agents,
+            entities_registry=registry,
+            entity_names=names,
+            entity_configurations=agents,
         )
 
         # Should select an agent (may be Agent2 or fallback to first)
@@ -198,7 +198,7 @@ async def test_task_assignment_route_task():
     agents = [agent1, agent2]
 
     assignment = TaskAssignment()
-    registry, names = assignment.prepare_agents_registry(agents)
+    registry, names = assignment.prepare_entities_registry(agents)
 
     task = Task(description="Research task")
     context = [task, agent1, agent2]
@@ -209,7 +209,7 @@ async def test_task_assignment_route_task():
     class SelectedAgent(BaseModel):
         selected_agent: str
 
-    with patch("upsonic.team.task_assignment.Agent") as mock_agent_class:
+    with patch("upsonic.agent.agent.Agent") as mock_agent_class:
         mock_agent_instance = Mock()
 
         def mock_do_async(task):
@@ -219,12 +219,12 @@ async def test_task_assignment_route_task():
         mock_agent_instance.do_async = AsyncMock(side_effect=mock_do_async)
         mock_agent_class.return_value = mock_agent_instance
 
-        selected = await assignment.select_agent_for_task(
+        selected = await assignment.select_entity_for_task(
             current_task=task,
             context=context,
-            agents_registry=registry,
-            agent_names=names,
-            agent_configurations=agents,
+            entities_registry=registry,
+            entity_names=names,
+            entity_configurations=agents,
         )
 
         assert selected in names, "Should select a valid agent"
@@ -257,7 +257,7 @@ async def test_task_assignment_agent_name_matching():
     agents = [agent1, agent2]
 
     assignment = TaskAssignment()
-    registry, names = assignment.prepare_agents_registry(agents)
+    registry, names = assignment.prepare_entities_registry(agents)
 
     task = Task(description="Task")
 
@@ -267,7 +267,7 @@ async def test_task_assignment_agent_name_matching():
         selected_agent: str
 
     # Test case-insensitive matching
-    with patch("upsonic.team.task_assignment.Agent") as mock_agent_class:
+    with patch("upsonic.agent.agent.Agent") as mock_agent_class:
         mock_agent_instance = Mock()
 
         def mock_do_async(task):
@@ -277,12 +277,12 @@ async def test_task_assignment_agent_name_matching():
         mock_agent_instance.do_async = AsyncMock(side_effect=mock_do_async)
         mock_agent_class.return_value = mock_agent_instance
 
-        selected = await assignment.select_agent_for_task(
+        selected = await assignment.select_entity_for_task(
             current_task=task,
             context=[],
-            agents_registry=registry,
-            agent_names=names,
-            agent_configurations=agents,
+            entities_registry=registry,
+            entity_names=names,
+            entity_configurations=agents,
         )
 
         # Should match "ResearcherAgent" due to case-insensitive matching
@@ -312,22 +312,22 @@ async def test_task_assignment_error_handling():
 
     # Test with empty agents list (should raise ValueError)
     assignment_empty = TaskAssignment()
-    registry_empty, names_empty = assignment_empty.prepare_agents_registry([])
+    registry_empty, names_empty = assignment_empty.prepare_entities_registry([])
 
     task_empty = Task(description="Task")
 
-    with pytest.raises(ValueError, match="must have a valid model"):
-        await assignment_empty.select_agent_for_task(
+    with pytest.raises(ValueError, match="No entity in the team has a valid model"):
+        await assignment_empty.select_entity_for_task(
             current_task=task_empty,
             context=[],
-            agents_registry=registry_empty,
-            agent_names=names_empty,
-            agent_configurations=[],
+            entities_registry=registry_empty,
+            entity_names=names_empty,
+            entity_configurations=[],
         )
 
     # Test with agent that has no model attribute (using object instead of Mock)
     class AgentWithoutModel:
-        def get_agent_id(self):
+        def get_entity_id(self):
             return "Agent1"
 
         # No model attribute
@@ -336,19 +336,19 @@ async def test_task_assignment_error_handling():
     agents_no_model = [agent_no_model]
 
     assignment_no_model = TaskAssignment()
-    registry_no_model, names_no_model = assignment_no_model.prepare_agents_registry(
+    registry_no_model, names_no_model = assignment_no_model.prepare_entities_registry(
         agents_no_model
     )
 
     task_no_model = Task(description="Task")
 
-    with pytest.raises(ValueError, match="must have a valid model"):
-        await assignment_no_model.select_agent_for_task(
+    with pytest.raises(ValueError, match="No entity in the team has a valid model"):
+        await assignment_no_model.select_entity_for_task(
             current_task=task_no_model,
             context=[],
-            agents_registry=registry_no_model,
-            agent_names=names_no_model,
-            agent_configurations=agents_no_model,
+            entities_registry=registry_no_model,
+            entity_names=names_no_model,
+            entity_configurations=agents_no_model,
         )
 
     print("✓ TaskAssignment error handling works!")

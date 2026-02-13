@@ -31,7 +31,7 @@ async def main():
     )
     
     team1 = Team(
-        agents=[math_agent1],
+        entities=[math_agent1],
         mode="sequential",
         debug=True,
         debug_level=1  # Standard debug
@@ -55,7 +55,7 @@ async def main():
     )
     
     team2 = Team(
-        agents=[math_agent2],
+        entities=[math_agent2],
         mode="sequential",
         debug=True,
         debug_level=2  # Detailed debug - shows EVERYTHING

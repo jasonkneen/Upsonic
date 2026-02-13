@@ -1,10 +1,14 @@
 """
 Result combiner module for combining results from multiple tasks into final answers.
 """
+from __future__ import annotations
 
-from typing import List, Any, Optional
+from typing import List, Any, Optional, Union, TYPE_CHECKING
 from upsonic.tasks.tasks import Task
 from upsonic.agent.agent import Agent
+
+if TYPE_CHECKING:
+    from upsonic.team.team import Team
 
 class ResultCombiner:
     """Handles combining results from multiple tasks into coherent final answers."""
@@ -14,21 +18,21 @@ class ResultCombiner:
         Initialize the result combiner.
         
         Args:
-            model: The model provider to use for combining results
-            debug: Whether to enable debug mode
+            model: The model provider to use for combining results.
+            debug: Whether to enable debug mode.
         """
-        self.model = model
-        self.debug = debug
+        self.model: Optional[Any] = model
+        self.debug: bool = debug
     
     def should_combine_results(self, results: List[Task]) -> bool:
         """
         Determine if results need to be combined or if single result should be returned.
         
         Args:
-            results: List of completed tasks with results
+            results: List of completed tasks with results.
             
         Returns:
-            True if results should be combined, False if single result should be returned
+            True if results should be combined, False if single result should be returned.
         """
         return len(results) > 1
     
@@ -37,10 +41,10 @@ class ResultCombiner:
         Get the result from a single task.
         
         Args:
-            results: List containing one completed task
+            results: List containing one completed task.
             
         Returns:
-            The response from the single task
+            The response from the single task.
         """
         if not results:
             return None
@@ -50,18 +54,18 @@ class ResultCombiner:
         self, 
         results: List[Task], 
         response_format: Any = str, 
-        agents: List[Any] = None
+        entities: Optional[List[Union[Agent, Team]]] = None
     ) -> Any:
         """
         Combine multiple task results into a coherent final answer.
         
         Args:
-            results: List of completed tasks with results
-            response_format: The desired format for the final response
-            agents: List of agents (used for fallback debug setting)
+            results: List of completed tasks with results.
+            response_format: The desired format for the final response.
+            entities: List of entities (used for fallback debug setting).
             
         Returns:
-            Combined final response
+            Combined final response.
         """
 
         end_task = Task(
@@ -79,9 +83,11 @@ class ResultCombiner:
             response_format=response_format
         )
         
-        debug_setting = self.debug
-        if not debug_setting and agents and len(agents) > 0:
-            debug_setting = agents[-1].debug
+        debug_setting: bool = self.debug
+        if not debug_setting and entities and len(entities) > 0:
+            last_entity = entities[-1]
+            if hasattr(last_entity, 'debug'):
+                debug_setting = last_entity.debug
         
         if not self.model:
              raise ValueError("ResultCombiner requires a model to be initialized.")
