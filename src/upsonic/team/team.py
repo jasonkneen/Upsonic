@@ -24,7 +24,7 @@ class Team:
     """
     
     def __init__(self,
-                 entities: Optional[List[Union[Agent, Team]]] = None,
+                 entities: Optional[List[Union[Agent, "Team"]]] = None,
                  tasks: Optional[List[Task]] = None,
                  name: Optional[str] = None,
                  role: Optional[str] = None,
@@ -38,7 +38,7 @@ class Team:
                  memory: Optional[Memory] = None,
                  debug: bool = False,
                  debug_level: int = 1,
-                 agents: Optional[List[Union[Agent, Team]]] = None,
+                 agents: Optional[List[Union[Agent, "Team"]]] = None,
                  ):
         """
         Initialize the Team with entities (Agents and/or nested Teams) and optionally tasks.
@@ -58,11 +58,11 @@ class Team:
             memory: Memory instance for team operations.
             debug: Enable debug logging.
             debug_level: Debug level (1 = standard, 2 = detailed). Only used when debug=True
-            agents: Deprecated alias for entities. Use entities instead.
+            agents: Backward-compatible alias for entities.
         """
         resolved_entities: List[Union[Agent, Team]] = entities if entities is not None else (agents if agents is not None else [])
         if not resolved_entities:
-            raise ValueError("Either 'entities' or 'agents' must be provided with at least one member.")
+            raise ValueError("'entities' must be provided with at least one member.")
         self.entities: List[Union[Agent, Team]] = resolved_entities
         self.tasks: List[Task] = tasks if isinstance(tasks, list) else [tasks] if tasks is not None else []
         self.name: Optional[str] = name
@@ -80,18 +80,33 @@ class Team:
 
         self.leader_agent: Optional[Agent] = None
 
+        if self.memory:
+            self._propagate_memory(self.entities, self.memory)
+
         if self.ask_other_team_members:
             self.add_tool()
 
     @property
-    def agents(self) -> List[Union[Agent, Team]]:
+    def agents(self) -> List[Union[Agent, "Team"]]:
         """Backward-compatible alias for entities."""
         return self.entities
 
     @agents.setter
-    def agents(self, value: List[Union[Agent, Team]]) -> None:
+    def agents(self, value: List[Union[Agent, "Team"]]) -> None:
         """Backward-compatible setter for entities."""
         self.entities = value
+
+    def _propagate_memory(self, entities: List[Union[Agent, "Team"]], memory: "Memory") -> None:
+        """Recursively propagate memory to all Agent entities, including those nested in sub-Teams."""
+        from upsonic.agent.agent import Agent as AgentClass
+        for entity in entities:
+            if isinstance(entity, AgentClass):
+                if entity.memory is None:
+                    entity.memory = memory
+            elif isinstance(entity, Team):
+                if entity.memory is None:
+                    entity.memory = memory
+                self._propagate_memory(entity.entities, memory)
 
     def get_entity_id(self) -> str:
         """Get display-friendly entity ID for this team."""
@@ -225,27 +240,23 @@ class Team:
         """
         from upsonic.agent.agent import Agent as AgentClass
 
-        if self.mode == "sequential":
-            if self.memory:
-                for entity in entity_configurations:
-                    if isinstance(entity, AgentClass) and entity.memory is None:
-                        entity.memory = self.memory
+        if not isinstance(tasks, list):
+            tasks = [tasks]
 
+        if self.mode == "sequential":
             context_sharing = ContextSharing()
             task_assignment = TaskAssignment()
             combiner_model = self.model
             if not combiner_model:
                 combiner_model = self._find_first_model()
 
-            last_debug = False
+            last_debug: bool = False
             for entity in reversed(self.entities):
                 if isinstance(entity, AgentClass) and hasattr(entity, 'debug'):
                     last_debug = entity.debug
                     break
 
             result_combiner = ResultCombiner(model=combiner_model, debug=last_debug)
-            if not isinstance(tasks, list):
-                tasks = [tasks]
             entities_registry, entity_names = task_assignment.prepare_entities_registry(entity_configurations)
             all_results: List[Task] = []
             for task_index, current_task in enumerate(tasks):
@@ -321,35 +332,20 @@ class Team:
             setup_manager = CoordinatorSetup(self.entities, tasks, mode="coordinate")
             delegation_manager = DelegationManager(self.entities, tool_mapping, debug=self.debug)
 
-            from upsonic.storage.memory.memory import Memory as MemoryClass
-            from upsonic.storage.in_memory.in_memory import InMemoryStorage as InMemoryStorageClass
-
             if self._leader is not None:
                 self.leader_agent = self._leader
-                if self.leader_agent.memory is None:
-                    if self.memory is None:
-                        self.memory = MemoryClass(
-                            storage=InMemoryStorageClass(),
-                            full_session_memory=True,
-                            session_id="team_coordinator_session",
-                        )
+                if self.leader_agent.memory is None and self.memory is not None:
                     self.leader_agent.memory = self.memory
             else:
-                if self.memory is None:
-                    self.memory = MemoryClass(
-                        storage=InMemoryStorageClass(),
-                        full_session_memory=True,
-                        session_id="team_coordinator_session",
-                    )
                 self.leader_agent = AgentClass(
                     model=self.model,
                     memory=self.memory,
                 )
 
-            leader_system_prompt = setup_manager.create_leader_prompt()
+            leader_system_prompt: str = setup_manager.create_leader_prompt()
             self.leader_agent.system_prompt = leader_system_prompt
 
-            master_description = (
+            master_description: str = (
                 "Begin your mission. Review your system prompt for the full list of tasks and your team roster. "
                 "Formulate your plan and start delegating tasks now."
             )
@@ -361,7 +357,7 @@ class Team:
 
             delegation_tool = delegation_manager.get_delegation_tool()
 
-            master_task = Task(
+            master_task: Task = Task(
                 description=master_description,
                 attachments=all_attachments if all_attachments else None,
                 tools=[delegation_tool],
@@ -387,8 +383,8 @@ class Team:
             self.leader_agent.system_prompt = leader_system_prompt
             routing_tool = delegation_manager.get_routing_tool()
 
-            router_task_description = "Analyze the MISSION OBJECTIVES in your system prompt and route the request to the best specialist."
-            router_task = Task(description=router_task_description, tools=[routing_tool])
+            router_task_description: str = "Analyze the MISSION OBJECTIVES in your system prompt and route the request to the best specialist."
+            router_task: Task = Task(description=router_task_description, tools=[routing_tool])
 
             await self.leader_agent.do_async(router_task, _print_method_default=_print_method_default)
 
@@ -397,11 +393,11 @@ class Team:
             if not chosen_entity:
                 raise ValueError("Routing failed: The router agent did not select a team member.")
             
-            consolidated_description = " ".join([task.description for task in tasks])
+            consolidated_description: str = " ".join([task.description for task in tasks])
             all_attachments = [attachment for task in tasks if task.attachments for attachment in task.attachments]
             all_tools = [tool for task in tasks if task.tools for tool in task.tools]
 
-            final_task = Task(
+            final_task: Task = Task(
                 description=consolidated_description,
                 attachments=all_attachments or None,
                 tools=list(set(all_tools)) if all_tools else None,
@@ -465,10 +461,6 @@ class Team:
         mode_debug: bool = debug or self.debug
 
         if self.mode == "sequential":
-            if self.memory:
-                for entity in self.entities:
-                    if isinstance(entity, AgentClass) and getattr(entity, "memory", None) is None:
-                        entity.memory = self.memory
             context_sharing = ContextSharing()
             task_assignment = TaskAssignment()
             combiner_model: Optional[Any] = self.model or self._find_first_model()
@@ -515,25 +507,11 @@ class Team:
                             tool_mapping[tool.__name__] = tool
             setup_manager = CoordinatorSetup(self.entities, tasks_list, mode="coordinate")
             delegation_manager = DelegationManager(self.entities, tool_mapping, debug=self.debug)
-            from upsonic.storage.memory.memory import Memory as MemoryClass
-            from upsonic.storage.in_memory.in_memory import InMemoryStorage as InMemoryStorageClass
             if self._leader is not None:
                 self.leader_agent = self._leader
-                if self.leader_agent.memory is None:
-                    if self.memory is None:
-                        self.memory = MemoryClass(
-                            storage=InMemoryStorageClass(),
-                            full_session_memory=True,
-                            session_id="team_coordinator_session",
-                        )
+                if self.leader_agent.memory is None and self.memory is not None:
                     self.leader_agent.memory = self.memory
             else:
-                if self.memory is None:
-                    self.memory = MemoryClass(
-                        storage=InMemoryStorageClass(),
-                        full_session_memory=True,
-                        session_id="team_coordinator_session",
-                    )
                 self.leader_agent = AgentClass(model=self.model, memory=self.memory)
             leader_system_prompt = setup_manager.create_leader_prompt()
             self.leader_agent.system_prompt = leader_system_prompt

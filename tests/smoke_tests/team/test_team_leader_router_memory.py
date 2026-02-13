@@ -45,7 +45,7 @@ def _require_storage() -> None:
 
 @pytest.mark.asyncio
 async def test_coordinate_framework_creates_leader(capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture):
-    """Coordinate mode with model only: framework creates leader, sets team memory."""
+    """Coordinate mode with model only: framework creates leader without memory by default."""
     _enable_print_capture()
     data_analyst = Agent(
         model="openai/gpt-4o",
@@ -79,9 +79,8 @@ async def test_coordinate_framework_creates_leader(capsys: pytest.CaptureFixture
     assert len(result.strip()) > 0, "Result should be non-empty"
     assert team.leader_agent is not None, "Framework should set leader_agent"
     assert team.leader_agent not in team.entities, "Leader should not be in members list"
-    assert team.memory is not None, "Framework should set team memory when creating leader"
-    assert team.leader_agent.memory is not None, "Leader should have memory"
-    assert team.leader_agent.memory is team.memory, "Leader memory should be team memory"
+    assert team.memory is None, "Team memory should remain None when not explicitly set"
+    assert team.leader_agent.memory is None, "Leader should have no memory when team memory is not set"
     assert "Agent Started" in out or "Agent Status" in out, f"Expected agent start in output: {out[:500]}"
     assert "Data Analyst" in out or "Report Writer" in out or "data analyst" in out.lower() or "report writer" in out.lower(), (
         f"Expected agent names in output: {out[:500]}"
@@ -99,8 +98,7 @@ async def test_coordinate_framework_creates_leader(capsys: pytest.CaptureFixture
 
 @pytest.mark.asyncio
 async def test_coordinate_custom_leader_no_memory(capsys: pytest.CaptureFixture[str]):
-    """Coordinate mode with custom leader that has no memory: framework sets memory on leader."""
-    _require_storage()
+    """Coordinate mode with custom leader that has no memory: leader stays without memory when team has none."""
     _enable_print_capture()
     data_analyst = Agent(
         model="openai/gpt-4o",
@@ -140,9 +138,8 @@ async def test_coordinate_custom_leader_no_memory(capsys: pytest.CaptureFixture[
     assert result is not None, "Result should not be None"
     assert isinstance(result, str), f"Result should be str, got {type(result)}"
     assert team.leader_agent is custom_leader, "team.leader_agent should be the provided leader"
-    assert custom_leader.memory is not None, "Framework should set memory on leader when it had none"
-    assert team.memory is not None, "Team should have memory set"
-    assert custom_leader.memory is team.memory, "Leader memory should be team memory"
+    assert custom_leader.memory is None, "Leader memory should remain None when team has no memory"
+    assert team.memory is None, "Team memory should remain None when not explicitly set"
     assert "Agent Started" in out or "Custom Coordinator" in out or "Data Analyst" in out or "Report Writer" in out, (
         f"Expected agent/leader name in output: {out[:500]}"
     )
