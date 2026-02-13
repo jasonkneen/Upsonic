@@ -7,13 +7,20 @@ Tests that Team objects with response_format return structured output for all mo
 - route
 """
 
+import sys
 import pytest
+from rich.console import Console
 from pydantic import BaseModel
 from upsonic import Agent, Task, Team
 from io import StringIO
 from contextlib import redirect_stdout
 
 pytestmark = pytest.mark.timeout(120)
+
+
+def _enable_print_capture() -> None:
+    import upsonic.utils.printing as _printing
+    _printing.console = Console(file=sys.stdout)
 
 
 class TeamReport(BaseModel):
@@ -26,6 +33,7 @@ class TeamReport(BaseModel):
 @pytest.mark.asyncio
 async def test_structured_team_output_sequential():
     """Test structured output for Team in sequential mode."""
+    _enable_print_capture()
     researcher = Agent(
         model="openai/gpt-4o",
         name="Researcher",
@@ -51,7 +59,7 @@ async def test_structured_team_output_sequential():
         Task(description="Write a summary report about quantum computing")
     ]
     
-    result = await team.multi_agent_async([researcher, writer], tasks)
+    result = await team.multi_agent_async([researcher, writer], tasks, _print_method_default=True)
     
     # Verify result is structured
     assert result is not None, "Result should not be None"
@@ -67,6 +75,7 @@ async def test_structured_team_output_sequential():
 @pytest.mark.asyncio
 async def test_structured_team_output_coordinate():
     """Test structured output for Team in coordinate mode."""
+    _enable_print_capture()
     data_analyst = Agent(
         model="openai/gpt-4o",
         name="Data Analyst",
@@ -93,7 +102,7 @@ async def test_structured_team_output_coordinate():
         Task(description="Create executive summary of findings")
     ]
     
-    result = await team.multi_agent_async([data_analyst, report_writer], tasks)
+    result = await team.multi_agent_async([data_analyst, report_writer], tasks, _print_method_default=True)
     
     # Verify result is structured
     assert result is not None, "Result should not be None"
@@ -109,6 +118,7 @@ async def test_structured_team_output_coordinate():
 @pytest.mark.asyncio
 async def test_structured_team_output_route():
     """Test structured output for Team in route mode."""
+    _enable_print_capture()
     legal_expert = Agent(
         model="openai/gpt-4o",
         name="Legal Expert",
@@ -134,7 +144,7 @@ async def test_structured_team_output_route():
     
     task = Task(description="What are the best practices for implementing OAuth 2.0?")
     
-    result = await team.multi_agent_async([legal_expert, tech_expert], [task])
+    result = await team.multi_agent_async([legal_expert, tech_expert], [task], _print_method_default=True)
     
     # Verify result is structured
     assert result is not None, "Result should not be None"

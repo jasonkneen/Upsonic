@@ -13,7 +13,14 @@ import operator
 from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Optional, Tuple, Type, TypeVar, Union, get_args, get_origin
+from typing import (
+    TYPE_CHECKING,
+    Any, Dict, List, Literal, Optional, Tuple, Type, TypeVar, Union,
+    get_args, get_origin,
+)
+
+if TYPE_CHECKING:
+    from upsonic.uel.graph import RunnableGraph
 
 from upsonic.uel.runnable import Runnable
 from upsonic.graphv2.checkpoint import (
@@ -280,6 +287,20 @@ class StateGraph(Runnable[Dict[str, Any], Dict[str, Any]]):
             for target in cond_edge.targets:
                 if target not in (END, *all_nodes):
                     raise ValueError(f"Conditional edge target not found: {target}")
+    
+    def get_graph(self) -> "RunnableGraph":
+        """Get a graph representation of this state graph for visualization.
+        
+        Returns a RunnableGraph that can render the graph structure as
+        ASCII art or Mermaid diagrams. Normal edges are shown as solid
+        connections, conditional edges as dashed connections.
+        
+        Returns:
+            A RunnableGraph object with to_ascii(), to_mermaid(), and
+            get_structure_details() methods
+        """
+        from upsonic.uel.graph import RunnableGraph
+        return RunnableGraph(self)
     
     def invoke(self, input: Dict[str, Any], config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Execute the graph synchronously (not yet compiled).
@@ -1548,4 +1569,18 @@ class CompiledStateGraph(Runnable[Dict[str, Any], Dict[str, Any]]):
         )
         
         self.checkpointer.put(new_checkpoint)
+    
+    def get_graph(self) -> "RunnableGraph":
+        """Get a graph representation of this compiled state graph for visualization.
+        
+        Returns a RunnableGraph that can render the graph structure as
+        ASCII art or Mermaid diagrams. Normal edges are shown as solid
+        connections, conditional edges as dashed connections.
+        
+        Returns:
+            A RunnableGraph object with to_ascii(), to_mermaid(), and
+            get_structure_details() methods
+        """
+        from upsonic.uel.graph import RunnableGraph
+        return RunnableGraph(self)
 

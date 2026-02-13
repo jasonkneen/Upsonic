@@ -70,9 +70,10 @@ async def test_agent_image_generation(temp_dir):
             assert header.startswith(b'\x89PNG\r\n\x1a\n') or header.startswith(b'\xff\xd8\xff'), \
                 "Saved file should be a valid image"
         
-        # Check logs
-        assert "Image" in output or "image" in output.lower(), \
-            "Should see image-related logs"
+        # Check that pipeline produced some output (logs)
+        assert len(output.strip()) > 0, "Should have pipeline/log output"
+        assert "Pipeline" in output or "Completed" in output or "model_execution" in output.lower(), \
+            "Should see pipeline completion in logs"
         
     finally:
         pass  # Agent cleanup handled automatically

@@ -73,7 +73,7 @@ async def test_deepagent_planning_and_filesystem_state_backend():
                 "Execute the plan and create both files."
             )
         )
-        result = await agent.do_async(task)
+        result = await agent.print_do_async(task)
     
     output = output_buffer.getvalue()
     
@@ -143,7 +143,7 @@ async def test_deepagent_with_subagents():
                 "then use the writer subagent to write a summary of the research findings."
             )
         )
-        result = await agent.do_async(task)
+        result = await agent.print_do_async(task)
     
     output = output_buffer.getvalue()
     
@@ -194,7 +194,7 @@ async def test_deepagent_with_memory_backend_sqlite(sqlite_db_file):
                 "Then read the file to verify it was created."
             )
         )
-        result = await agent.do_async(task)
+        result = await agent.print_do_async(task)
     
     output = output_buffer.getvalue()
     
@@ -259,7 +259,7 @@ async def test_deepagent_with_composite_backend():
                 "Then read both files to verify they were created correctly."
             )
         )
-        result = await agent.do_async(task)
+        result = await agent.print_do_async(task)
     
     output = output_buffer.getvalue()
     
@@ -321,7 +321,7 @@ async def test_deepagent_full_features():
                 "Execute the plan completely."
             )
         )
-        result = await agent.do_async(task)
+        result = await agent.print_do_async(task)
     
     output = output_buffer.getvalue()
     

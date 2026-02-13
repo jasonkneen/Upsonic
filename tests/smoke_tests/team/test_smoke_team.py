@@ -1,6 +1,13 @@
+import sys
 import pytest
+from rich.console import Console
 from upsonic import Agent, Task, Team
 from pydantic import BaseModel
+
+
+def _enable_print_capture() -> None:
+    import upsonic.utils.printing as _printing
+    _printing.console = Console(file=sys.stdout)
 
 
 class AnalysisResult(BaseModel):
@@ -11,6 +18,7 @@ class AnalysisResult(BaseModel):
 
 def test_team_without_mode(capsys):
     """Test basic team functionality WITHOUT mode paramete. Verifies if we can match task to agent"""
+    _enable_print_capture()
     researcher = Agent(
         model="openai/gpt-4o",
         name="Researcher",
@@ -63,6 +71,7 @@ def test_team_without_mode(capsys):
 @pytest.mark.timeout(300)
 def test_team_with_mode(capsys):
     """Test team functionality WITH coordinate mode."""
+    _enable_print_capture()
     researcher = Agent(
         model="openai/gpt-4o",
         name="Researcher",
@@ -166,6 +175,7 @@ def test_team_with_mode(capsys):
     
 def test_team_with_response_format(capsys):
     """Test team functionality with response format using Pydantic model."""
+    _enable_print_capture()
     class AnalysisResult(BaseModel):
         summary: str
         confidence: float
@@ -231,7 +241,7 @@ def test_team_with_response_format(capsys):
 
 def test_agent_name_verification_with_mock():
     """Test agent names by verifying agent properties directly"""
-    
+    _enable_print_capture()
     # Create agents with specific names
     writer = Agent(model="openai/gpt-4o", name="Writer")
     editor = Agent(model="openai/gpt-4o", name="Editor")
@@ -260,7 +270,7 @@ def test_agent_name_verification_with_mock():
     assert task2.agent == editor, "Task2 should be assigned to editor"
     
     # Execute team
-    result = team.do([task1, task2])
+    result = team.print_do([task1, task2])
     
     # Verify the result is not None
     assert result is not None, "Team execution should return a result"

@@ -2,7 +2,9 @@
 Test 26b: ReliabilityEvaluator testing for Task and Team
 Success criteria: We check the attributes, what we log and result
 """
+import sys
 import pytest
+from rich.console import Console
 from io import StringIO
 from contextlib import redirect_stdout
 
@@ -11,6 +13,11 @@ from upsonic.eval import ReliabilityEvaluator
 from upsonic.tools import tool
 
 pytestmark = pytest.mark.timeout(240)
+
+
+def _enable_print_capture() -> None:
+    import upsonic.utils.printing as _printing
+    _printing.console = Console(file=sys.stdout)
 
 
 @tool
@@ -34,7 +41,7 @@ def get_weather(city: str) -> str:
 @pytest.mark.asyncio
 async def test_reliability_evaluator_basic():
     """Test basic ReliabilityEvaluator - verify all attributes and tool call checking."""
-    
+    _enable_print_capture()
     # Create agent with tools
     agent = Agent(
         model="openai/gpt-4o",
@@ -48,7 +55,7 @@ async def test_reliability_evaluator_basic():
     )
     
     # Execute task
-    await agent.do_async(task)
+    await agent.print_do_async(task)
     
     # Create evaluator
     evaluator = ReliabilityEvaluator(
@@ -126,7 +133,7 @@ async def test_reliability_evaluator_basic():
 @pytest.mark.asyncio
 async def test_reliability_evaluator_order_matters():
     """Test ReliabilityEvaluator with order_matters=True."""
-    
+    _enable_print_capture()
     agent = Agent(
         model="openai/gpt-4o",
         tools=[calculate_sum, calculate_product],
@@ -137,7 +144,7 @@ async def test_reliability_evaluator_order_matters():
         description="First use calculate_sum to add 2 + 3, then use calculate_product to multiply 4 * 5"
     )
     
-    await agent.do_async(task)
+    await agent.print_do_async(task)
     
     # Create evaluator with order_matters=True
     evaluator = ReliabilityEvaluator(
@@ -164,7 +171,7 @@ async def test_reliability_evaluator_order_matters():
 @pytest.mark.asyncio
 async def test_reliability_evaluator_exact_match():
     """Test ReliabilityEvaluator with exact_match=True."""
-    
+    _enable_print_capture()
     agent = Agent(
         model="openai/gpt-4o",
         tools=[calculate_sum, calculate_product, get_weather],
@@ -175,7 +182,7 @@ async def test_reliability_evaluator_exact_match():
         description="Use calculate_sum to add 10 + 20"
     )
     
-    await agent.do_async(task)
+    await agent.print_do_async(task)
     
     # Create evaluator with exact_match=True (only calculate_sum should be called)
     evaluator = ReliabilityEvaluator(
@@ -205,7 +212,7 @@ async def test_reliability_evaluator_exact_match():
 @pytest.mark.asyncio
 async def test_reliability_evaluator_missing_tools():
     """Test ReliabilityEvaluator when expected tools are not called."""
-    
+    _enable_print_capture()
     agent = Agent(
         model="openai/gpt-4o",
         tools=[calculate_sum],
@@ -216,7 +223,7 @@ async def test_reliability_evaluator_missing_tools():
         description="What is 5 + 5? Just tell me the answer."
     )
     
-    await agent.do_async(task)
+    await agent.print_do_async(task)
     
     # Expect calculate_sum to be called, but it might not be if LLM answers directly
     evaluator = ReliabilityEvaluator(
@@ -243,7 +250,7 @@ async def test_reliability_evaluator_missing_tools():
 @pytest.mark.asyncio
 async def test_reliability_evaluator_multiple_calls():
     """Test ReliabilityEvaluator with tools called multiple times."""
-    
+    _enable_print_capture()
     agent = Agent(
         model="openai/gpt-4o",
         tools=[calculate_sum],
@@ -254,7 +261,7 @@ async def test_reliability_evaluator_multiple_calls():
         description="Calculate: (1 + 2) + (3 + 4) + (5 + 6) using calculate_sum"
     )
     
-    await agent.do_async(task)
+    await agent.print_do_async(task)
     
     evaluator = ReliabilityEvaluator(
         expected_tool_calls=["calculate_sum"],
@@ -324,7 +331,7 @@ def test_reliability_evaluator_attribute_modification():
 @pytest.mark.asyncio
 async def test_reliability_evaluator_result_assertion():
     """Test ReliabilityEvaluationResult.assert_passed() method."""
-    
+    _enable_print_capture()
     agent = Agent(
         model="openai/gpt-4o",
         tools=[calculate_sum],
@@ -335,7 +342,7 @@ async def test_reliability_evaluator_result_assertion():
         description="Calculate 7 + 8 using calculate_sum"
     )
     
-    await agent.do_async(task)
+    await agent.print_do_async(task)
     
     evaluator = ReliabilityEvaluator(
         expected_tool_calls=["calculate_sum"],
@@ -360,7 +367,7 @@ async def test_reliability_evaluator_result_assertion():
 @pytest.mark.asyncio
 async def test_reliability_evaluator_logging_output(capsys):
     """Test that ReliabilityEvaluator properly logs results."""
-    
+    _enable_print_capture()
     agent = Agent(
         model="openai/gpt-4o",
         tools=[calculate_sum, calculate_product],
@@ -371,7 +378,7 @@ async def test_reliability_evaluator_logging_output(capsys):
         description="Add 3 + 4 using calculate_sum, then multiply by 2 using calculate_product"
     )
     
-    await agent.do_async(task)
+    await agent.print_do_async(task)
     
     evaluator = ReliabilityEvaluator(
         expected_tool_calls=["calculate_sum", "calculate_product"],
@@ -404,7 +411,7 @@ async def test_reliability_evaluator_logging_output(capsys):
 @pytest.mark.asyncio
 async def test_reliability_evaluator_with_team():
     """Test ReliabilityEvaluator with Team - verify it works with List[Task]."""
-    
+    _enable_print_capture()
     # Create team agents with tools
     calculator_agent = Agent(
         model="openai/gpt-4o",
@@ -435,7 +442,7 @@ async def test_reliability_evaluator_with_team():
     ]
     
     # Execute team asynchronously
-    await team.multi_agent_async(team.agents, tasks)
+    await team.multi_agent_async(team.agents, tasks, _print_method_default=True)
     
     # Create evaluator expecting both tools to be called across all tasks
     evaluator = ReliabilityEvaluator(

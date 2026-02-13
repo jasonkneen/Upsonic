@@ -794,7 +794,61 @@ class Agent(BaseAgent):
         if isinstance(task, str):
             return TaskClass(description=task)
         return task
-    
+
+    def _handle_task_list(
+        self,
+        task: Union[str, "Task", List[Union[str, "Task"]]],
+        executor: Callable[..., Any],
+        *args: Any,
+        **kwargs: Any,
+    ) -> tuple[bool, Any]:
+        """
+        Handle list-of-tasks input for synchronous execution methods.
+
+        Returns:
+            (handled, result):
+                handled=True  → result is the final return value (empty list or list of results)
+                handled=False → result is the unwrapped single task for normal processing
+        """
+        if not isinstance(task, list):
+            return False, task
+        if len(task) == 0:
+            return True, []
+        if len(task) == 1:
+            return False, task[0]
+        results: List[Any] = []
+        for single_task in task:
+            result: Any = executor(single_task, *args, **kwargs)
+            results.append(result)
+        return True, results
+
+    async def _handle_task_list_async(
+        self,
+        task: Union[str, "Task", List[Union[str, "Task"]]],
+        executor: Callable[..., Any],
+        *args: Any,
+        **kwargs: Any,
+    ) -> tuple[bool, Any]:
+        """
+        Handle list-of-tasks input for asynchronous execution methods.
+
+        Returns:
+            (handled, result):
+                handled=True  → result is the final return value (empty list or list of results)
+                handled=False → result is the unwrapped single task for normal processing
+        """
+        if not isinstance(task, list):
+            return False, task
+        if len(task) == 0:
+            return True, []
+        if len(task) == 1:
+            return False, task[0]
+        results: List[Any] = []
+        for single_task in task:
+            result: Any = await executor(single_task, *args, **kwargs)
+            results.append(result)
+        return True, results
+
     def _resolve_print_flag(self, method_default: bool) -> bool:
         """
         Resolve the print flag based on hierarchy.
@@ -2674,7 +2728,7 @@ class Agent(BaseAgent):
     @retryable()
     async def do_async(
         self, 
-        task: Union[str, "Task"], 
+        task: Union[str, "Task", List[Union[str, "Task"]]], 
         model: Optional[Union[str, "Model"]] = None,
         debug: bool = False,
         retry: int = 1,
@@ -2685,16 +2739,16 @@ class Agent(BaseAgent):
         _resume_output: Optional[AgentRunOutput] = None,
         _resume_step_index: Optional[int] = None,
         _print_method_default: bool = False,
-    ) -> Any:
+    ) -> Union[Any, List[Any], List[AgentRunOutput]]:
         """
-        Execute a task asynchronously using the pipeline architecture.
+        Execute a task (or list of tasks) asynchronously using the pipeline architecture.
         
-        The execution is handled entirely by the pipeline - this method just
-        creates the pipeline, creates the output context, executes, and returns the output.
-        All logic is in the pipeline steps.
+        When a list of tasks is provided with more than one element, each task is
+        executed sequentially and a list of results is returned.  A single-element
+        list is unwrapped and treated identically to a non-list input.
         
         Args:
-            task: Task to execute
+            task: Task to execute. Accepts a single Task/str or a list of them.
             model: Override model for this execution
             debug: Enable debug mode
             retry: Number of retries
@@ -2706,21 +2760,37 @@ class Agent(BaseAgent):
             _print_method_default: Internal - default print value based on method (do=False, print_do=True)
             
         Returns:
-            Task content (str, BaseModel, etc.) if return_output=False
-            Full AgentRunOutput if return_output=True
+            Single task:
+                Task content (str, BaseModel, etc.) if return_output=False
+                Full AgentRunOutput if return_output=True
+            List of tasks (len > 1):
+                List of task contents if return_output=False
+                List of AgentRunOutput if return_output=True
                 
         Example:
             ```python
-            # Get content directly (default)
+            # Single task
             result = await agent.do_async(task)
-            print(result)  # Prints the response content
             
-            # Get full output object
-            output = await agent.do_async(task, return_output=True)
-            print(output.content)  # Access content
-            print(output.messages)  # Access messages
+            # Multiple tasks
+            results = await agent.do_async([task1, task2, task3])
+            # results is a list of outputs
+            
+            # Multiple tasks with full output
+            outputs = await agent.do_async([task1, task2], return_output=True)
+            # outputs is a list of AgentRunOutput
             ```
         """
+        handled, task_or_results = await self._handle_task_list_async(
+            task, self.do_async,
+            model, debug, retry, return_output, state,
+            graph_execution_id=graph_execution_id,
+            _print_method_default=_print_method_default,
+        )
+        if handled:
+            return task_or_results
+        task = task_or_results
+
         from upsonic.agent.pipeline import PipelineManager
         
         # Resolve print flag based on hierarchy (ENV > param > method default)
@@ -2864,26 +2934,41 @@ class Agent(BaseAgent):
     
     def do(
         self,
-        task: Union[str, "Task"],
+        task: Union[str, "Task", List[Union[str, "Task"]]],
         model: Optional[Union[str, "Model"]] = None,
         debug: bool = False,
         retry: int = 1,
         return_output: bool = False
-    ) -> Any:
+    ) -> Union[Any, List[Any], List[AgentRunOutput]]:
         """
-        Execute a task synchronously.
+        Execute a task (or list of tasks) synchronously.
+        
+        When a list of tasks is provided with more than one element, each task is
+        executed sequentially and a list of results is returned.  A single-element
+        list is unwrapped and treated identically to a non-list input.
         
         Args:
-            task: Task to execute (can be a Task object or a string description)
+            task: Task to execute. Accepts a single Task/str or a list of them.
             model: Override model for this execution
             debug: Enable debug mode
             retry: Number of retries
             return_output: If True, return full AgentRunOutput. If False (default), return content only.
             
         Returns:
-            Task content (str, BaseModel, etc.) if return_output=False
-            Full AgentRunOutput if return_output=True
+            Single task:
+                Task content (str, BaseModel, etc.) if return_output=False
+                Full AgentRunOutput if return_output=True
+            List of tasks (len > 1):
+                List of task contents if return_output=False
+                List of AgentRunOutput if return_output=True
         """
+        handled, task_or_results = self._handle_task_list(
+            task, self.do, model, debug, retry, return_output,
+        )
+        if handled:
+            return task_or_results
+        task = task_or_results
+
         # Auto-convert string to Task object if needed
         from upsonic.tasks.tasks import Task as TaskClass
         if isinstance(task, str):
@@ -2891,30 +2976,50 @@ class Agent(BaseAgent):
 
         try:
             loop = asyncio.get_running_loop()
-            # If we get here, we're already in an async context with a running loop
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = executor.submit(asyncio.run, self.do_async(task, model, debug, retry, return_output, _print_method_default=False))
                 return future.result()
         except RuntimeError:
-            # No event loop is running, so we can safely use asyncio.run()
             return asyncio.run(self.do_async(task, model, debug, retry, return_output, _print_method_default=False))
     
     def print_do(
         self,
-        task: Union[str, "Task"],
+        task: Union[str, "Task", List[Union[str, "Task"]]],
         model: Optional[Union[str, "Model"]] = None,
         debug: bool = False,
         retry: int = 1,
         return_output: bool = False
-    ) -> Any:
+    ) -> Union[Any, List[Any], List[AgentRunOutput]]:
         """
-        Execute a task synchronously and print the result.
+        Execute a task (or list of tasks) synchronously and print the result.
         
+        When a list of tasks is provided with more than one element, each task is
+        executed sequentially and a list of results is returned.  A single-element
+        list is unwrapped and treated identically to a non-list input.
+        
+        Args:
+            task: Task to execute. Accepts a single Task/str or a list of them.
+            model: Override model for this execution
+            debug: Enable debug mode
+            retry: Number of retries
+            return_output: If True, return full AgentRunOutput. If False (default), return content only.
+            
         Returns:
-            Task content (str, BaseModel, etc.) if return_output=False
-            Full AgentRunOutput if return_output=True
+            Single task:
+                Task content (str, BaseModel, etc.) if return_output=False
+                Full AgentRunOutput if return_output=True
+            List of tasks (len > 1):
+                List of task contents if return_output=False
+                List of AgentRunOutput if return_output=True
         """
+        handled, task_or_results = self._handle_task_list(
+            task, self.print_do, model, debug, retry, return_output,
+        )
+        if handled:
+            return task_or_results
+        task = task_or_results
+
         # Auto-convert string to Task object if needed
         from upsonic.tasks.tasks import Task as TaskClass
         if isinstance(task, str):
@@ -2931,23 +3036,39 @@ class Agent(BaseAgent):
     
     async def print_do_async(
         self,
-        task: Union[str, "Task"],
+        task: Union[str, "Task", List[Union[str, "Task"]]],
         model: Optional[Union[str, "Model"]] = None,
         debug: bool = False,
         retry: int = 1,
         return_output: bool = False
-    ) -> Any:
+    ) -> Union[Any, List[Any], List[AgentRunOutput]]:
         """
-        Execute a task asynchronously with print output enabled (unless overridden by ENV or Agent param).
+        Execute a task (or list of tasks) asynchronously with print output enabled
+        (unless overridden by ENV or Agent param).
+        
+        When a list of tasks is provided with more than one element, each task is
+        executed sequentially and a list of results is returned.  A single-element
+        list is unwrapped and treated identically to a non-list input.
         
         Print hierarchy (highest to lowest priority):
         1. UPSONIC_AGENT_PRINT env variable
         2. Agent constructor print parameter
         3. Method default (print_do_async=True)
         
+        Args:
+            task: Task to execute. Accepts a single Task/str or a list of them.
+            model: Override model for this execution
+            debug: Enable debug mode
+            retry: Number of retries
+            return_output: If True, return full AgentRunOutput. If False (default), return content only.
+            
         Returns:
-            Task content (str, BaseModel, etc.) if return_output=False
-            Full AgentRunOutput if return_output=True
+            Single task:
+                Task content (str, BaseModel, etc.) if return_output=False
+                Full AgentRunOutput if return_output=True
+            List of tasks (len > 1):
+                List of task contents if return_output=False
+                List of AgentRunOutput if return_output=True
         """
         return await self.do_async(task, model, debug, retry, return_output, _print_method_default=True)
 

@@ -57,7 +57,7 @@ async def test_sequential_mode_agent_name_logging():
     # Capture stdout to check logs
     output_buffer = StringIO()
     with redirect_stdout(output_buffer):
-        result = await team.multi_agent_async([researcher, writer], tasks)
+        result = await team.multi_agent_async([researcher, writer], tasks, _print_method_default=True)
     
     output = output_buffer.getvalue()
     
@@ -101,7 +101,7 @@ async def test_route_mode_selected_agent_logging():
     # Capture stdout to check logs
     output_buffer = StringIO()
     with redirect_stdout(output_buffer):
-        result = await team.multi_agent_async([legal_expert, tech_expert], [task])
+        result = await team.multi_agent_async([legal_expert, tech_expert], [task], _print_method_default=True)
     
     output = output_buffer.getvalue()
     
@@ -148,7 +148,7 @@ async def test_coordinate_mode_agent_name_logging():
     # Capture stdout to check logs
     output_buffer = StringIO()
     with redirect_stdout(output_buffer):
-        result = await team.multi_agent_async([data_analyst, report_writer], tasks)
+        result = await team.multi_agent_async([data_analyst, report_writer], tasks, _print_method_default=True)
     
     output = output_buffer.getvalue()
     
