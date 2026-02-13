@@ -168,7 +168,7 @@ class TelegramInterface(Interface):
         self.heartbeat_chat_id: Optional[int] = heartbeat_chat_id
         self._heartbeat_task: Optional[asyncio.Task[None]] = None
         self._auto_heartbeat_chat_id: Optional[int] = None
-        
+
         info_log(f"Telegram interface initialized: mode={self.mode.value}, stream={self.stream}, agent={agent}")
     
     def is_user_allowed(self, user_id: int) -> bool:
@@ -669,7 +669,7 @@ class TelegramInterface(Interface):
             )
             return
 
-        await self.agent.do_async(task)
+        await self.agent.print_do(task)
         
         run_result = self.agent.get_run_output()
         if not run_result:
@@ -1168,7 +1168,7 @@ class TelegramInterface(Interface):
             
             if self.is_task_mode():
                 try:
-                    await self.agent.do_async(task)
+                    await self.agent.print_do(task)
                     
                     run_result = self.agent.get_run_output()
                     if run_result:
@@ -1252,7 +1252,7 @@ class TelegramInterface(Interface):
             if self.is_task_mode():
                 from upsonic.tasks.tasks import Task
                 task = Task(text)
-                await self.agent.do_async(task)
+                await self.agent.print_do(task)
                 
                 run_result = self.agent.get_run_output()
                 if run_result and run_result.output:
