@@ -876,25 +876,28 @@ class Agent(BaseAgent):
         return method_default
     
     def _validate_task_for_new_run(
-        self, 
-        task: "Task", 
-        is_resuming: bool = False
+        self,
+        task: "Task",
+        is_resuming: bool = False,
+        allow_problematic_for_retry: bool = False,
     ) -> Optional[AgentRunOutput]:
         """
         Validate task state before starting a new run.
-        
+
         Checks if task is already completed or has problematic status.
-        
+        When allow_problematic_for_retry is True (internal retry attempt), problematic
+        status is allowed so retry can override durable-execution requirement until retries are exhausted.
+
         Args:
             task: Task to validate
             is_resuming: Whether this is a resume operation (skips problematic check)
-            
+            allow_problematic_for_retry: If True, do not block on problematic status (used when retrying).
+
         Returns:
             AgentRunOutput if task cannot be run (error/warning case), None if OK to proceed
         """
         from upsonic.utils.printing import warning_log
-        
-        # Check if task is already completed
+
         if task.is_completed:
             run_id = task.run_id or "unknown"
             warning_log(
@@ -910,9 +913,8 @@ class Agent(BaseAgent):
                 status=RunStatus.completed,
                 output=f"Task is already completed (run_id={run_id}). Cannot re-run a completed task.",
             )
-        
-        # Check if task has a problematic status (only for non-resuming calls)
-        if not is_resuming and task.is_problematic:
+
+        if not is_resuming and not allow_problematic_for_retry and task.is_problematic:
             status_str = task.status.value
             run_id = task.run_id
             warning_log(
@@ -2725,10 +2727,10 @@ class Agent(BaseAgent):
 
     
     
-    @retryable()
+    @retryable(retries_from_param="retry")
     async def do_async(
-        self, 
-        task: Union[str, "Task", List[Union[str, "Task"]]], 
+        self,
+        task: Union[str, "Task", List[Union[str, "Task"]]],
         model: Optional[Union[str, "Model"]] = None,
         debug: bool = False,
         retry: int = 1,
@@ -2800,66 +2802,56 @@ class Agent(BaseAgent):
         # Convert string to Task if needed
         task = self._convert_to_task(task)
         
-        # Determine start step index (0 for new runs, specified index for resumption)
         start_step_index = _resume_step_index if _resume_step_index is not None else 0
         is_resuming = _resume_output is not None
-        
-        # Validate task state (completed/problematic checks)
-        validation_error = self._validate_task_for_new_run(task, is_resuming)
+        effective_retry = self.retry if getattr(self, "retry", None) is not None else retry
+
+        validation_error = self._validate_task_for_new_run(
+            task, is_resuming, allow_problematic_for_retry=(effective_retry > 1)
+        )
         if validation_error is not None:
             if return_output:
                 return validation_error
             return validation_error.output
-        
-        # Reset price_id and tool_calls for fresh metric tracking
-        # Done after validation so failed-validation doesn't corrupt existing metrics
+
+        if not is_resuming and effective_retry > 1 and task.is_problematic:
+            task.status = None
+            task.run_id = None
+
         task.price_id_ = None
         _ = task.price_id
         task._tool_calls = []
-        
-        # Update policy managers debug flag if debug is enabled
+
         if debug or self.debug:
             self.user_policy_manager.debug = True
             self.agent_policy_manager.debug = True
-        
-        # For resumption, use existing run_id and output
+
         if is_resuming:
             run_id = _resume_output.run_id
             self.run_id = run_id
             self._agent_run_output = _resume_output
             self._agent_run_output.is_streaming = False
-            # Set resolved print flag on output for thread-safe access
             self._agent_run_output.print_flag = resolved_print_flag
         else:
             run_id = str(uuid.uuid4())
             self.run_id = run_id
             register_run(run_id)
-        
+
         try:
             if not is_resuming:
-                # 1. Create AgentRunInput
                 run_input = self._create_agent_run_input(task)
-
-                # 2. Create AgentRunOutput using centralized factory method
                 self._agent_run_output = self._create_agent_run_output(
                     run_id=run_id,
                     task=task,
                     run_input=run_input,
                     is_streaming=False
                 )
-                
-                # Set resolved print flag on output for thread-safe access
                 self._agent_run_output.print_flag = resolved_print_flag
-                
-                # Set run_id on task for cross-process continuation support
                 if task is not None:
                     task.run_id = run_id
-            
-            
-            # Apply model override if provided
+
             self._apply_model_override(model)
-            
-            # 3. Create pipeline with direct (non-streaming) steps
+
             pipeline = PipelineManager(
                 steps=self._create_direct_pipeline_steps(),
                 task=self._agent_run_output.task,
@@ -2867,19 +2859,10 @@ class Agent(BaseAgent):
                 model=self.model,
                 debug=debug or self.debug
             )
-            
-            # 4. Execute pipeline (with optional start_step_index for resumption)
-            try:
-                await pipeline.execute(self._agent_run_output, start_step_index=start_step_index)
-                cleanup_run(run_id)
-            except Exception as pipeline_error:
 
-                sentry_sdk.flush()
-                raise pipeline_error
-            
+            await pipeline.execute(self._agent_run_output, start_step_index=start_step_index)
+            cleanup_run(run_id)
             sentry_sdk.flush()
-            
-            # Return based on return_output parameter
             if return_output:
                 return self._agent_run_output
             return self._agent_run_output.output
