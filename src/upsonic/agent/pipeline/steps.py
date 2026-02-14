@@ -1667,7 +1667,8 @@ class CallManagementStep(Step):
                     tool_usage_result,
                     agent.debug,
                     getattr(task, 'price_id', None),
-                    print_output=context.print_flag
+                    print_output=context.print_flag,
+                    show_tool_calls=agent.show_tool_calls
                 )
             
             step_result = StepResult(

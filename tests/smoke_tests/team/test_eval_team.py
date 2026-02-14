@@ -2,7 +2,9 @@
 Test 26: Eval features testing for Team class
 Success criteria: We check the attributes, what we log and results
 """
+import sys
 import pytest
+from rich.console import Console
 from io import StringIO
 from contextlib import redirect_stdout
 
@@ -12,34 +14,43 @@ from upsonic.eval import AccuracyEvaluator, PerformanceEvaluator
 pytestmark = pytest.mark.timeout(300)
 
 
+def _enable_print_capture() -> None:
+    import upsonic.utils.printing as _printing
+    _printing.console = Console(file=sys.stdout)
+
+
 @pytest.mark.asyncio
 async def test_team_accuracy_evaluation(capsys):
     """Test Team with AccuracyEvaluator - verify all attributes and logging."""
-    
+    _enable_print_capture()
     # Create team agents
     researcher = Agent(
         model="openai/gpt-4o-mini",
         name="Researcher",
         role="Research Specialist",
-        goal="Find accurate information"
+        goal="Find accurate information",
+        debug=True
     )
     writer = Agent(
         model="openai/gpt-4o-mini",
         name="Writer",
         role="Content Writer",
-        goal="Create concise summaries"
+        goal="Create concise summaries",
+        debug=True
     )
     
     # Create team
     team = Team(
         entities=[researcher, writer],
-        mode="sequential"
+        mode="sequential",
+        debug=True
     )
     
     # Create judge agent
     judge_agent = Agent(
         model="openai/gpt-4o-mini",
-        name="Judge"
+        name="Judge",
+        debug=True
     )
     
     # Create evaluator
@@ -108,19 +119,21 @@ async def test_team_accuracy_evaluation(capsys):
 @pytest.mark.asyncio
 async def test_team_performance_evaluation(capsys):
     """Test Team with PerformanceEvaluator - verify all attributes and logging."""
-    
+    _enable_print_capture()
     # Create team agents
     analyst = Agent(
         model="openai/gpt-4o-mini",
         name="Analyst",
         role="Data Analyst",
-        goal="Analyze data"
+        goal="Analyze data",
+        debug=True
     )
     
     # Create simple team
     team = Team(
         entities=[analyst],
-        mode="sequential"
+        mode="sequential",
+        debug=True
     )
     
     # Create task

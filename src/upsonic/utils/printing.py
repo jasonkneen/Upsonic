@@ -1011,7 +1011,7 @@ def connected_to_server(server_type: str, status: str, total_time: float = None)
 
     spacing()
 
-def call_end(result: Any, model: Any, response_format: str, start_time: float, end_time: float, usage: dict, tool_usage: list, debug: bool = False, price_id: str = None, print_output: bool = False):
+def call_end(result: Any, model: Any, response_format: str, start_time: float, end_time: float, usage: dict, tool_usage: list, debug: bool = False, price_id: str = None, print_output: bool = False, show_tool_calls: bool = False):
     # Handle price_id tracking regardless of print_output
     if price_id:
         estimated_cost = get_estimated_cost(usage['input_tokens'], usage['output_tokens'], model)
@@ -1034,12 +1034,11 @@ def call_end(result: Any, model: Any, response_format: str, start_time: float, e
             if debug:
                 pass  # Error calculating cost
 
+    if tool_usage and len(tool_usage) > 0 and (print_output or show_tool_calls):
+        display_tool_calls_table(tool_usage, debug=debug)
+
     if not print_output:
         return
-    
-    # Display tool calls in magnificent table
-    if tool_usage and len(tool_usage) > 0:
-        display_tool_calls_table(tool_usage, debug=debug)
     
     # Display LLM result in magnificent table
     # Calculate execution time, ensuring both timestamps are valid

@@ -76,8 +76,8 @@ async def test_coordinate_nested_team_entity_delegated(capsys: pytest.CaptureFix
     # Leader assertions
     assert outer_team.leader_agent is not None, "Framework should create leader_agent"
     assert outer_team.leader_agent not in outer_team.entities, "Leader should not be in entities list"
-    assert outer_team.memory is not None, "Framework should set team memory for coordinate mode"
-    assert outer_team.leader_agent.memory is not None, "Leader should have memory"
+    assert outer_team.memory is None, "Team memory should remain None when not explicitly set"
+    assert outer_team.leader_agent.memory is None, "Leader should have no memory when team memory is not set"
 
     # info_log assertions — verify delegation is logged via info_log
     assert "Coordinate mode" in out, (

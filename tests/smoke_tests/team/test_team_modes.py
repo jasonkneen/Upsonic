@@ -7,16 +7,22 @@ Tests that:
 - Route mode logs show the selected agent name
 """
 
+import sys
 import pytest
+from rich.console import Console
 from upsonic import Agent, Task, Team
-from io import StringIO
-from contextlib import redirect_stdout
 
 pytestmark = pytest.mark.timeout(120)
 
 
+def _enable_print_capture() -> None:
+    """Patch Rich console to use current sys.stdout so capsys captures agent/team prints."""
+    import upsonic.utils.printing as _printing
+    _printing.console = Console(file=sys.stdout)
+
+
 @pytest.mark.asyncio
-async def test_sequential_mode_agent_name_logging():
+async def test_sequential_mode_agent_name_logging(capsys: pytest.CaptureFixture[str]):
     """Test that sequential mode logs show corresponding Agent names.
     
     In sequential mode:
@@ -24,6 +30,7 @@ async def test_sequential_mode_agent_name_logging():
     - Task 2 goes to Agent 2
     - We need the same number of tasks as agents
     """
+    _enable_print_capture()
     researcher = Agent(
         model="openai/gpt-4o",
         name="Researcher",
@@ -43,37 +50,28 @@ async def test_sequential_mode_agent_name_logging():
         mode="sequential"
     )
     
-    # Sequential mode: same number of tasks as agents
-    # Task 1 → Agent 1 (Researcher)
-    # Task 2 → Agent 2 (Writer)
     tasks = [
         Task(description="Research the latest developments in quantum computing"),
         Task(description="Write a blog post about quantum computing for general audience")
     ]
     
-    # Verify we have the same number of tasks as agents
     assert len(tasks) == len([researcher, writer]), "Sequential mode requires same number of tasks as agents"
     
-    # Capture stdout to check logs
-    output_buffer = StringIO()
-    with redirect_stdout(output_buffer):
-        result = await team.multi_agent_async([researcher, writer], tasks)
+    result = await team.multi_agent_async([researcher, writer], tasks, _print_method_default=True)
     
-    output = output_buffer.getvalue()
+    captured = capsys.readouterr()
+    output = captured.out
     
-    # Verify result exists
     assert result is not None, "Result should not be None"
     
-    # Verify agent names appear in logs
-    # agent_started is called with agent.get_agent_id() which should include the name
-    # In sequential mode, both agents should be used (task 1 → agent 1, task 2 → agent 2)
     assert "Researcher" in output or "researcher" in output.lower(), f"Researcher name should appear in logs (Task 1 → Agent 1). Output: {output[:500]}"
     assert "Writer" in output or "writer" in output.lower(), f"Writer name should appear in logs (Task 2 → Agent 2). Output: {output[:500]}"
 
 
 @pytest.mark.asyncio
-async def test_route_mode_selected_agent_logging():
+async def test_route_mode_selected_agent_logging(capsys: pytest.CaptureFixture[str]):
     """Test that route mode logs show the selected agent name."""
+    _enable_print_capture()
     legal_expert = Agent(
         model="openai/gpt-4o",
         name="Legal Expert",
@@ -98,18 +96,13 @@ async def test_route_mode_selected_agent_logging():
     
     task = Task(description="What are the best practices for implementing OAuth 2.0?")
     
-    # Capture stdout to check logs
-    output_buffer = StringIO()
-    with redirect_stdout(output_buffer):
-        result = await team.multi_agent_async([legal_expert, tech_expert], [task])
+    result = await team.multi_agent_async([legal_expert, tech_expert], [task], _print_method_default=True)
     
-    output = output_buffer.getvalue()
+    captured = capsys.readouterr()
+    output = captured.out
     
-    # Verify result exists
     assert result is not None, "Result should not be None"
     
-    # Verify that one of the agent names appears in logs (the selected one)
-    # Since OAuth 2.0 is a technical topic, Tech Expert should be selected
     agent_names_in_output = (
         "Tech Expert" in output or "tech expert" in output.lower() or
         "Legal Expert" in output or "legal expert" in output.lower()
@@ -118,8 +111,9 @@ async def test_route_mode_selected_agent_logging():
 
 
 @pytest.mark.asyncio
-async def test_coordinate_mode_agent_name_logging():
+async def test_coordinate_mode_agent_name_logging(capsys: pytest.CaptureFixture[str]):
     """Test that coordinate mode logs show agent names (leader and members)."""
+    _enable_print_capture()
     data_analyst = Agent(
         model="openai/gpt-4o",
         name="Data Analyst",
@@ -145,22 +139,15 @@ async def test_coordinate_mode_agent_name_logging():
         Task(description="Create executive summary of findings")
     ]
     
-    # Capture stdout to check logs
-    output_buffer = StringIO()
-    with redirect_stdout(output_buffer):
-        result = await team.multi_agent_async([data_analyst, report_writer], tasks)
+    result = await team.multi_agent_async([data_analyst, report_writer], tasks, _print_method_default=True)
     
-    output = output_buffer.getvalue()
+    captured = capsys.readouterr()
+    output = captured.out
     
-    # Verify result exists
     assert result is not None, "Result should not be None"
     
-    # Verify agent names appear in logs
-    # In coordinate mode, the leader agent coordinates and delegates to members
-    # Both leader and member agent names should appear in logs
     agent_names_in_output = (
         "Data Analyst" in output or "data analyst" in output.lower() or
         "Report Writer" in output or "report writer" in output.lower()
     )
     assert agent_names_in_output, f"At least one agent name (Data Analyst or Report Writer) should appear in logs. Output: {output[:500]}"
-

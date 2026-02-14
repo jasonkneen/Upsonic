@@ -34,6 +34,23 @@ class RunnableNode:
         return class_name
 
 
+class _StateGraphNodeRef(Runnable):
+    """Lightweight proxy representing a StateGraph node for visualization.
+    
+    Provides the interface expected by RunnableNode without requiring
+    an actual executable Runnable instance.
+    """
+    
+    def __init__(self, name: str) -> None:
+        self._node_name: str = name
+    
+    def invoke(self, input: Any, config: Optional[Dict[str, Any]] = None) -> Any:
+        raise NotImplementedError("_StateGraphNodeRef is for visualization only")
+    
+    def __repr__(self) -> str:
+        return self._node_name
+
+
 class RunnableGraph:
     """Graph representation of a runnable chain."""
     
@@ -49,8 +66,11 @@ class RunnableGraph:
         self.node_counter = 0
         self._visited: Set[int] = set()
         
-        # Build the graph
-        self._build_graph(root)
+        # Build the graph based on root type
+        if self._is_state_graph(root):
+            self._build_state_graph(root)
+        else:
+            self._build_graph(root)
     
     def _build_graph(self, runnable: Runnable, parent_id: Optional[int] = None) -> int:
         """
@@ -124,6 +144,97 @@ class RunnableGraph:
         self.nodes[node_id] = node
         
         return node_id
+    
+    def _is_state_graph(self, runnable: Runnable) -> bool:
+        """Check if the runnable is a StateGraph or CompiledStateGraph.
+        
+        Args:
+            runnable: The runnable to check
+            
+        Returns:
+            True if the runnable is a state graph type
+        """
+        try:
+            from upsonic.graphv2.state_graph import StateGraph, CompiledStateGraph
+            return isinstance(runnable, (StateGraph, CompiledStateGraph))
+        except ImportError:
+            return False
+    
+    def _build_state_graph(self, graph: Runnable) -> None:
+        """Build graph visualization from a StateGraph or CompiledStateGraph.
+        
+        Creates nodes for START, END, and all registered graph nodes.
+        Normal edges are represented as sequential connections (edges_to).
+        Conditional edges are represented as parallel branches to visually
+        distinguish dynamic routing from static flow.
+        
+        Args:
+            graph: A StateGraph or CompiledStateGraph instance
+        """
+        from upsonic.graphv2.primitives import END as END_MARKER
+        
+        START_MARKER: str = "__start__"
+        
+        # Access graph structure (both StateGraph and CompiledStateGraph share these attrs)
+        nodes_dict: Dict[str, Any] = graph.nodes  # type: ignore[assignment]
+        edges_list: List[Any] = graph.edges  # type: ignore[assignment]
+        conditional_edges_list: List[Any] = graph.conditional_edges  # type: ignore[assignment]
+        
+        name_to_id: Dict[str, int] = {}
+        
+        # Collect all node names referenced in edges to determine START/END usage
+        all_referenced: Set[str] = set()
+        for edge in edges_list:
+            all_referenced.add(edge.from_node)
+            all_referenced.add(edge.to_node)
+        for cond_edge in conditional_edges_list:
+            all_referenced.add(cond_edge.from_node)
+            for target in cond_edge.targets:
+                all_referenced.add(target)
+        
+        # Create START node if referenced in any edge
+        if START_MARKER in all_referenced:
+            name_to_id[START_MARKER] = self._build_graph_node(
+                _StateGraphNodeRef(START_MARKER)
+            )
+        
+        # Create nodes for each registered graph node (preserves insertion order)
+        for node_name in nodes_dict:
+            name_to_id[node_name] = self._build_graph_node(
+                _StateGraphNodeRef(node_name)
+            )
+        
+        # Create END node if referenced in any edge
+        if END_MARKER in all_referenced:
+            name_to_id[END_MARKER] = self._build_graph_node(
+                _StateGraphNodeRef(END_MARKER)
+            )
+        
+        # Track nodes with conditional edges (conditional takes precedence at runtime)
+        conditional_sources: Set[str] = {
+            cond_edge.from_node for cond_edge in conditional_edges_list
+        }
+        
+        # Add normal edges as sequential connections (edges_to)
+        for edge in edges_list:
+            # Skip normal edges from nodes that also have conditional edges
+            if edge.from_node in conditional_sources:
+                continue
+            from_id: Optional[int] = name_to_id.get(edge.from_node)
+            to_id: Optional[int] = name_to_id.get(edge.to_node)
+            if from_id is not None and to_id is not None:
+                self.nodes[from_id].edges_to.append(to_id)
+        
+        # Add conditional edges as parallel branches (dashed arrows in mermaid)
+        for cond_edge in conditional_edges_list:
+            from_id = name_to_id.get(cond_edge.from_node)
+            if from_id is not None:
+                for target in cond_edge.targets:
+                    target_id: Optional[int] = name_to_id.get(target)
+                    if target_id is not None:
+                        self.nodes[from_id].parallel_branches.append(
+                            (target, target_id)
+                        )
     
     def print_ascii(self) -> None:
         """Print an ASCII representation of the graph."""

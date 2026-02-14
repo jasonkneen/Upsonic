@@ -85,7 +85,8 @@ class CallManager:
                 tool_usage_result,
                 self.debug,
                 self.task.price_id,
-                print_output=self.print_output
+                print_output=self.print_output,
+                show_tool_calls=self.show_tool_calls
             )
     
     def prepare(self) -> None:
