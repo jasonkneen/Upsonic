@@ -1,10 +1,49 @@
 import asyncio
 import copy
+import threading
 import uuid
 from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Literal, Optional, Union, TYPE_CHECKING
 
 
 from upsonic.utils.logging_config import sentry_sdk, get_env_bool_optional
+
+
+# ---------------------------------------------------------------------------
+# Persistent event loop for sync wrappers (do, stream, print_do, etc.)
+#
+# asyncio.run() creates a *new* event loop each call and closes it afterward.
+# Cached httpx.AsyncClient connections inside the OpenAI SDK stay bound to
+# the first loop.  When asyncio.run() destroys that loop, subsequent calls
+# fail with "RuntimeError: Event loop is closed".
+#
+# Solution: keep a single background loop alive for the process lifetime so
+# async clients and their connection pools remain valid across calls.
+# ---------------------------------------------------------------------------
+_bg_loop: Optional[asyncio.AbstractEventLoop] = None
+_bg_loop_lock = threading.Lock()
+
+
+def _get_bg_loop() -> asyncio.AbstractEventLoop:
+    """Return a persistent event loop running in a daemon thread."""
+    global _bg_loop
+    if _bg_loop is not None and not _bg_loop.is_closed():
+        return _bg_loop
+    with _bg_loop_lock:
+        # Double-check after acquiring lock
+        if _bg_loop is not None and not _bg_loop.is_closed():
+            return _bg_loop
+        loop = asyncio.new_event_loop()
+        thread = threading.Thread(target=loop.run_forever, daemon=True, name="upsonic-bg-loop")
+        thread.start()
+        _bg_loop = loop
+        return _bg_loop
+
+
+def _run_in_bg_loop(coro):
+    """Submit *coro* to the persistent background loop and block until done."""
+    loop = _get_bg_loop()
+    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    return future.result()
 from upsonic.agent.base import BaseAgent
 from upsonic.run.agent.output import AgentRunOutput
 from upsonic.run.agent.input import AgentRunInput
@@ -534,23 +573,11 @@ class Agent(BaseAgent):
         Returns:
             Same as do - Task content or AgentRunOutput based on return_output.
         """
-        import asyncio
-        
         if not self.workspace or self._workspace_greeting_executed:
             return None
-        
-        try:
-            loop = asyncio.get_running_loop()
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(
-                    asyncio.run, 
-                    self.execute_workspace_greeting_async(return_output)
-                )
-                return future.result()
-        except RuntimeError:
-            return asyncio.run(self.execute_workspace_greeting_async(return_output))
-    
+
+        return _run_in_bg_loop(self.execute_workspace_greeting_async(return_output))
+
     def _setup_policy_models(self) -> None:
         """Setup model references for safety policies."""
         # Setup models for all policies in both managers
@@ -1082,27 +1109,13 @@ class Agent(BaseAgent):
                 "metadata": tool_def.metadata or {}
             }
             
-            # Execute validation synchronously using nest_asyncio if needed
-            try:
-                # Check if we're in async context
-                loop = asyncio.get_running_loop()
-                # Already in event loop - use nest_asyncio
-                import nest_asyncio
-                nest_asyncio.apply()
-                validation_result = asyncio.run(
-                    self.tool_policy_pre_manager.execute_tool_validation_async(
-                        tool_info=tool_info,
-                        check_type=f"Pre-Execution Tool Validation ({context_description})"
-                    )
+            # Execute validation synchronously via persistent background loop
+            validation_result = _run_in_bg_loop(
+                self.tool_policy_pre_manager.execute_tool_validation_async(
+                    tool_info=tool_info,
+                    check_type=f"Pre-Execution Tool Validation ({context_description})"
                 )
-            except RuntimeError:
-                # No event loop - safe to use asyncio.run()
-                validation_result = asyncio.run(
-                    self.tool_policy_pre_manager.execute_tool_validation_async(
-                        tool_info=tool_info,
-                        check_type=f"Pre-Execution Tool Validation ({context_description})"
-                    )
-                )
+            )
             
             if validation_result.should_block():
                 # Handle blocking based on action type
@@ -2581,23 +2594,8 @@ class Agent(BaseAgent):
             print(f"Use: {recommendation.model_name}")
             ```
         """
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(
-                        asyncio.run,
-                        self.recommend_model_for_task_async(task, criteria, use_llm)
-                    )
-                    return future.result()
-            else:
-                return loop.run_until_complete(
-                    self.recommend_model_for_task_async(task, criteria, use_llm)
-                )
-        except RuntimeError:
-            return asyncio.run(self.recommend_model_for_task_async(task, criteria, use_llm))
-    
+        return _run_in_bg_loop(self.recommend_model_for_task_async(task, criteria, use_llm))
+
     def get_last_model_recommendation(self) -> Optional[Any]:
         """
         Get the last model recommendation made by the agent.
@@ -3064,23 +3062,12 @@ class Agent(BaseAgent):
         if isinstance(task, str):
             task = TaskClass(description=task)
 
-        try:
-            loop = asyncio.get_running_loop()
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(asyncio.run, self.do_async(
-                    task, model, debug, retry, return_output,
-                    timeout=timeout, partial_on_timeout=partial_on_timeout,
-                    _print_method_default=False,
-                ))
-                return future.result()
-        except RuntimeError:
-            return asyncio.run(self.do_async(
-                task, model, debug, retry, return_output,
-                timeout=timeout, partial_on_timeout=partial_on_timeout,
-                _print_method_default=False,
-            ))
-    
+        return _run_in_bg_loop(self.do_async(
+            task, model, debug, retry, return_output,
+            timeout=timeout, partial_on_timeout=partial_on_timeout,
+            _print_method_default=False,
+        ))
+
     def print_do(
         self,
         task: Union[str, "Task", List[Union[str, "Task"]]],
@@ -3123,15 +3110,11 @@ class Agent(BaseAgent):
         if isinstance(task, str):
             task = TaskClass(description=task)
 
-        try:
-            loop = asyncio.get_running_loop()
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(asyncio.run, self.do_async(task, model, debug, retry, return_output, _print_method_default=True))
-                return future.result()
-        except RuntimeError:
-            return asyncio.run(self.do_async(task, model, debug, retry, return_output, _print_method_default=True))
-    
+        return _run_in_bg_loop(self.do_async(
+            task, model, debug, retry, return_output,
+            _print_method_default=True,
+        ))
+
     async def print_do_async(
         self,
         task: Union[str, "Task", List[Union[str, "Task"]]],
@@ -3275,16 +3258,12 @@ class Agent(BaseAgent):
                 result_queue.put(None)
         
         def run_async_stream():
-            asyncio.run(stream_to_queue())
-        
-        try:
-            asyncio.get_running_loop()
-            thread = threading.Thread(target=run_async_stream, daemon=True)
-            thread.start()
-        except RuntimeError:
-            thread = threading.Thread(target=run_async_stream, daemon=True)
-            thread.start()
-        
+            loop = _get_bg_loop()
+            asyncio.run_coroutine_threadsafe(stream_to_queue(), loop).result()
+
+        thread = threading.Thread(target=run_async_stream, daemon=True)
+        thread.start()
+
         while True:
             item = result_queue.get()
             if item is None:
@@ -3768,49 +3747,17 @@ class Agent(BaseAgent):
                     results.append(item)
                 return results
             
-            try:
-                loop = asyncio.get_running_loop()
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(asyncio.run, collect_stream())
-                    return future.result()
-            except RuntimeError:
-                return asyncio.run(collect_stream())
+            return _run_in_bg_loop(collect_stream())
         else:
             # Direct mode
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    import concurrent.futures
-                    with concurrent.futures.ThreadPoolExecutor() as executor:
-                        future = executor.submit(
-                            asyncio.run, 
-                            self.continue_run_async(
-                                task, run_id, requirements, model, debug, retry, return_output,
-                                streaming=False,
-                                event=event,
-                                external_tool_executor=external_tool_executor
-                            )
-                        )
-                        return future.result()
-                else:
-                    return loop.run_until_complete(
-                        self.continue_run_async(
-                            task, run_id, requirements, model, debug, retry, return_output,
-                            streaming=False,
-                            event=event,
-                            external_tool_executor=external_tool_executor
-                        )
-                    )
-            except RuntimeError:
-                return asyncio.run(
-                    self.continue_run_async(
-                        task, run_id, requirements, model, debug, retry, return_output,
-                        streaming=False,
-                        event=event,
-                        external_tool_executor=external_tool_executor
-                    )
+            return _run_in_bg_loop(
+                self.continue_run_async(
+                    task, run_id, requirements, model, debug, retry, return_output,
+                    streaming=False,
+                    event=event,
+                    external_tool_executor=external_tool_executor
                 )
+            )
     
     async def _prepare_continuation_context(
         self,
