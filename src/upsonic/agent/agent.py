@@ -2737,6 +2737,8 @@ class Agent(BaseAgent):
         return_output: bool = False,
         state: Optional["State"] = None,
         *,
+        timeout: Optional[float] = None,
+        partial_on_timeout: bool = False,
         graph_execution_id: Optional[str] = None,
         _resume_output: Optional[AgentRunOutput] = None,
         _resume_step_index: Optional[int] = None,
@@ -2744,11 +2746,11 @@ class Agent(BaseAgent):
     ) -> Union[Any, List[Any], List[AgentRunOutput]]:
         """
         Execute a task (or list of tasks) asynchronously using the pipeline architecture.
-        
+
         When a list of tasks is provided with more than one element, each task is
         executed sequentially and a list of results is returned.  A single-element
         list is unwrapped and treated identically to a non-list input.
-        
+
         Args:
             task: Task to execute. Accepts a single Task/str or a list of them.
             model: Override model for this execution
@@ -2756,11 +2758,15 @@ class Agent(BaseAgent):
             retry: Number of retries
             return_output: If True, return full AgentRunOutput. If False (default), return content only.
             state: Graph execution state
+            timeout: Maximum execution time in seconds. None means no timeout.
+            partial_on_timeout: If True and timeout is set, return whatever text was
+                generated so far instead of raising an error. Requires timeout to be set.
+                Internally uses streaming to enable progressive text capture.
             graph_execution_id: Graph execution identifier
             _resume_output: Internal - output for HITL resumption
             _resume_step_index: Internal - step index to resume from
             _print_method_default: Internal - default print value based on method (do=False, print_do=True)
-            
+
         Returns:
             Single task:
                 Task content (str, BaseModel, etc.) if return_output=False
@@ -2768,24 +2774,22 @@ class Agent(BaseAgent):
             List of tasks (len > 1):
                 List of task contents if return_output=False
                 List of AgentRunOutput if return_output=True
-                
+
         Example:
             ```python
             # Single task
             result = await agent.do_async(task)
-            
-            # Multiple tasks
-            results = await agent.do_async([task1, task2, task3])
-            # results is a list of outputs
-            
-            # Multiple tasks with full output
-            outputs = await agent.do_async([task1, task2], return_output=True)
-            # outputs is a list of AgentRunOutput
+
+            # With timeout and partial results
+            result = await agent.do_async(task, timeout=120, partial_on_timeout=True)
+            # If timeout hits: returns whatever text was generated so far
+            # If completed normally: returns full result
             ```
         """
         handled, task_or_results = await self._handle_task_list_async(
             task, self.do_async,
             model, debug, retry, return_output, state,
+            timeout=timeout, partial_on_timeout=partial_on_timeout,
             graph_execution_id=graph_execution_id,
             _print_method_default=_print_method_default,
         )
@@ -2793,12 +2797,18 @@ class Agent(BaseAgent):
             return task_or_results
         task = task_or_results
 
+        # Validate timeout parameters
+        if partial_on_timeout and timeout is None:
+            raise ValueError("partial_on_timeout=True requires timeout to be set")
+        if timeout is not None and timeout <= 0:
+            raise ValueError("timeout must be a positive number")
+
         from upsonic.agent.pipeline import PipelineManager
-        
+
         # Resolve print flag based on hierarchy (ENV > param > method default)
         # Store locally - don't mutate self.print to ensure thread-safety
         resolved_print_flag = self._resolve_print_flag(_print_method_default)
-        
+
         # Convert string to Task if needed
         task = self._convert_to_task(task)
         
@@ -2852,20 +2862,110 @@ class Agent(BaseAgent):
 
             self._apply_model_override(model)
 
-            pipeline = PipelineManager(
-                steps=self._create_direct_pipeline_steps(),
-                task=self._agent_run_output.task,
-                agent=self,
-                model=self.model,
-                debug=debug or self.debug
-            )
+            if partial_on_timeout and timeout is not None:
+                # Case A: Use streaming pipeline internally to capture partial text on timeout.
+                # Only streaming gives progressive text accumulation.
+                self._agent_run_output.is_streaming = True
 
-            await pipeline.execute(self._agent_run_output, start_step_index=start_step_index)
-            cleanup_run(run_id)
-            sentry_sdk.flush()
-            if return_output:
-                return self._agent_run_output
-            return self._agent_run_output.output
+                pipeline = PipelineManager(
+                    steps=self._create_streaming_pipeline_steps(),
+                    task=self._agent_run_output.task,
+                    agent=self,
+                    model=self.model,
+                    debug=debug or self.debug
+                )
+
+                async def _consume_stream():
+                    """Consume streaming pipeline events, accumulating text silently."""
+                    async for pipeline_event in pipeline.execute_stream(
+                        context=self._agent_run_output, start_step_index=start_step_index
+                    ):
+                        text_content = self._extract_text_from_stream_event(pipeline_event)
+                        if text_content:
+                            self._agent_run_output.accumulated_text += text_content
+
+                try:
+                    await asyncio.wait_for(_consume_stream(), timeout=timeout)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    # Timeout fired - return whatever text was accumulated
+                    cancel_run_func(run_id)
+
+                    partial_text = self._agent_run_output.accumulated_text or None
+
+                    self._agent_run_output.mark_cancelled()
+                    if self._agent_run_output.metadata is None:
+                        self._agent_run_output.metadata = {}
+                    self._agent_run_output.metadata["timeout"] = True
+                    self._agent_run_output.metadata["partial_result"] = bool(partial_text)
+                    self._agent_run_output.metadata["timeout_seconds"] = timeout
+
+                    self._agent_run_output.output = partial_text
+                    if task is not None:
+                        task._response = partial_text
+
+                    cleanup_run(run_id)
+                    sentry_sdk.flush()
+
+                    if return_output:
+                        return self._agent_run_output
+                    return self._agent_run_output.output
+
+                # Normal completion - restore is_streaming for return consistency
+                self._agent_run_output.is_streaming = False
+
+                cleanup_run(run_id)
+                sentry_sdk.flush()
+                if return_output:
+                    return self._agent_run_output
+                return self._agent_run_output.output
+
+            elif timeout is not None:
+                # Case B: Normal pipeline with timeout - raises on expiry
+                from upsonic.exceptions import ExecutionTimeoutError
+
+                pipeline = PipelineManager(
+                    steps=self._create_direct_pipeline_steps(),
+                    task=self._agent_run_output.task,
+                    agent=self,
+                    model=self.model,
+                    debug=debug or self.debug
+                )
+
+                try:
+                    await asyncio.wait_for(
+                        pipeline.execute(self._agent_run_output, start_step_index=start_step_index),
+                        timeout=timeout
+                    )
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    cancel_run_func(run_id)
+                    cleanup_run(run_id)
+                    raise ExecutionTimeoutError(
+                        f"Agent execution timed out after {timeout} seconds",
+                        timeout=timeout
+                    )
+
+                cleanup_run(run_id)
+                sentry_sdk.flush()
+                if return_output:
+                    return self._agent_run_output
+                return self._agent_run_output.output
+
+            else:
+                # Case C: No timeout - original behavior
+                pipeline = PipelineManager(
+                    steps=self._create_direct_pipeline_steps(),
+                    task=self._agent_run_output.task,
+                    agent=self,
+                    model=self.model,
+                    debug=debug or self.debug
+                )
+
+                await pipeline.execute(self._agent_run_output, start_step_index=start_step_index)
+                cleanup_run(run_id)
+                sentry_sdk.flush()
+                if return_output:
+                    return self._agent_run_output
+                return self._agent_run_output.output
         finally:
             self.run_id = None
     
@@ -2921,22 +3021,28 @@ class Agent(BaseAgent):
         model: Optional[Union[str, "Model"]] = None,
         debug: bool = False,
         retry: int = 1,
-        return_output: bool = False
+        return_output: bool = False,
+        timeout: Optional[float] = None,
+        partial_on_timeout: bool = False,
     ) -> Union[Any, List[Any], List[AgentRunOutput]]:
         """
         Execute a task (or list of tasks) synchronously.
-        
+
         When a list of tasks is provided with more than one element, each task is
         executed sequentially and a list of results is returned.  A single-element
         list is unwrapped and treated identically to a non-list input.
-        
+
         Args:
             task: Task to execute. Accepts a single Task/str or a list of them.
             model: Override model for this execution
             debug: Enable debug mode
             retry: Number of retries
             return_output: If True, return full AgentRunOutput. If False (default), return content only.
-            
+            timeout: Maximum execution time in seconds. None means no timeout.
+            partial_on_timeout: If True and timeout is set, return whatever text was
+                generated so far instead of raising an error. Requires timeout to be set.
+                Internally uses streaming to enable progressive text capture.
+
         Returns:
             Single task:
                 Task content (str, BaseModel, etc.) if return_output=False
@@ -2947,6 +3053,7 @@ class Agent(BaseAgent):
         """
         handled, task_or_results = self._handle_task_list(
             task, self.do, model, debug, retry, return_output,
+            timeout, partial_on_timeout,
         )
         if handled:
             return task_or_results
@@ -2961,10 +3068,18 @@ class Agent(BaseAgent):
             loop = asyncio.get_running_loop()
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(asyncio.run, self.do_async(task, model, debug, retry, return_output, _print_method_default=False))
+                future = executor.submit(asyncio.run, self.do_async(
+                    task, model, debug, retry, return_output,
+                    timeout=timeout, partial_on_timeout=partial_on_timeout,
+                    _print_method_default=False,
+                ))
                 return future.result()
         except RuntimeError:
-            return asyncio.run(self.do_async(task, model, debug, retry, return_output, _print_method_default=False))
+            return asyncio.run(self.do_async(
+                task, model, debug, retry, return_output,
+                timeout=timeout, partial_on_timeout=partial_on_timeout,
+                _print_method_default=False,
+            ))
     
     def print_do(
         self,

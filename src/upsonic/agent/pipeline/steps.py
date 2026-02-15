@@ -17,6 +17,7 @@ The base class Step.run() method handles:
 - Updating context.execution_stats
 """
 
+import asyncio
 import time
 from typing import TYPE_CHECKING, Any, AsyncIterator, Optional
 from .step import Step, StepResult, StepStatus
@@ -2602,6 +2603,13 @@ class StreamModelExecutionStep(Step):
                 execution_time=time.time() - start_time
             )
             
+        except asyncio.CancelledError:
+            context.current_step_result = StepResult(
+                status=StepStatus.CANCELLED,
+                message="Cancelled due to timeout",
+                execution_time=time.time() - start_time
+            )
+            raise
         except Exception as e:
             context.current_step_result = StepResult(
                 status=StepStatus.ERROR,

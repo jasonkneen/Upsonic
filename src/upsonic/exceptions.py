@@ -162,7 +162,15 @@ class FileNotFoundError(UpsonicError):
 
 class RunCancelledException(UpsonicError):
     """Exception raised when a run is cancelled by the user."""
-    
+
     def __init__(self, message: str = "Run was cancelled"):
         self.message = message
+        super().__init__(message)
+
+
+class ExecutionTimeoutError(UpsonicError):
+    """Raised when agent execution exceeds the specified timeout."""
+
+    def __init__(self, message: str = "Execution timed out", timeout: float = 0):
+        self.timeout = timeout
         super().__init__(message)
