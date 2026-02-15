@@ -2901,6 +2901,9 @@ class Agent(BaseAgent):
                     if task is not None:
                         task._response = partial_text
 
+                    # Record usage so task.total_input_token / total_output_token work
+                    await self._run_call_management_step(task, debug)
+
                     cleanup_run(run_id)
                     sentry_sdk.flush()
 
@@ -2910,6 +2913,9 @@ class Agent(BaseAgent):
 
                 # Normal completion - restore is_streaming for return consistency
                 self._agent_run_output.is_streaming = False
+
+                # Record usage — streaming pipeline lacks CallManagementStep
+                await self._run_call_management_step(task, debug)
 
                 cleanup_run(run_id)
                 sentry_sdk.flush()
@@ -2967,6 +2973,23 @@ class Agent(BaseAgent):
         finally:
             self.run_id = None
     
+    async def _run_call_management_step(self, task: "Task", debug: bool = False) -> None:
+        """Run CallManagementStep to record usage for streaming-based execution.
+
+        The streaming pipeline lacks CallManagementStep, so when do_async()
+        uses streaming internally (partial_on_timeout), we run it manually
+        so that task.total_input_token / total_output_token work.
+        """
+        try:
+            from upsonic.agent.pipeline.steps import CallManagementStep
+            step = CallManagementStep()
+            await step.execute(
+                self._agent_run_output, task, self, self.model,
+                step_number=0, pipeline_manager=None,
+            )
+        except Exception:
+            pass  # Best-effort — don't let tracking errors mask the result
+
     def _extract_output(self, task: "Task", response: "ModelResponse") -> Any:
         """Extract the output from a model response."""
         from upsonic.messages import TextPart, ToolCallPart
