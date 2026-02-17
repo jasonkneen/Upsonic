@@ -59,6 +59,19 @@ except ImportError:
     _FIRECRAWL_AVAILABLE = False
 
 
+def _serialize(result: Any) -> str:
+    """Serialize a Firecrawl SDK response to a JSON string.
+
+    firecrawl-py v4 returns Pydantic BaseModel objects. This helper calls
+    model_dump() when available so json.dumps receives a plain dict/list
+    instead of a Pydantic object (which would otherwise fall through to
+    the default=str path and produce an opaque string representation).
+    """
+    if hasattr(result, "model_dump"):
+        return json.dumps(result.model_dump(), default=str)
+    return json.dumps(result, default=str)
+
+
 class FirecrawlTools:
     """
     Firecrawl web scraping, crawling, and data extraction toolkit.
@@ -268,12 +281,12 @@ class FirecrawlTools:
                 kwargs["remove_base64_images"] = remove_base64_images
 
             result = self.sync_client.scrape(url, **kwargs)
-            return json.dumps(result, default=str)
+            return _serialize(result)
         except Exception as e:
             error_log(f"Firecrawl scrape error: {e}")
             return json.dumps({"error": str(e)})
 
-    async def ascrape_url(
+    async def _ascrape_url(
         self,
         url: str,
         formats: Optional[List[str]] = None,
@@ -341,7 +354,7 @@ class FirecrawlTools:
                 kwargs["remove_base64_images"] = remove_base64_images
 
             result = await self.async_client.scrape(url, **kwargs)
-            return json.dumps(result, default=str)
+            return _serialize(result)
         except Exception as e:
             error_log(f"Firecrawl async scrape error: {e}")
             return json.dumps({"error": str(e)})
@@ -355,8 +368,7 @@ class FirecrawlTools:
         scrape_formats: Optional[List[str]] = None,
         exclude_paths: Optional[List[str]] = None,
         include_paths: Optional[List[str]] = None,
-        max_depth: Optional[int] = None,
-        allowed_domains: Optional[List[str]] = None,
+        max_discovery_depth: Optional[int] = None,
         sitemap: Optional[str] = None,
         poll_interval: Optional[int] = None,
         timeout: Optional[int] = None,
@@ -370,9 +382,8 @@ class FirecrawlTools:
             scrape_formats: Output formats for scraped pages.
             exclude_paths: URL path patterns to exclude.
             include_paths: URL path patterns to include.
-            max_depth: Maximum crawl depth from the starting URL.
-            allowed_domains: List of domains allowed to crawl.
-            sitemap: Sitemap mode ('only' to crawl sitemap URLs only).
+            max_discovery_depth: Maximum crawl depth from the starting URL.
+            sitemap: Sitemap mode ('skip', 'include', or 'only').
             poll_interval: Polling interval in seconds for job status checks.
             timeout: Timeout in seconds for the entire crawl operation.
 
@@ -392,28 +403,25 @@ class FirecrawlTools:
                 kwargs["exclude_paths"] = exclude_paths
             if include_paths is not None:
                 kwargs["include_paths"] = include_paths
-            if max_depth is not None:
-                kwargs["max_depth"] = max_depth
-            if allowed_domains is not None:
-                kwargs["allowed_domains"] = allowed_domains
+            if max_discovery_depth is not None:
+                kwargs["max_discovery_depth"] = max_discovery_depth
             if sitemap is not None:
                 kwargs["sitemap"] = sitemap
 
             result = self.sync_client.crawl(url=url, **kwargs)
-            return json.dumps(result, default=str)
+            return _serialize(result)
         except Exception as e:
             error_log(f"Firecrawl crawl error: {e}")
             return json.dumps({"error": str(e)})
 
-    async def acrawl_website(
+    async def _acrawl_website(
         self,
         url: str,
         limit: Optional[int] = None,
         scrape_formats: Optional[List[str]] = None,
         exclude_paths: Optional[List[str]] = None,
         include_paths: Optional[List[str]] = None,
-        max_depth: Optional[int] = None,
-        allowed_domains: Optional[List[str]] = None,
+        max_discovery_depth: Optional[int] = None,
         sitemap: Optional[str] = None,
         poll_interval: Optional[int] = None,
         timeout: Optional[int] = None,
@@ -427,9 +435,8 @@ class FirecrawlTools:
             scrape_formats: Output formats for scraped pages.
             exclude_paths: URL path patterns to exclude.
             include_paths: URL path patterns to include.
-            max_depth: Maximum crawl depth from the starting URL.
-            allowed_domains: List of domains allowed to crawl.
-            sitemap: Sitemap mode ('only' to crawl sitemap URLs only).
+            max_discovery_depth: Maximum crawl depth from the starting URL.
+            sitemap: Sitemap mode ('skip', 'include', or 'only').
             poll_interval: Polling interval in seconds for job status checks.
             timeout: Timeout in seconds for the entire crawl operation.
 
@@ -449,15 +456,13 @@ class FirecrawlTools:
                 kwargs["exclude_paths"] = exclude_paths
             if include_paths is not None:
                 kwargs["include_paths"] = include_paths
-            if max_depth is not None:
-                kwargs["max_depth"] = max_depth
-            if allowed_domains is not None:
-                kwargs["allowed_domains"] = allowed_domains
+            if max_discovery_depth is not None:
+                kwargs["max_discovery_depth"] = max_discovery_depth
             if sitemap is not None:
                 kwargs["sitemap"] = sitemap
 
             result = await self.async_client.crawl(url=url, **kwargs)
-            return json.dumps(result, default=str)
+            return _serialize(result)
         except Exception as e:
             error_log(f"Firecrawl async crawl error: {e}")
             return json.dumps({"error": str(e)})
@@ -469,8 +474,7 @@ class FirecrawlTools:
         scrape_formats: Optional[List[str]] = None,
         exclude_paths: Optional[List[str]] = None,
         include_paths: Optional[List[str]] = None,
-        max_depth: Optional[int] = None,
-        allowed_domains: Optional[List[str]] = None,
+        max_discovery_depth: Optional[int] = None,
         sitemap: Optional[str] = None,
     ) -> str:
         """
@@ -482,9 +486,8 @@ class FirecrawlTools:
             scrape_formats: Output formats for scraped pages.
             exclude_paths: URL path patterns to exclude.
             include_paths: URL path patterns to include.
-            max_depth: Maximum crawl depth from the starting URL.
-            allowed_domains: List of domains allowed to crawl.
-            sitemap: Sitemap mode ('only' to crawl sitemap URLs only).
+            max_discovery_depth: Maximum crawl depth from the starting URL.
+            sitemap: Sitemap mode ('skip', 'include', or 'only').
 
         Returns:
             JSON string containing the job ID and initial status.
@@ -500,28 +503,25 @@ class FirecrawlTools:
                 kwargs["exclude_paths"] = exclude_paths
             if include_paths is not None:
                 kwargs["include_paths"] = include_paths
-            if max_depth is not None:
-                kwargs["max_depth"] = max_depth
-            if allowed_domains is not None:
-                kwargs["allowed_domains"] = allowed_domains
+            if max_discovery_depth is not None:
+                kwargs["max_discovery_depth"] = max_discovery_depth
             if sitemap is not None:
                 kwargs["sitemap"] = sitemap
 
             result = self.sync_client.start_crawl(url=url, **kwargs)
-            return json.dumps(result, default=str)
+            return _serialize(result)
         except Exception as e:
             error_log(f"Firecrawl start_crawl error: {e}")
             return json.dumps({"error": str(e)})
 
-    async def astart_crawl(
+    async def _astart_crawl(
         self,
         url: str,
         limit: Optional[int] = None,
         scrape_formats: Optional[List[str]] = None,
         exclude_paths: Optional[List[str]] = None,
         include_paths: Optional[List[str]] = None,
-        max_depth: Optional[int] = None,
-        allowed_domains: Optional[List[str]] = None,
+        max_discovery_depth: Optional[int] = None,
         sitemap: Optional[str] = None,
     ) -> str:
         """
@@ -533,9 +533,8 @@ class FirecrawlTools:
             scrape_formats: Output formats for scraped pages.
             exclude_paths: URL path patterns to exclude.
             include_paths: URL path patterns to include.
-            max_depth: Maximum crawl depth from the starting URL.
-            allowed_domains: List of domains allowed to crawl.
-            sitemap: Sitemap mode ('only' to crawl sitemap URLs only).
+            max_discovery_depth: Maximum crawl depth from the starting URL.
+            sitemap: Sitemap mode ('skip', 'include', or 'only').
 
         Returns:
             JSON string containing the job ID and initial status.
@@ -551,15 +550,13 @@ class FirecrawlTools:
                 kwargs["exclude_paths"] = exclude_paths
             if include_paths is not None:
                 kwargs["include_paths"] = include_paths
-            if max_depth is not None:
-                kwargs["max_depth"] = max_depth
-            if allowed_domains is not None:
-                kwargs["allowed_domains"] = allowed_domains
+            if max_discovery_depth is not None:
+                kwargs["max_discovery_depth"] = max_discovery_depth
             if sitemap is not None:
                 kwargs["sitemap"] = sitemap
 
             result = await self.async_client.start_crawl(url=url, **kwargs)
-            return json.dumps(result, default=str)
+            return _serialize(result)
         except Exception as e:
             error_log(f"Firecrawl async start_crawl error: {e}")
             return json.dumps({"error": str(e)})
@@ -576,12 +573,12 @@ class FirecrawlTools:
         """
         try:
             result = self.sync_client.get_crawl_status(job_id)
-            return json.dumps(result, default=str)
+            return _serialize(result)
         except Exception as e:
             error_log(f"Firecrawl get_crawl_status error: {e}")
             return json.dumps({"error": str(e)})
 
-    async def aget_crawl_status(self, job_id: str) -> str:
+    async def _aget_crawl_status(self, job_id: str) -> str:
         """
         Async version of get_crawl_status.
 
@@ -593,7 +590,7 @@ class FirecrawlTools:
         """
         try:
             result = await self.async_client.get_crawl_status(job_id)
-            return json.dumps(result, default=str)
+            return _serialize(result)
         except Exception as e:
             error_log(f"Firecrawl async get_crawl_status error: {e}")
             return json.dumps({"error": str(e)})
@@ -615,7 +612,7 @@ class FirecrawlTools:
             error_log(f"Firecrawl cancel_crawl error: {e}")
             return json.dumps({"error": str(e)})
 
-    async def acancel_crawl(self, job_id: str) -> str:
+    async def _acancel_crawl(self, job_id: str) -> str:
         """
         Async version of cancel_crawl.
 
@@ -655,12 +652,12 @@ class FirecrawlTools:
                 kwargs["limit"] = limit
 
             result = self.sync_client.map(url=url, **kwargs)
-            return json.dumps(result, default=str)
+            return _serialize(result)
         except Exception as e:
             error_log(f"Firecrawl map error: {e}")
             return json.dumps({"error": str(e)})
 
-    async def amap_website(
+    async def _amap_website(
         self,
         url: str,
         limit: Optional[int] = None,
@@ -681,7 +678,7 @@ class FirecrawlTools:
                 kwargs["limit"] = limit
 
             result = await self.async_client.map(url=url, **kwargs)
-            return json.dumps(result, default=str)
+            return _serialize(result)
         except Exception as e:
             error_log(f"Firecrawl async map error: {e}")
             return json.dumps({"error": str(e)})
@@ -734,12 +731,12 @@ class FirecrawlTools:
                 kwargs["categories"] = categories
 
             result = self.sync_client.search(**kwargs)
-            return json.dumps(result, default=str)
+            return _serialize(result)
         except Exception as e:
             error_log(f"Firecrawl search error: {e}")
             return json.dumps({"error": str(e)})
 
-    async def asearch_web(
+    async def _asearch_web(
         self,
         query: str,
         limit: Optional[int] = None,
@@ -785,7 +782,7 @@ class FirecrawlTools:
                 kwargs["categories"] = categories
 
             result = await self.async_client.search(**kwargs)
-            return json.dumps(result, default=str)
+            return _serialize(result)
         except Exception as e:
             error_log(f"Firecrawl async search error: {e}")
             return json.dumps({"error": str(e)})
@@ -797,7 +794,6 @@ class FirecrawlTools:
         urls: List[str],
         formats: Optional[List[str]] = None,
         poll_interval: Optional[int] = None,
-        timeout: Optional[int] = None,
     ) -> str:
         """
         Batch scrape multiple URLs (blocking). Waits for all results.
@@ -806,7 +802,6 @@ class FirecrawlTools:
             urls: List of URLs to scrape.
             formats: Output formats for the scraped content.
             poll_interval: Polling interval in seconds for status checks.
-            timeout: Timeout in seconds for the entire batch operation.
 
         Returns:
             JSON string containing the batch scrape results.
@@ -816,20 +811,18 @@ class FirecrawlTools:
 
             kwargs["formats"] = formats or self.default_formats
             kwargs["poll_interval"] = poll_interval or self.poll_interval
-            kwargs["timeout"] = timeout or self.timeout
 
             result = self.sync_client.batch_scrape(urls, **kwargs)
-            return json.dumps(result, default=str)
+            return _serialize(result)
         except Exception as e:
             error_log(f"Firecrawl batch_scrape error: {e}")
             return json.dumps({"error": str(e)})
 
-    async def abatch_scrape(
+    async def _abatch_scrape(
         self,
         urls: List[str],
         formats: Optional[List[str]] = None,
         poll_interval: Optional[int] = None,
-        timeout: Optional[int] = None,
     ) -> str:
         """
         Async version of batch_scrape.
@@ -838,7 +831,6 @@ class FirecrawlTools:
             urls: List of URLs to scrape.
             formats: Output formats for the scraped content.
             poll_interval: Polling interval in seconds for status checks.
-            timeout: Timeout in seconds for the entire batch operation.
 
         Returns:
             JSON string containing the batch scrape results.
@@ -848,10 +840,9 @@ class FirecrawlTools:
 
             kwargs["formats"] = formats or self.default_formats
             kwargs["poll_interval"] = poll_interval or self.poll_interval
-            kwargs["timeout"] = timeout or self.timeout
 
             result = await self.async_client.batch_scrape(urls, **kwargs)
-            return json.dumps(result, default=str)
+            return _serialize(result)
         except Exception as e:
             error_log(f"Firecrawl async batch_scrape error: {e}")
             return json.dumps({"error": str(e)})
@@ -876,12 +867,12 @@ class FirecrawlTools:
             kwargs["formats"] = formats or self.default_formats
 
             result = self.sync_client.start_batch_scrape(urls, **kwargs)
-            return json.dumps(result, default=str)
+            return _serialize(result)
         except Exception as e:
             error_log(f"Firecrawl start_batch_scrape error: {e}")
             return json.dumps({"error": str(e)})
 
-    async def astart_batch_scrape(
+    async def _astart_batch_scrape(
         self,
         urls: List[str],
         formats: Optional[List[str]] = None,
@@ -901,7 +892,7 @@ class FirecrawlTools:
             kwargs["formats"] = formats or self.default_formats
 
             result = await self.async_client.start_batch_scrape(urls, **kwargs)
-            return json.dumps(result, default=str)
+            return _serialize(result)
         except Exception as e:
             error_log(f"Firecrawl async start_batch_scrape error: {e}")
             return json.dumps({"error": str(e)})
@@ -918,12 +909,12 @@ class FirecrawlTools:
         """
         try:
             result = self.sync_client.get_batch_scrape_status(job_id)
-            return json.dumps(result, default=str)
+            return _serialize(result)
         except Exception as e:
             error_log(f"Firecrawl get_batch_scrape_status error: {e}")
             return json.dumps({"error": str(e)})
 
-    async def aget_batch_scrape_status(self, job_id: str) -> str:
+    async def _aget_batch_scrape_status(self, job_id: str) -> str:
         """
         Async version of get_batch_scrape_status.
 
@@ -935,7 +926,7 @@ class FirecrawlTools:
         """
         try:
             result = await self.async_client.get_batch_scrape_status(job_id)
-            return json.dumps(result, default=str)
+            return _serialize(result)
         except Exception as e:
             error_log(f"Firecrawl async get_batch_scrape_status error: {e}")
             return json.dumps({"error": str(e)})
@@ -978,12 +969,12 @@ class FirecrawlTools:
                 kwargs["scrape_options"] = scrape_options
 
             result = self.sync_client.extract(**kwargs)
-            return json.dumps(result, default=str)
+            return _serialize(result)
         except Exception as e:
             error_log(f"Firecrawl extract error: {e}")
             return json.dumps({"error": str(e)})
 
-    async def aextract_data(
+    async def _aextract_data(
         self,
         urls: Optional[List[str]] = None,
         prompt: Optional[str] = None,
@@ -1019,7 +1010,7 @@ class FirecrawlTools:
                 kwargs["scrape_options"] = scrape_options
 
             result = await self.async_client.extract(**kwargs)
-            return json.dumps(result, default=str)
+            return _serialize(result)
         except Exception as e:
             error_log(f"Firecrawl async extract error: {e}")
             return json.dumps({"error": str(e)})
@@ -1054,12 +1045,12 @@ class FirecrawlTools:
                 kwargs["enable_web_search"] = enable_web_search
 
             result = self.sync_client.start_extract(urls or [], **kwargs)
-            return json.dumps(result, default=str)
+            return _serialize(result)
         except Exception as e:
             error_log(f"Firecrawl start_extract error: {e}")
             return json.dumps({"error": str(e)})
 
-    async def astart_extract(
+    async def _astart_extract(
         self,
         urls: Optional[List[str]] = None,
         prompt: Optional[str] = None,
@@ -1089,7 +1080,7 @@ class FirecrawlTools:
                 kwargs["enable_web_search"] = enable_web_search
 
             result = await self.async_client.start_extract(urls or [], **kwargs)
-            return json.dumps(result, default=str)
+            return _serialize(result)
         except Exception as e:
             error_log(f"Firecrawl async start_extract error: {e}")
             return json.dumps({"error": str(e)})
@@ -1106,12 +1097,12 @@ class FirecrawlTools:
         """
         try:
             result = self.sync_client.get_extract_status(job_id)
-            return json.dumps(result, default=str)
+            return _serialize(result)
         except Exception as e:
             error_log(f"Firecrawl get_extract_status error: {e}")
             return json.dumps({"error": str(e)})
 
-    async def aget_extract_status(self, job_id: str) -> str:
+    async def _aget_extract_status(self, job_id: str) -> str:
         """
         Async version of get_extract_status.
 
@@ -1123,7 +1114,7 @@ class FirecrawlTools:
         """
         try:
             result = await self.async_client.get_extract_status(job_id)
-            return json.dumps(result, default=str)
+            return _serialize(result)
         except Exception as e:
             error_log(f"Firecrawl async get_extract_status error: {e}")
             return json.dumps({"error": str(e)})

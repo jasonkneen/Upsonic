@@ -259,7 +259,7 @@ class YFinanceTools:
         """Return the list of tool functions to be used by the agent."""
         return self._tools
 
-    def enable_all_tools(self) -> None:
+    def _enable_all_tools(self) -> None:
         """Enable all available financial tools."""
         self._tools = [
             self.get_current_stock_price,

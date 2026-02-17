@@ -1043,7 +1043,7 @@ class GmailTools:
         """Return the list of tool functions to be used by the agent."""
         return self._tools
 
-    def enable_all_tools(self) -> None:
+    def _enable_all_tools(self) -> None:
         """Enable all available Gmail tools."""
         self._tools = [
             # Reading emails

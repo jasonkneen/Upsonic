@@ -6,12 +6,7 @@ import pytest
 from unittest.mock import Mock, AsyncMock, patch
 from typing import Dict, Any, List
 
-FIRECRAWL_API_KEY: str | None = os.getenv("FIRECRAWL_API_KEY")
-
-pytestmark = pytest.mark.skipif(
-    not FIRECRAWL_API_KEY,
-    reason="FIRECRAWL_API_KEY not set; skipping Firecrawl tests",
-)
+FIRECRAWL_API_KEY: str = os.getenv("FIRECRAWL_API_KEY") or "fc-test-dummy-key"
 
 
 @pytest.fixture
@@ -440,7 +435,7 @@ class TestScrapeUrl:
     @pytest.mark.asyncio
     async def test_ascrape_url_basic(self, firecrawl_tools: Any, mock_async_client: AsyncMock) -> None:
         """Test async URL scraping."""
-        result = await firecrawl_tools.ascrape_url("https://example.com")
+        result = await firecrawl_tools._ascrape_url("https://example.com")
 
         parsed = json.loads(result)
         assert "markdown" in parsed
@@ -452,7 +447,7 @@ class TestScrapeUrl:
         """Test async scrape error handling."""
         mock_async_client.scrape.side_effect = Exception("Async error")
 
-        result = await firecrawl_tools.ascrape_url("https://example.com")
+        result = await firecrawl_tools._ascrape_url("https://example.com")
 
         parsed = json.loads(result)
         assert "error" in parsed
@@ -479,8 +474,7 @@ class TestCrawlWebsite:
             scrape_formats=["markdown", "html"],
             exclude_paths=["/admin/*"],
             include_paths=["/docs/*"],
-            max_depth=3,
-            allowed_domains=["example.com"],
+            max_discovery_depth=3,
             sitemap="only",
             poll_interval=5,
             timeout=300,
@@ -491,8 +485,7 @@ class TestCrawlWebsite:
         assert call_kwargs["scrape_options"] == {"formats": ["markdown", "html"]}
         assert call_kwargs["exclude_paths"] == ["/admin/*"]
         assert call_kwargs["include_paths"] == ["/docs/*"]
-        assert call_kwargs["max_depth"] == 3
-        assert call_kwargs["allowed_domains"] == ["example.com"]
+        assert call_kwargs["max_discovery_depth"] == 3
         assert call_kwargs["sitemap"] == "only"
         assert call_kwargs["poll_interval"] == 5
         assert call_kwargs["timeout"] == 300
@@ -516,7 +509,7 @@ class TestCrawlWebsite:
     @pytest.mark.asyncio
     async def test_acrawl_website_basic(self, firecrawl_tools: Any, mock_async_client: AsyncMock) -> None:
         """Test async website crawling."""
-        result = await firecrawl_tools.acrawl_website("https://example.com")
+        result = await firecrawl_tools._acrawl_website("https://example.com")
 
         parsed = json.loads(result)
         assert parsed["status"] == "completed"
@@ -527,7 +520,7 @@ class TestCrawlWebsite:
         """Test async crawl error handling."""
         mock_async_client.crawl.side_effect = Exception("Async crawl failed")
 
-        result = await firecrawl_tools.acrawl_website("https://example.com")
+        result = await firecrawl_tools._acrawl_website("https://example.com")
 
         parsed = json.loads(result)
         assert "error" in parsed
@@ -552,14 +545,14 @@ class TestStartCrawl:
             limit=25,
             scrape_formats=["markdown"],
             exclude_paths=["/private/*"],
-            max_depth=2,
+            max_discovery_depth=2,
         )
 
         call_kwargs = mock_sync_client.start_crawl.call_args[1]
         assert call_kwargs["limit"] == 25
         assert call_kwargs["scrape_options"] == {"formats": ["markdown"]}
         assert call_kwargs["exclude_paths"] == ["/private/*"]
-        assert call_kwargs["max_depth"] == 2
+        assert call_kwargs["max_discovery_depth"] == 2
 
     def test_start_crawl_error_handling(self, firecrawl_tools: Any, mock_sync_client: Mock) -> None:
         """Test start_crawl error handling."""
@@ -573,7 +566,7 @@ class TestStartCrawl:
     @pytest.mark.asyncio
     async def test_astart_crawl_basic(self, firecrawl_tools: Any, mock_async_client: AsyncMock) -> None:
         """Test async non-blocking crawl start."""
-        result = await firecrawl_tools.astart_crawl("https://example.com")
+        result = await firecrawl_tools._astart_crawl("https://example.com")
 
         parsed = json.loads(result)
         assert "id" in parsed
@@ -605,7 +598,7 @@ class TestCrawlManagement:
     @pytest.mark.asyncio
     async def test_aget_crawl_status(self, firecrawl_tools: Any, mock_async_client: AsyncMock) -> None:
         """Test async crawl status check."""
-        result = await firecrawl_tools.aget_crawl_status("async-crawl-123")
+        result = await firecrawl_tools._aget_crawl_status("async-crawl-123")
 
         parsed = json.loads(result)
         assert parsed["status"] == "completed"
@@ -631,7 +624,7 @@ class TestCrawlManagement:
     @pytest.mark.asyncio
     async def test_acancel_crawl(self, firecrawl_tools: Any, mock_async_client: AsyncMock) -> None:
         """Test async crawl cancellation."""
-        result = await firecrawl_tools.acancel_crawl("async-crawl-123")
+        result = await firecrawl_tools._acancel_crawl("async-crawl-123")
 
         parsed = json.loads(result)
         assert parsed["cancelled"] is True
@@ -669,7 +662,7 @@ class TestMapWebsite:
     @pytest.mark.asyncio
     async def test_amap_website_basic(self, firecrawl_tools: Any, mock_async_client: AsyncMock) -> None:
         """Test async website mapping."""
-        result = await firecrawl_tools.amap_website("https://example.com")
+        result = await firecrawl_tools._amap_website("https://example.com")
 
         parsed = json.loads(result)
         assert "links" in parsed
@@ -678,7 +671,7 @@ class TestMapWebsite:
     @pytest.mark.asyncio
     async def test_amap_website_with_limit(self, firecrawl_tools: Any, mock_async_client: AsyncMock) -> None:
         """Test async mapping with URL limit."""
-        await firecrawl_tools.amap_website("https://example.com", limit=5)
+        await firecrawl_tools._amap_website("https://example.com", limit=5)
 
         call_kwargs = mock_async_client.map.call_args[1]
         assert call_kwargs["limit"] == 5
@@ -780,7 +773,7 @@ class TestSearchWeb:
     @pytest.mark.asyncio
     async def test_asearch_web_basic(self, firecrawl_tools: Any, mock_async_client: AsyncMock) -> None:
         """Test async web search."""
-        result = await firecrawl_tools.asearch_web("test query")
+        result = await firecrawl_tools._asearch_web("test query")
 
         parsed = json.loads(result)
         assert "web" in parsed
@@ -789,7 +782,7 @@ class TestSearchWeb:
     @pytest.mark.asyncio
     async def test_asearch_web_with_options(self, firecrawl_tools: Any, mock_async_client: AsyncMock) -> None:
         """Test async search with options."""
-        await firecrawl_tools.asearch_web(
+        await firecrawl_tools._asearch_web(
             "test query",
             limit=3,
             location="France",
@@ -823,14 +816,13 @@ class TestBatchScrape:
         call_args = mock_sync_client.batch_scrape.call_args
         assert call_args[1]["formats"] == ["markdown", "html"]
 
-    def test_batch_scrape_with_timeout(self, firecrawl_tools: Any, mock_sync_client: Mock) -> None:
-        """Test batch scraping with custom timeout."""
+    def test_batch_scrape_with_poll_interval(self, firecrawl_tools: Any, mock_sync_client: Mock) -> None:
+        """Test batch scraping with custom poll interval."""
         urls: List[str] = ["https://example.com/1"]
-        firecrawl_tools.batch_scrape(urls, poll_interval=5, timeout=300)
+        firecrawl_tools.batch_scrape(urls, poll_interval=5)
 
         call_kwargs = mock_sync_client.batch_scrape.call_args[1]
         assert call_kwargs["poll_interval"] == 5
-        assert call_kwargs["timeout"] == 300
 
     def test_batch_scrape_error_handling(self, firecrawl_tools: Any, mock_sync_client: Mock) -> None:
         """Test batch scrape error handling."""
@@ -845,7 +837,7 @@ class TestBatchScrape:
     async def test_abatch_scrape_basic(self, firecrawl_tools: Any, mock_async_client: AsyncMock) -> None:
         """Test async batch scraping."""
         urls: List[str] = ["https://example.com/1"]
-        result = await firecrawl_tools.abatch_scrape(urls)
+        result = await firecrawl_tools._abatch_scrape(urls)
 
         parsed = json.loads(result)
         assert parsed["status"] == "completed"
@@ -882,7 +874,7 @@ class TestBatchScrape:
     async def test_astart_batch_scrape(self, firecrawl_tools: Any, mock_async_client: AsyncMock) -> None:
         """Test async non-blocking batch scrape start."""
         urls: List[str] = ["https://example.com/1"]
-        result = await firecrawl_tools.astart_batch_scrape(urls)
+        result = await firecrawl_tools._astart_batch_scrape(urls)
 
         parsed = json.loads(result)
         assert "id" in parsed
@@ -908,7 +900,7 @@ class TestBatchScrape:
     @pytest.mark.asyncio
     async def test_aget_batch_scrape_status(self, firecrawl_tools: Any, mock_async_client: AsyncMock) -> None:
         """Test async batch scrape status check."""
-        result = await firecrawl_tools.aget_batch_scrape_status("async-batch-456")
+        result = await firecrawl_tools._aget_batch_scrape_status("async-batch-456")
 
         parsed = json.loads(result)
         assert parsed["status"] == "completed"
@@ -1007,7 +999,7 @@ class TestExtractData:
     @pytest.mark.asyncio
     async def test_aextract_data_basic(self, firecrawl_tools: Any, mock_async_client: AsyncMock) -> None:
         """Test async data extraction."""
-        result = await firecrawl_tools.aextract_data(
+        result = await firecrawl_tools._aextract_data(
             urls=["https://example.com"],
             prompt="Extract description",
         )
@@ -1021,7 +1013,7 @@ class TestExtractData:
         """Test async extract error handling."""
         mock_async_client.extract.side_effect = Exception("Async extract failed")
 
-        result = await firecrawl_tools.aextract_data(
+        result = await firecrawl_tools._aextract_data(
             urls=["https://example.com"],
             prompt="Extract",
         )
@@ -1085,7 +1077,7 @@ class TestStartExtract:
     @pytest.mark.asyncio
     async def test_astart_extract(self, firecrawl_tools: Any, mock_async_client: AsyncMock) -> None:
         """Test async non-blocking extraction start."""
-        result = await firecrawl_tools.astart_extract(
+        result = await firecrawl_tools._astart_extract(
             urls=["https://example.com"],
             prompt="Extract",
         )
@@ -1115,7 +1107,7 @@ class TestStartExtract:
     @pytest.mark.asyncio
     async def test_aget_extract_status(self, firecrawl_tools: Any, mock_async_client: AsyncMock) -> None:
         """Test async extraction status check."""
-        result = await firecrawl_tools.aget_extract_status("async-extract-789")
+        result = await firecrawl_tools._aget_extract_status("async-extract-789")
 
         parsed = json.loads(result)
         assert parsed["status"] == "completed"
