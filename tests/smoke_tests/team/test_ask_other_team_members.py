@@ -26,14 +26,14 @@ def simple_calculator(operation: str, a: float, b: float) -> str:
 async def test_ask_other_team_members():
     """Test that ask_other_team_members adds other agents as tools to tasks."""
     researcher = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Researcher",
         role="Research Specialist",
         goal="Find accurate information and data"
     )
     
     calculator_agent = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Calculator",
         role="Math Specialist",
         goal="Perform calculations",

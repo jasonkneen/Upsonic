@@ -635,28 +635,33 @@ class PipelineManager:
         finally:
             total_time = time.time() - pipeline_start_time
             executed_steps = context.execution_stats.executed_steps if context.execution_stats else 0
-            
+
             # Emit pipeline end event
-            yield PipelineEndEvent(
-                run_id=run_id or "",
-                status=context.step_results[-1].status.value if context.step_results else "unknown",
-                total_duration=total_time,
-                total_steps=len(self.steps),
-                executed_steps=executed_steps,
-                error_message=error_message
-            )
-            
-            # Emit RunCompletedEvent LAST - after pipeline (only on success/completion)
-            if context.step_results[-1].status == StepStatus.COMPLETED:
-                if self.agent and self.agent._agent_run_output:
-                    self.agent._agent_run_output.mark_completed()
-                    context.tool_call_count = getattr(self.agent, '_tool_call_count', 0)
-                    context.tool_limit_reached = getattr(self.agent, '_tool_limit_reached', False)
-                    yield RunCompletedEvent(
-                        run_id=run_id or "",
-                        agent_id=agent_id or "",
-                        output_preview=str(context.output)[:100] if context.output else None
-                    )
+            # Wrap in try-except: if the generator was cancelled by asyncio.wait_for,
+            # yielding here raises GeneratorExit which we must handle gracefully.
+            try:
+                yield PipelineEndEvent(
+                    run_id=run_id or "",
+                    status=context.step_results[-1].status.value if context.step_results else "unknown",
+                    total_duration=total_time,
+                    total_steps=len(self.steps),
+                    executed_steps=executed_steps,
+                    error_message=error_message
+                )
+
+                # Emit RunCompletedEvent LAST - after pipeline (only on success/completion)
+                if context.step_results and context.step_results[-1].status == StepStatus.COMPLETED:
+                    if self.agent and self.agent._agent_run_output:
+                        self.agent._agent_run_output.mark_completed()
+                        context.tool_call_count = getattr(self.agent, '_tool_call_count', 0)
+                        context.tool_limit_reached = getattr(self.agent, '_tool_limit_reached', False)
+                        yield RunCompletedEvent(
+                            run_id=run_id or "",
+                            agent_id=agent_id or "",
+                            output_preview=str(context.output)[:100] if context.output else None
+                        )
+            except GeneratorExit:
+                pass
     
     def get_execution_stats(self, context: Optional["AgentRunOutput"] = None) -> Dict[str, Any]:
         """Get statistics about the last execution from context."""

@@ -20,13 +20,13 @@ def test_team_without_mode(capsys):
     """Test basic team functionality WITHOUT mode paramete. Verifies if we can match task to agent"""
     _enable_print_capture()
     researcher = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Researcher",
         role="Research Specialist",
         goal="Find accurate information and data"
     )
     writer = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Writer",
         role="Content Writer",
         goal="Create clear and engaging content"
@@ -69,21 +69,21 @@ def test_team_with_mode(capsys):
     """Test team functionality WITH coordinate mode."""
     _enable_print_capture()
     researcher = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Researcher",
         role="Information Gatherer",
         goal="Find comprehensive and accurate information"
     )
     
     analyst = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Analyst",
         role="Data Analyst",
         goal="Extract insights and identify patterns"
     )
     
     writer = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Writer",
         role="Report Writer",
         goal="Create professional reports"
@@ -92,7 +92,7 @@ def test_team_with_mode(capsys):
     team = Team(
         entities=[researcher, analyst, writer],
         mode="coordinate",
-        model="openai/gpt-4o"
+        model="anthropic/claude-sonnet-4-5"
     )
     
     tasks = [
@@ -179,13 +179,13 @@ def test_team_with_response_format(capsys):
 
     
     analyst = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Analyst",
         role="Data Analyst",
         goal="Analyze data and provide structured insights"
     )
     summarizer = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Summarizer",
         role="Summarize Data",
         goal="Summarize the data and provide structured insights"
@@ -239,8 +239,8 @@ def test_agent_name_verification_with_mock():
     """Test agent names by verifying agent properties directly"""
     _enable_print_capture()
     # Create agents with specific names
-    writer = Agent(model="openai/gpt-4o", name="Writer")
-    editor = Agent(model="openai/gpt-4o", name="Editor")
+    writer = Agent(model="anthropic/claude-sonnet-4-5", name="Writer")
+    editor = Agent(model="anthropic/claude-sonnet-4-5", name="Editor")
     
     # Verify agent names are set correctly
     assert writer.name == "Writer", f"Expected writer name to be 'Writer', got '{writer.name}'"

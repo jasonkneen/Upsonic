@@ -14,6 +14,26 @@ import shutil
 import json
 from rich.markup import escape
 
+
+class _StdoutProxy:
+    """File-like proxy that always forwards to current sys.stdout so redirect_stdout() is honored."""
+
+    def write(self, s: str) -> int:
+        return sys.stdout.write(s)
+
+    def flush(self) -> None:
+        sys.stdout.flush()
+
+    @property
+    def encoding(self) -> str:
+        return getattr(sys.stdout, "encoding", "utf-8") or "utf-8"
+
+    def isatty(self) -> bool:
+        return getattr(sys.stdout, "isatty", lambda: False)()
+
+
+_stdout_proxy: _StdoutProxy = _StdoutProxy()
+
 # Setup background logging (console disabled, only file/Sentry)
 from upsonic.utils.logging_config import setup_logging, get_logger
 setup_logging(enable_console=False)  # Console kapalı, Rich kullanıyoruz
@@ -34,10 +54,10 @@ try:
         except (AttributeError, OSError, ValueError):
             # If encoding setup fails, continue with default
             pass
-    console = Console()
+    console = Console(file=_stdout_proxy)
 except (AttributeError, OSError, ValueError):  # noqa: BLE001
     # Fallback to default console if initialization fails
-    console = Console()
+    console = Console(file=_stdout_proxy)
 
 def get_estimated_cost(input_tokens: int, output_tokens: int, model: Union["Model", str]) -> str:
     """

@@ -35,14 +35,14 @@ async def test_structured_team_output_sequential():
     """Test structured output for Team in sequential mode."""
     _enable_print_capture()
     researcher = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Researcher",
         role="Research Specialist",
         goal="Find accurate information and data"
     )
     
     writer = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Writer",
         role="Content Writer",
         goal="Create clear and engaging content"
@@ -77,14 +77,14 @@ async def test_structured_team_output_coordinate():
     """Test structured output for Team in coordinate mode."""
     _enable_print_capture()
     data_analyst = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Data Analyst",
         role="Data Analysis Expert",
         goal="Analyze data and extract insights"
     )
     
     report_writer = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Report Writer",
         role="Business Report Specialist",
         goal="Create professional business reports"
@@ -93,7 +93,7 @@ async def test_structured_team_output_coordinate():
     team = Team(
         entities=[data_analyst, report_writer],
         mode="coordinate",
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         response_format=TeamReport
     )
     
@@ -120,7 +120,7 @@ async def test_structured_team_output_route():
     """Test structured output for Team in route mode."""
     _enable_print_capture()
     legal_expert = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Legal Expert",
         role="Legal Advisor",
         goal="Provide legal guidance and compliance information",
@@ -128,7 +128,7 @@ async def test_structured_team_output_route():
     )
     
     tech_expert = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Tech Expert",
         role="Technology Specialist",
         goal="Provide technical solutions and architecture advice",
@@ -138,7 +138,7 @@ async def test_structured_team_output_route():
     team = Team(
         entities=[legal_expert, tech_expert],
         mode="route",
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         response_format=TeamReport
     )
     

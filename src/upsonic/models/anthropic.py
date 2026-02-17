@@ -55,7 +55,7 @@ _FINISH_REASON_MAP: dict[BetaStopReason, FinishReason] = {
 
 
 try:
-    from anthropic import NOT_GIVEN, APIStatusError, AsyncStream, omit as OMIT
+    from anthropic import APIStatusError, AsyncStream, omit as OMIT
     from anthropic.types.beta import (
         BetaBase64PDFBlockParam,
         BetaBase64PDFSourceParam,
@@ -347,7 +347,7 @@ class AnthropicModel(Model):
                 stop_sequences=model_settings.get('stop_sequences', OMIT),
                 temperature=model_settings.get('temperature', OMIT),
                 top_p=model_settings.get('top_p', OMIT),
-                timeout=model_settings.get('timeout', NOT_GIVEN),
+                timeout=model_settings.get('timeout', 600.0),
                 metadata=model_settings.get('anthropic_metadata', OMIT),
                 extra_headers=extra_headers,
                 extra_body=model_settings.get('extra_body'),

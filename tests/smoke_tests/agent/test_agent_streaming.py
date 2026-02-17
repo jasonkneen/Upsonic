@@ -14,7 +14,7 @@ pytestmark = pytest.mark.timeout(120)
 @pytest.mark.asyncio
 async def test_agent_stream_async():
     """Test Agent streaming with astream method."""
-    agent = Agent(model="openai/gpt-4o", name="Streaming Agent", debug=True)
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Streaming Agent", debug=True)
     
     task = Task(description="Write a short story about a robot learning to paint. Make it exactly 3 sentences.")
     
@@ -53,7 +53,7 @@ async def test_agent_stream_async():
 @pytest.mark.asyncio
 async def test_agent_stream_sync():
     """Test Agent streaming with stream method (synchronous wrapper)."""
-    agent = Agent(model="openai/gpt-4o", name="Streaming Agent", debug=True)
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Streaming Agent", debug=True)
     
     task = Task(description="Count from 1 to 5, one number per line.")
     
@@ -86,7 +86,7 @@ async def test_agent_stream_sync():
 @pytest.mark.asyncio
 async def test_agent_stream_events():
     """Test Agent streaming events."""
-    agent = Agent(model="openai/gpt-4o", name="Streaming Agent", debug=True)
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Streaming Agent", debug=True)
     
     task = Task(description="What is 2 + 2?")
     
@@ -123,7 +123,7 @@ async def test_agent_stream_with_tools():
         return a + b
     
     agent = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Streaming Agent",
         tools=[add_numbers],
         debug=True

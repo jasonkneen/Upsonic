@@ -306,10 +306,30 @@ class AsyncMem0Storage(AsyncStorage):
         try:
             # Serialize session for Mem0
             serialized = serialize_session_to_mem0(session, self.session_table_name)
-            memory_id = serialized["memory_id"]
+            memory_id: str = serialized["memory_id"]
+            chunks: Optional[List[str]] = serialized.get("_chunks")
             
             # Check if memory already exists to determine if this is update or insert
             existing = await self._aget_memory_by_id(memory_id)
+            
+            # Handle chunked data - store chunks first
+            if chunks:
+                chunk_ids: List[str] = serialized["metadata"].get("_chunk_ids", [])
+                for i, (chunk_id, chunk_data) in enumerate(zip(chunk_ids, chunks)):
+                    chunk_metadata: Dict[str, Any] = {
+                        "_type": "session_chunk",
+                        "_parent_id": memory_id,
+                        "_chunk_index": i,
+                        "_upsonic_memory_id": chunk_id,
+                        "_data": chunk_data,
+                    }
+                    await self._adelete_memory(chunk_id)
+                    await self._aadd_memory(
+                        memory_id=chunk_id,
+                        content=f"Session chunk {i} for {session.session_id}",
+                        metadata=chunk_metadata,
+                    )
+                _logger.debug(f"Stored {len(chunks)} chunks for session: {session.session_id}")
             
             if existing:
                 # Update existing memory
@@ -332,6 +352,10 @@ class AsyncMem0Storage(AsyncStorage):
             stored = await self._aget_memory_by_id(memory_id)
             if stored is None:
                 return None
+            
+            # If chunked, retrieve and reassemble chunks
+            if stored.get("metadata", {}).get("_chunked"):
+                stored = await self._areassemble_chunked_session(stored)
             
             session_dict = deserialize_session_from_mem0(stored)
             
@@ -385,6 +409,35 @@ class AsyncMem0Storage(AsyncStorage):
         _logger.debug(f"Upserted {len(results)} sessions")
         return results
 
+    async def _areassemble_chunked_session(
+        self, stored: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Reassemble a chunked session by retrieving and combining all chunks (async)."""
+        metadata: Dict[str, Any] = stored.get("metadata", {})
+        chunk_ids: List[str] = metadata.get("_chunk_ids", [])
+        
+        if not chunk_ids:
+            return stored
+        
+        chunks_data: List[tuple[int, str]] = []
+        for chunk_id in chunk_ids:
+            chunk: Optional[Dict[str, Any]] = await self._aget_memory_by_id(chunk_id)
+            if chunk:
+                chunk_metadata: Dict[str, Any] = chunk.get("metadata", {})
+                chunk_data: str = chunk_metadata.get("_data", "")
+                chunk_index: int = chunk_metadata.get("_chunk_index", 0)
+                chunks_data.append((chunk_index, chunk_data))
+        
+        chunks_data.sort(key=lambda x: x[0])
+        combined_data: str = "".join(data for _, data in chunks_data)
+        
+        result: Dict[str, Any] = stored.copy()
+        result["metadata"] = metadata.copy()
+        result["metadata"]["_data"] = combined_data
+        result["metadata"]["_chunked"] = False
+        
+        return result
+
     async def aget_session(
         self,
         session_id: Optional[str] = None,
@@ -416,6 +469,10 @@ class AsyncMem0Storage(AsyncStorage):
                 if stored is None:
                     return None
                 
+                # Handle chunked sessions
+                if stored.get("metadata", {}).get("_chunked"):
+                    stored = await self._areassemble_chunked_session(stored)
+                
                 session_dict = deserialize_session_from_mem0(stored)
                 
                 if not deserialize:
@@ -442,7 +499,13 @@ class AsyncMem0Storage(AsyncStorage):
             if not sorted_records:
                 return None
             
-            session_dict = deserialize_session_from_mem0(sorted_records[0])
+            stored = sorted_records[0]
+            
+            # Handle chunked sessions
+            if stored.get("metadata", {}).get("_chunked"):
+                stored = await self._areassemble_chunked_session(stored)
+            
+            session_dict = deserialize_session_from_mem0(stored)
             
             if not deserialize:
                 return session_dict
@@ -521,9 +584,16 @@ class AsyncMem0Storage(AsyncStorage):
             # Apply pagination
             paginated_records = apply_pagination(sorted_records, limit, offset)
             
+            # Handle chunked sessions
+            reassembled_records: List[Dict[str, Any]] = []
+            for r in paginated_records:
+                if r.get("metadata", {}).get("_chunked"):
+                    r = await self._areassemble_chunked_session(r)
+                reassembled_records.append(r)
+            
             # Deserialize all records
             session_dicts = [
-                deserialize_session_from_mem0(r) for r in paginated_records
+                deserialize_session_from_mem0(r) for r in reassembled_records
             ]
             
             if not deserialize:
@@ -541,6 +611,7 @@ class AsyncMem0Storage(AsyncStorage):
     async def adelete_session(self, session_id: str) -> bool:
         """
         Delete a session from Mem0 (async).
+        Also deletes any associated chunk memories.
         
         Args:
             session_id: ID of the session to delete.
@@ -555,7 +626,15 @@ class AsyncMem0Storage(AsyncStorage):
             raise ValueError("session_id is required for delete")
         
         try:
-            memory_id = generate_session_memory_id(session_id, self.session_table_name)
+            memory_id: str = generate_session_memory_id(session_id, self.session_table_name)
+            
+            # Check for chunks and delete them first
+            stored: Optional[Dict[str, Any]] = await self._aget_memory_by_id(memory_id)
+            if stored:
+                chunk_ids: List[str] = stored.get("metadata", {}).get("_chunk_ids", [])
+                for chunk_id in chunk_ids:
+                    await self._adelete_memory(chunk_id)
+            
             return await self._adelete_memory(memory_id)
         
         except Exception as e:
@@ -628,14 +707,12 @@ class AsyncMem0Storage(AsyncStorage):
             existing = await self._aget_memory_by_id(memory_id)
             
             if existing:
-                # Update existing - preserve created_at
                 existing_data = deserialize_user_memory_from_mem0(existing)
                 created_at = existing_data.get("created_at", user_memory.created_at or int(time.time()))
                 
-                # Update metadata with preserved created_at
-                serialized["metadata"]["created_at"] = created_at
+                from upsonic.storage.mem0.utils import _epoch_to_iso
+                serialized["metadata"]["created_at"] = _epoch_to_iso(created_at) if isinstance(created_at, int) else created_at
                 
-                # Update the _data in metadata with preserved created_at
                 data_str = serialized["metadata"].get("_data")
                 if data_str:
                     data_dict = json.loads(data_str)
@@ -1073,18 +1150,16 @@ class AsyncMem0Storage(AsyncStorage):
             existing = await self._aget_memory_by_id(memory_id)
             
             if existing:
-                # Update existing - preserve created_at
                 existing_data = deserialize_cultural_knowledge_from_mem0(existing)
                 created_at = existing_data.get("created_at", int(time.time()))
                 
-                # Update the _data in metadata with preserved created_at
+                from upsonic.storage.mem0.utils import _epoch_to_iso
                 data_str = serialized["metadata"].get("_data")
                 if data_str:
-                    import json
                     data_dict = json.loads(data_str)
                     data_dict["created_at"] = created_at
                     serialized["metadata"]["_data"] = json.dumps(data_dict)
-                    serialized["metadata"]["created_at"] = created_at
+                    serialized["metadata"]["created_at"] = _epoch_to_iso(created_at) if isinstance(created_at, int) else created_at
                 
                 await self._aupdate_memory(
                     memory_id=memory_id,
@@ -1206,17 +1281,14 @@ class AsyncMem0Storage(AsyncStorage):
         """
         try:
             if self._is_platform_client:
-                # Platform API: Store in metadata, use async_mode=False for immediate availability
-                # Note: async_mode controls Mem0's background processing, not Python async/await.
-                # With async_mode=False, data is immediately available after the await completes.
                 result = await self.memory_client.add(
                     messages=content,
                     user_id=self.default_user_id,
                     metadata=metadata,
-                    async_mode=False,  # Sync processing for immediate data availability
+                    infer=False,
+                    async_mode=False,
                 )
             else:
-                # Self-hosted API: Store in metadata, use infer=False
                 result = await self.memory_client.add(
                     messages=content,
                     user_id=self.default_user_id,
@@ -1261,17 +1333,17 @@ class AsyncMem0Storage(AsyncStorage):
                 return None
             
             if self._is_platform_client:
-                # Platform API: Uses 'text' parameter for content
                 result = await self.memory_client.update(
                     memory_id=actual_memory_id,
-                    text=content,
                     metadata=metadata,
                 )
             else:
-                # Self-hosted API: Uses 'data' parameter for content
-                result = await self.memory_client.update(
-                    memory_id=actual_memory_id,
-                    data=content,
+                await self.memory_client.delete(memory_id=actual_memory_id)
+                result = await self.memory_client.add(
+                    messages=content,
+                    user_id=self.default_user_id,
+                    metadata=metadata,
+                    infer=False,
                 )
             
             _logger.debug(f"Updated memory: {memory_id}")

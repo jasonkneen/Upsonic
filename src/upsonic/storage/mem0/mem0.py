@@ -578,8 +578,15 @@ class Mem0Storage(Storage):
             # Apply pagination
             paginated_records = apply_pagination(sorted_records, limit, offset)
             
+            # Handle chunked sessions
+            reassembled_records: List[Dict[str, Any]] = []
+            for r in paginated_records:
+                if r.get("metadata", {}).get("_chunked"):
+                    r = self._reassemble_chunked_session(r)
+                reassembled_records.append(r)
+            
             # Deserialize all records
-            session_dicts = [deserialize_session_from_mem0(r) for r in paginated_records]
+            session_dicts = [deserialize_session_from_mem0(r) for r in reassembled_records]
             
             if not deserialize:
                 return session_dicts, total_count
@@ -596,6 +603,7 @@ class Mem0Storage(Storage):
     def delete_session(self, session_id: str) -> bool:
         """
         Delete a session from Mem0.
+        Also deletes any associated chunk memories.
         
         Args:
             session_id: ID of the session to delete.
@@ -610,7 +618,15 @@ class Mem0Storage(Storage):
             raise ValueError("session_id is required for delete")
         
         try:
-            memory_id = generate_session_memory_id(session_id, self.session_table_name)
+            memory_id: str = generate_session_memory_id(session_id, self.session_table_name)
+            
+            # Check for chunks and delete them first
+            stored: Optional[Dict[str, Any]] = self._get_memory_by_id(memory_id)
+            if stored:
+                chunk_ids: List[str] = stored.get("metadata", {}).get("_chunk_ids", [])
+                for chunk_id in chunk_ids:
+                    self._delete_memory(chunk_id)
+            
             return self._delete_memory(memory_id)
         
         except Exception as e:
@@ -683,14 +699,12 @@ class Mem0Storage(Storage):
             existing = self._get_memory_by_id(memory_id)
             
             if existing:
-                # Update existing - preserve created_at
                 existing_data = deserialize_user_memory_from_mem0(existing)
                 created_at = existing_data.get("created_at", user_memory.created_at or int(time.time()))
                 
-                # Update metadata with preserved created_at
-                serialized["metadata"]["created_at"] = created_at
+                from upsonic.storage.mem0.utils import _epoch_to_iso
+                serialized["metadata"]["created_at"] = _epoch_to_iso(created_at) if isinstance(created_at, int) else created_at
                 
-                # Update the _data in metadata with preserved created_at
                 data_str = serialized["metadata"].get("_data")
                 if data_str:
                     data_dict = json.loads(data_str)
@@ -1120,18 +1134,16 @@ class Mem0Storage(Storage):
             existing = self._get_memory_by_id(memory_id)
             
             if existing:
-                # Update existing - preserve created_at
                 existing_data = deserialize_cultural_knowledge_from_mem0(existing)
                 created_at = existing_data.get("created_at", int(time.time()))
                 
-                # Update the _data in metadata with preserved created_at
+                from upsonic.storage.mem0.utils import _epoch_to_iso
                 data_str = serialized["metadata"].get("_data")
                 if data_str:
-                    import json
                     data_dict = json.loads(data_str)
                     data_dict["created_at"] = created_at
                     serialized["metadata"]["_data"] = json.dumps(data_dict)
-                    serialized["metadata"]["created_at"] = created_at
+                    serialized["metadata"]["created_at"] = _epoch_to_iso(created_at) if isinstance(created_at, int) else created_at
                 
                 self._update_memory(
                     memory_id=memory_id,
@@ -1247,15 +1259,14 @@ class Mem0Storage(Storage):
         """
         try:
             if self._is_platform_client:
-                # Platform API: Store in metadata, use async_mode=False for sync
                 result = self.memory_client.add(
                     messages=content,
                     user_id=self.default_user_id,
                     metadata=metadata,
-                    async_mode=False,  # Force synchronous for immediate availability
+                    infer=False,
+                    async_mode=False,
                 )
             else:
-                # Self-hosted API: Store in metadata, use infer=False
                 result = self.memory_client.add(
                     messages=content,
                     user_id=self.default_user_id,
@@ -1300,17 +1311,17 @@ class Mem0Storage(Storage):
                 return None
             
             if self._is_platform_client:
-                # Platform API: Uses 'text' parameter for content
                 result = self.memory_client.update(
                     memory_id=actual_memory_id,
-                    text=content,
                     metadata=metadata,
                 )
             else:
-                # Self-hosted API: Uses 'data' parameter for content
-                result = self.memory_client.update(
-                    memory_id=actual_memory_id,
-                    data=content,
+                self.memory_client.delete(memory_id=actual_memory_id)
+                result = self.memory_client.add(
+                    messages=content,
+                    user_id=self.default_user_id,
+                    metadata=metadata,
+                    infer=False,
                 )
             
             _logger.debug(f"Updated memory: {memory_id}")

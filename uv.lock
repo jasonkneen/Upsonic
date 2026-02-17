@@ -1728,6 +1728,24 @@ wheels = [
 ]
 
 [[package]]
+name = "firecrawl-py"
+version = "4.14.1"
+source = { registry = "https://pypi.org/simple/" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "httpx" },
+    { name = "nest-asyncio" },
+    { name = "pydantic" },
+    { name = "python-dotenv" },
+    { name = "requests" },
+    { name = "websockets" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9a/6b/eb7067d156a98130da0dcb4791ae37b547bf0985de23ca86564d121192f4/firecrawl_py-4.14.1.tar.gz", hash = "sha256:87c31fdc587bad7135238102be3f0d97dc0236350b0885d702c81049644fa3c6", size = 164435, upload-time = "2026-02-12T19:03:05.732Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b3/64/2662b0b17c20534642835fb09ee5df6e5802f2ee580501f317c8ff655c30/firecrawl_py-4.14.1-py3-none-any.whl", hash = "sha256:92b86954c46cae5bf912d3dd15915fb864a041937eab112328083996771036ec", size = 206460, upload-time = "2026-02-12T19:03:04.443Z" },
+]
+
+[[package]]
 name = "flatbuffers"
 version = "25.12.19"
 source = { registry = "https://pypi.org/simple/" }
@@ -8530,7 +8548,7 @@ wheels = [
 
 [[package]]
 name = "upsonic"
-version = "0.72.2"
+version = "0.72.3"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -8566,6 +8584,7 @@ csv-loader = [
     { name = "aiofiles" },
 ]
 custom-tools = [
+    { name = "firecrawl-py" },
     { name = "slack-sdk" },
 ]
 docling-loader = [
@@ -8824,6 +8843,7 @@ requires-dist = [
     { name = "fastapi", marker = "extra == 'web'" },
     { name = "fastembed", marker = "python_full_version < '3.14' and extra == 'embeddings'", specifier = ">=0.7.3" },
     { name = "fastmcp", specifier = ">=2.14.5" },
+    { name = "firecrawl-py", marker = "extra == 'custom-tools'", specifier = ">=4.14.1" },
     { name = "genai-prices", specifier = ">=0.0.38" },
     { name = "genai-prices", marker = "extra == 'tools'", specifier = ">=0.0.29" },
     { name = "google-api-python-client", marker = "extra == 'gmail-interface'" },

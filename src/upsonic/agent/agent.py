@@ -1,10 +1,49 @@
 import asyncio
 import copy
+import threading
 import uuid
 from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Literal, Optional, Union, TYPE_CHECKING
 
 
 from upsonic.utils.logging_config import sentry_sdk, get_env_bool_optional
+
+
+# ---------------------------------------------------------------------------
+# Persistent event loop for sync wrappers (do, stream, print_do, etc.)
+#
+# asyncio.run() creates a *new* event loop each call and closes it afterward.
+# Cached httpx.AsyncClient connections inside the OpenAI SDK stay bound to
+# the first loop.  When asyncio.run() destroys that loop, subsequent calls
+# fail with "RuntimeError: Event loop is closed".
+#
+# Solution: keep a single background loop alive for the process lifetime so
+# async clients and their connection pools remain valid across calls.
+# ---------------------------------------------------------------------------
+_bg_loop: Optional[asyncio.AbstractEventLoop] = None
+_bg_loop_lock = threading.Lock()
+
+
+def _get_bg_loop() -> asyncio.AbstractEventLoop:
+    """Return a persistent event loop running in a daemon thread."""
+    global _bg_loop
+    if _bg_loop is not None and not _bg_loop.is_closed():
+        return _bg_loop
+    with _bg_loop_lock:
+        # Double-check after acquiring lock
+        if _bg_loop is not None and not _bg_loop.is_closed():
+            return _bg_loop
+        loop = asyncio.new_event_loop()
+        thread = threading.Thread(target=loop.run_forever, daemon=True, name="upsonic-bg-loop")
+        thread.start()
+        _bg_loop = loop
+        return _bg_loop
+
+
+def _run_in_bg_loop(coro):
+    """Submit *coro* to the persistent background loop and block until done."""
+    loop = _get_bg_loop()
+    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    return future.result()
 from upsonic.agent.base import BaseAgent
 from upsonic.run.agent.output import AgentRunOutput
 from upsonic.run.agent.input import AgentRunInput
@@ -534,23 +573,11 @@ class Agent(BaseAgent):
         Returns:
             Same as do - Task content or AgentRunOutput based on return_output.
         """
-        import asyncio
-        
         if not self.workspace or self._workspace_greeting_executed:
             return None
-        
-        try:
-            loop = asyncio.get_running_loop()
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(
-                    asyncio.run, 
-                    self.execute_workspace_greeting_async(return_output)
-                )
-                return future.result()
-        except RuntimeError:
-            return asyncio.run(self.execute_workspace_greeting_async(return_output))
-    
+
+        return _run_in_bg_loop(self.execute_workspace_greeting_async(return_output))
+
     def _setup_policy_models(self) -> None:
         """Setup model references for safety policies."""
         # Setup models for all policies in both managers
@@ -1082,27 +1109,13 @@ class Agent(BaseAgent):
                 "metadata": tool_def.metadata or {}
             }
             
-            # Execute validation synchronously using nest_asyncio if needed
-            try:
-                # Check if we're in async context
-                loop = asyncio.get_running_loop()
-                # Already in event loop - use nest_asyncio
-                import nest_asyncio
-                nest_asyncio.apply()
-                validation_result = asyncio.run(
-                    self.tool_policy_pre_manager.execute_tool_validation_async(
-                        tool_info=tool_info,
-                        check_type=f"Pre-Execution Tool Validation ({context_description})"
-                    )
+            # Execute validation synchronously via persistent background loop
+            validation_result = _run_in_bg_loop(
+                self.tool_policy_pre_manager.execute_tool_validation_async(
+                    tool_info=tool_info,
+                    check_type=f"Pre-Execution Tool Validation ({context_description})"
                 )
-            except RuntimeError:
-                # No event loop - safe to use asyncio.run()
-                validation_result = asyncio.run(
-                    self.tool_policy_pre_manager.execute_tool_validation_async(
-                        tool_info=tool_info,
-                        check_type=f"Pre-Execution Tool Validation ({context_description})"
-                    )
-                )
+            )
             
             if validation_result.should_block():
                 # Handle blocking based on action type
@@ -2581,23 +2594,8 @@ class Agent(BaseAgent):
             print(f"Use: {recommendation.model_name}")
             ```
         """
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(
-                        asyncio.run,
-                        self.recommend_model_for_task_async(task, criteria, use_llm)
-                    )
-                    return future.result()
-            else:
-                return loop.run_until_complete(
-                    self.recommend_model_for_task_async(task, criteria, use_llm)
-                )
-        except RuntimeError:
-            return asyncio.run(self.recommend_model_for_task_async(task, criteria, use_llm))
-    
+        return _run_in_bg_loop(self.recommend_model_for_task_async(task, criteria, use_llm))
+
     def get_last_model_recommendation(self) -> Optional[Any]:
         """
         Get the last model recommendation made by the agent.
@@ -2737,6 +2735,8 @@ class Agent(BaseAgent):
         return_output: bool = False,
         state: Optional["State"] = None,
         *,
+        timeout: Optional[float] = None,
+        partial_on_timeout: bool = False,
         graph_execution_id: Optional[str] = None,
         _resume_output: Optional[AgentRunOutput] = None,
         _resume_step_index: Optional[int] = None,
@@ -2744,11 +2744,11 @@ class Agent(BaseAgent):
     ) -> Union[Any, List[Any], List[AgentRunOutput]]:
         """
         Execute a task (or list of tasks) asynchronously using the pipeline architecture.
-        
+
         When a list of tasks is provided with more than one element, each task is
         executed sequentially and a list of results is returned.  A single-element
         list is unwrapped and treated identically to a non-list input.
-        
+
         Args:
             task: Task to execute. Accepts a single Task/str or a list of them.
             model: Override model for this execution
@@ -2756,11 +2756,15 @@ class Agent(BaseAgent):
             retry: Number of retries
             return_output: If True, return full AgentRunOutput. If False (default), return content only.
             state: Graph execution state
+            timeout: Maximum execution time in seconds. None means no timeout.
+            partial_on_timeout: If True and timeout is set, return whatever text was
+                generated so far instead of raising an error. Requires timeout to be set.
+                Internally uses streaming to enable progressive text capture.
             graph_execution_id: Graph execution identifier
             _resume_output: Internal - output for HITL resumption
             _resume_step_index: Internal - step index to resume from
             _print_method_default: Internal - default print value based on method (do=False, print_do=True)
-            
+
         Returns:
             Single task:
                 Task content (str, BaseModel, etc.) if return_output=False
@@ -2768,24 +2772,22 @@ class Agent(BaseAgent):
             List of tasks (len > 1):
                 List of task contents if return_output=False
                 List of AgentRunOutput if return_output=True
-                
+
         Example:
             ```python
             # Single task
             result = await agent.do_async(task)
-            
-            # Multiple tasks
-            results = await agent.do_async([task1, task2, task3])
-            # results is a list of outputs
-            
-            # Multiple tasks with full output
-            outputs = await agent.do_async([task1, task2], return_output=True)
-            # outputs is a list of AgentRunOutput
+
+            # With timeout and partial results
+            result = await agent.do_async(task, timeout=120, partial_on_timeout=True)
+            # If timeout hits: returns whatever text was generated so far
+            # If completed normally: returns full result
             ```
         """
         handled, task_or_results = await self._handle_task_list_async(
             task, self.do_async,
             model, debug, retry, return_output, state,
+            timeout=timeout, partial_on_timeout=partial_on_timeout,
             graph_execution_id=graph_execution_id,
             _print_method_default=_print_method_default,
         )
@@ -2793,12 +2795,18 @@ class Agent(BaseAgent):
             return task_or_results
         task = task_or_results
 
+        # Validate timeout parameters
+        if partial_on_timeout and timeout is None:
+            raise ValueError("partial_on_timeout=True requires timeout to be set")
+        if timeout is not None and timeout <= 0:
+            raise ValueError("timeout must be a positive number")
+
         from upsonic.agent.pipeline import PipelineManager
-        
+
         # Resolve print flag based on hierarchy (ENV > param > method default)
         # Store locally - don't mutate self.print to ensure thread-safety
         resolved_print_flag = self._resolve_print_flag(_print_method_default)
-        
+
         # Convert string to Task if needed
         task = self._convert_to_task(task)
         
@@ -2852,23 +2860,136 @@ class Agent(BaseAgent):
 
             self._apply_model_override(model)
 
-            pipeline = PipelineManager(
-                steps=self._create_direct_pipeline_steps(),
-                task=self._agent_run_output.task,
-                agent=self,
-                model=self.model,
-                debug=debug or self.debug
-            )
+            if partial_on_timeout and timeout is not None:
+                # Case A: Use streaming pipeline internally to capture partial text on timeout.
+                # Only streaming gives progressive text accumulation.
+                self._agent_run_output.is_streaming = True
 
-            await pipeline.execute(self._agent_run_output, start_step_index=start_step_index)
-            cleanup_run(run_id)
-            sentry_sdk.flush()
-            if return_output:
-                return self._agent_run_output
-            return self._agent_run_output.output
+                pipeline = PipelineManager(
+                    steps=self._create_streaming_pipeline_steps(),
+                    task=self._agent_run_output.task,
+                    agent=self,
+                    model=self.model,
+                    debug=debug or self.debug
+                )
+
+                async def _consume_stream():
+                    """Consume streaming pipeline events, accumulating text silently."""
+                    async for pipeline_event in pipeline.execute_stream(
+                        context=self._agent_run_output, start_step_index=start_step_index
+                    ):
+                        text_content = self._extract_text_from_stream_event(pipeline_event)
+                        if text_content:
+                            self._agent_run_output.accumulated_text += text_content
+
+                try:
+                    await asyncio.wait_for(_consume_stream(), timeout=timeout)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    # Timeout fired - return whatever text was accumulated
+                    cancel_run_func(run_id)
+
+                    partial_text = self._agent_run_output.accumulated_text or None
+
+                    self._agent_run_output.mark_cancelled()
+                    if self._agent_run_output.metadata is None:
+                        self._agent_run_output.metadata = {}
+                    self._agent_run_output.metadata["timeout"] = True
+                    self._agent_run_output.metadata["partial_result"] = bool(partial_text)
+                    self._agent_run_output.metadata["timeout_seconds"] = timeout
+
+                    self._agent_run_output.output = partial_text
+                    if task is not None:
+                        task._response = partial_text
+
+                    # Record usage so task.total_input_token / total_output_token work
+                    await self._run_call_management_step(task, debug)
+
+                    cleanup_run(run_id)
+                    sentry_sdk.flush()
+
+                    if return_output:
+                        return self._agent_run_output
+                    return self._agent_run_output.output
+
+                # Normal completion - restore is_streaming for return consistency
+                self._agent_run_output.is_streaming = False
+
+                # Record usage — streaming pipeline lacks CallManagementStep
+                await self._run_call_management_step(task, debug)
+
+                cleanup_run(run_id)
+                sentry_sdk.flush()
+                if return_output:
+                    return self._agent_run_output
+                return self._agent_run_output.output
+
+            elif timeout is not None:
+                # Case B: Normal pipeline with timeout - raises on expiry
+                from upsonic.exceptions import ExecutionTimeoutError
+
+                pipeline = PipelineManager(
+                    steps=self._create_direct_pipeline_steps(),
+                    task=self._agent_run_output.task,
+                    agent=self,
+                    model=self.model,
+                    debug=debug or self.debug
+                )
+
+                try:
+                    await asyncio.wait_for(
+                        pipeline.execute(self._agent_run_output, start_step_index=start_step_index),
+                        timeout=timeout
+                    )
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    cancel_run_func(run_id)
+                    cleanup_run(run_id)
+                    raise ExecutionTimeoutError(
+                        f"Agent execution timed out after {timeout} seconds",
+                        timeout=timeout
+                    )
+
+                cleanup_run(run_id)
+                sentry_sdk.flush()
+                if return_output:
+                    return self._agent_run_output
+                return self._agent_run_output.output
+
+            else:
+                # Case C: No timeout - original behavior
+                pipeline = PipelineManager(
+                    steps=self._create_direct_pipeline_steps(),
+                    task=self._agent_run_output.task,
+                    agent=self,
+                    model=self.model,
+                    debug=debug or self.debug
+                )
+
+                await pipeline.execute(self._agent_run_output, start_step_index=start_step_index)
+                cleanup_run(run_id)
+                sentry_sdk.flush()
+                if return_output:
+                    return self._agent_run_output
+                return self._agent_run_output.output
         finally:
             self.run_id = None
     
+    async def _run_call_management_step(self, task: "Task", debug: bool = False) -> None:
+        """Run CallManagementStep to record usage for streaming-based execution.
+
+        The streaming pipeline lacks CallManagementStep, so when do_async()
+        uses streaming internally (partial_on_timeout), we run it manually
+        so that task.total_input_token / total_output_token work.
+        """
+        try:
+            from upsonic.agent.pipeline.steps import CallManagementStep
+            step = CallManagementStep()
+            await step.execute(
+                self._agent_run_output, task, self, self.model,
+                step_number=0, pipeline_manager=None,
+            )
+        except Exception:
+            pass  # Best-effort — don't let tracking errors mask the result
+
     def _extract_output(self, task: "Task", response: "ModelResponse") -> Any:
         """Extract the output from a model response."""
         from upsonic.messages import TextPart, ToolCallPart
@@ -2921,22 +3042,28 @@ class Agent(BaseAgent):
         model: Optional[Union[str, "Model"]] = None,
         debug: bool = False,
         retry: int = 1,
-        return_output: bool = False
+        return_output: bool = False,
+        timeout: Optional[float] = None,
+        partial_on_timeout: bool = False,
     ) -> Union[Any, List[Any], List[AgentRunOutput]]:
         """
         Execute a task (or list of tasks) synchronously.
-        
+
         When a list of tasks is provided with more than one element, each task is
         executed sequentially and a list of results is returned.  A single-element
         list is unwrapped and treated identically to a non-list input.
-        
+
         Args:
             task: Task to execute. Accepts a single Task/str or a list of them.
             model: Override model for this execution
             debug: Enable debug mode
             retry: Number of retries
             return_output: If True, return full AgentRunOutput. If False (default), return content only.
-            
+            timeout: Maximum execution time in seconds. None means no timeout.
+            partial_on_timeout: If True and timeout is set, return whatever text was
+                generated so far instead of raising an error. Requires timeout to be set.
+                Internally uses streaming to enable progressive text capture.
+
         Returns:
             Single task:
                 Task content (str, BaseModel, etc.) if return_output=False
@@ -2947,6 +3074,7 @@ class Agent(BaseAgent):
         """
         handled, task_or_results = self._handle_task_list(
             task, self.do, model, debug, retry, return_output,
+            timeout, partial_on_timeout,
         )
         if handled:
             return task_or_results
@@ -2957,15 +3085,12 @@ class Agent(BaseAgent):
         if isinstance(task, str):
             task = TaskClass(description=task)
 
-        try:
-            loop = asyncio.get_running_loop()
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(asyncio.run, self.do_async(task, model, debug, retry, return_output, _print_method_default=False))
-                return future.result()
-        except RuntimeError:
-            return asyncio.run(self.do_async(task, model, debug, retry, return_output, _print_method_default=False))
-    
+        return _run_in_bg_loop(self.do_async(
+            task, model, debug, retry, return_output,
+            timeout=timeout, partial_on_timeout=partial_on_timeout,
+            _print_method_default=False,
+        ))
+
     def print_do(
         self,
         task: Union[str, "Task", List[Union[str, "Task"]]],
@@ -3008,15 +3133,11 @@ class Agent(BaseAgent):
         if isinstance(task, str):
             task = TaskClass(description=task)
 
-        try:
-            loop = asyncio.get_running_loop()
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(asyncio.run, self.do_async(task, model, debug, retry, return_output, _print_method_default=True))
-                return future.result()
-        except RuntimeError:
-            return asyncio.run(self.do_async(task, model, debug, retry, return_output, _print_method_default=True))
-    
+        return _run_in_bg_loop(self.do_async(
+            task, model, debug, retry, return_output,
+            _print_method_default=True,
+        ))
+
     async def print_do_async(
         self,
         task: Union[str, "Task", List[Union[str, "Task"]]],
@@ -3160,16 +3281,12 @@ class Agent(BaseAgent):
                 result_queue.put(None)
         
         def run_async_stream():
-            asyncio.run(stream_to_queue())
-        
-        try:
-            asyncio.get_running_loop()
-            thread = threading.Thread(target=run_async_stream, daemon=True)
-            thread.start()
-        except RuntimeError:
-            thread = threading.Thread(target=run_async_stream, daemon=True)
-            thread.start()
-        
+            loop = _get_bg_loop()
+            asyncio.run_coroutine_threadsafe(stream_to_queue(), loop).result()
+
+        thread = threading.Thread(target=run_async_stream, daemon=True)
+        thread.start()
+
         while True:
             item = result_queue.get()
             if item is None:
@@ -3653,49 +3770,17 @@ class Agent(BaseAgent):
                     results.append(item)
                 return results
             
-            try:
-                loop = asyncio.get_running_loop()
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(asyncio.run, collect_stream())
-                    return future.result()
-            except RuntimeError:
-                return asyncio.run(collect_stream())
+            return _run_in_bg_loop(collect_stream())
         else:
             # Direct mode
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    import concurrent.futures
-                    with concurrent.futures.ThreadPoolExecutor() as executor:
-                        future = executor.submit(
-                            asyncio.run, 
-                            self.continue_run_async(
-                                task, run_id, requirements, model, debug, retry, return_output,
-                                streaming=False,
-                                event=event,
-                                external_tool_executor=external_tool_executor
-                            )
-                        )
-                        return future.result()
-                else:
-                    return loop.run_until_complete(
-                        self.continue_run_async(
-                            task, run_id, requirements, model, debug, retry, return_output,
-                            streaming=False,
-                            event=event,
-                            external_tool_executor=external_tool_executor
-                        )
-                    )
-            except RuntimeError:
-                return asyncio.run(
-                    self.continue_run_async(
-                        task, run_id, requirements, model, debug, retry, return_output,
-                        streaming=False,
-                        event=event,
-                        external_tool_executor=external_tool_executor
-                    )
+            return _run_in_bg_loop(
+                self.continue_run_async(
+                    task, run_id, requirements, model, debug, retry, return_output,
+                    streaming=False,
+                    event=event,
+                    external_tool_executor=external_tool_executor
                 )
+            )
     
     async def _prepare_continuation_context(
         self,

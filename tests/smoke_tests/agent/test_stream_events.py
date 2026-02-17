@@ -128,7 +128,7 @@ async def test_basic_text_streaming():
     print("TEST: Basic Text Streaming")
     print("=" * 60)
     
-    agent = Agent("openai/gpt-4o-mini")
+    agent = Agent("anthropic/claude-sonnet-4-5")
     task = Task("Say 'Hello World' and nothing else.")
     
     collected_events: List[AgentEvent] = []
@@ -190,7 +190,7 @@ async def test_tool_calling_events():
     print("TEST: Tool Calling Events")
     print("=" * 60)
     
-    agent = Agent("openai/gpt-4o-mini", tools=[add_numbers, multiply_numbers])
+    agent = Agent("anthropic/claude-sonnet-4-5", tools=[add_numbers, multiply_numbers])
     task = Task("What is 5 + 3? Use the add_numbers tool.")
     
     collected_events: List[AgentEvent] = []
@@ -252,7 +252,7 @@ async def test_multiple_tool_calls():
     print("TEST: Multiple Tool Calls")
     print("=" * 60)
     
-    agent = Agent("openai/gpt-4o-mini", tools=[add_numbers, multiply_numbers])
+    agent = Agent("anthropic/claude-sonnet-4-5", tools=[add_numbers, multiply_numbers])
     task = Task("First add 10 + 5, then multiply the result by 2. Show your work.")
     
     collected_events: List[AgentEvent] = []
@@ -291,7 +291,7 @@ async def test_cache_events():
     print("TEST: Cache Events")
     print("=" * 60)
     
-    agent = Agent("openai/gpt-4o-mini")
+    agent = Agent("anthropic/claude-sonnet-4-5")
     
     # First request - should be cache miss
     task1 = Task("What is 2+2?", enable_cache=True, cache_method="vector_search")
@@ -342,7 +342,7 @@ async def test_step_events_order():
     print("TEST: Step Events Order")
     print("=" * 60)
     
-    agent = Agent("openai/gpt-4o-mini")
+    agent = Agent("anthropic/claude-sonnet-4-5")
     task = Task("Hi")
     
     step_events: List[AgentEvent] = []
@@ -388,7 +388,7 @@ async def test_all_event_types_present():
     print("TEST: All Event Types Present")
     print("=" * 60)
     
-    agent = Agent("openai/gpt-4o-mini", tools=[get_weather])
+    agent = Agent("anthropic/claude-sonnet-4-5", tools=[get_weather])
     task = Task("What's the weather in Tokyo?")
     
     collected_events: List[AgentEvent] = []
@@ -454,7 +454,7 @@ async def test_event_attributes():
     print("TEST: Event Attributes")
     print("=" * 60)
     
-    agent = Agent("openai/gpt-4o-mini", tools=[add_numbers])
+    agent = Agent("anthropic/claude-sonnet-4-5", tools=[add_numbers])
     task = Task("Add 100 and 200 using the tool")
     
     collected_events: List[AgentEvent] = []
@@ -497,7 +497,7 @@ async def test_event_attributes():
     if "ModelSelectedEvent" in by_type:
         event = by_type["ModelSelectedEvent"][0]
         assert hasattr(event, 'model_name')
-        assert "gpt-4o-mini" in event.model_name.lower()
+        assert "claude-sonnet-4-5" in event.model_name.lower() or "claude" in event.model_name.lower()
         print(f"  ✓ ModelSelectedEvent: model_name={event.model_name}")
     
     # Test ToolCallEvent attributes
@@ -552,7 +552,7 @@ async def test_stream_result_methods():
     print("TEST: Stream Result Methods")
     print("=" * 60)
     
-    agent = Agent("openai/gpt-4o-mini", tools=[add_numbers])
+    agent = Agent("anthropic/claude-sonnet-4-5", tools=[add_numbers])
     task = Task("What is 7 + 8? Use the tool.")
     
     all_events: List[AgentEvent] = []
@@ -631,7 +631,7 @@ def test_sync_streaming():
     print("TEST: Synchronous Streaming")
     print("=" * 60)
     
-    agent = Agent("openai/gpt-4o-mini")
+    agent = Agent("anthropic/claude-sonnet-4-5")
     task = Task("Say hello")
     
     collected_events: List[AgentEvent] = []
@@ -664,7 +664,7 @@ async def test_debug_mode():
     print("TEST: Debug Mode")
     print("=" * 60)
     
-    agent = Agent("openai/gpt-4o-mini", debug=True)
+    agent = Agent("anthropic/claude-sonnet-4-5", debug=True)
     task = Task("Hi")
     
     collected_events: List[AgentEvent] = []
@@ -693,7 +693,7 @@ async def test_event_type_property():
     print("TEST: Event Type Property")
     print("=" * 60)
     
-    agent = Agent("openai/gpt-4o-mini")
+    agent = Agent("anthropic/claude-sonnet-4-5")
     task = Task("Hi")
     
     async for event in agent.astream(task, events=True):
@@ -718,7 +718,7 @@ async def test_complex_multi_tool():
     print("TEST: Complex Multi-Tool Scenario")
     print("=" * 60)
     
-    agent = Agent("openai/gpt-4o-mini", tools=[add_numbers, multiply_numbers, get_weather])
+    agent = Agent("anthropic/claude-sonnet-4-5", tools=[add_numbers, multiply_numbers, get_weather])
     task = Task(
         "I need to know: 1) What's 15 + 27? 2) What's 6 * 7? 3) What's the weather in Paris? "
         "Answer all three questions."
@@ -791,7 +791,7 @@ async def test_memory_with_event_streaming():
     
     # Create an Agent with Memory and tools for comprehensive testing
     personal_assistant = Agent(
-        "openai/gpt-4o-mini",
+        "anthropic/claude-sonnet-4-5",
         tools=[add_numbers, multiply_numbers, get_weather],
         memory=memory
     )

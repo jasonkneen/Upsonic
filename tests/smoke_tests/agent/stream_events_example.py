@@ -61,7 +61,7 @@ async def basic_streaming_example():
     print("EXAMPLE 1: Basic Event Streaming")
     print("=" * 70)
     
-    agent = Agent("openai/gpt-4o-mini")
+    agent = Agent("anthropic/claude-sonnet-4-5")
     task = Task("Write a haiku about programming.")
     
     print("\nStreaming events:\n")
@@ -104,7 +104,7 @@ async def tool_call_example():
     print("EXAMPLE 2: Tool Call Monitoring")
     print("=" * 70)
     
-    agent = Agent("openai/gpt-4o-mini", tools=[calculate, get_current_time])
+    agent = Agent("anthropic/claude-sonnet-4-5", tools=[calculate, get_current_time])
     task = Task("What is 123 * 456? Also, what time is it right now?")
     
     print("\nMonitoring tool calls:\n")
@@ -139,7 +139,7 @@ async def performance_monitoring_example():
     print("EXAMPLE 3: Performance Monitoring")
     print("=" * 70)
     
-    agent = Agent("openai/gpt-4o-mini")
+    agent = Agent("anthropic/claude-sonnet-4-5")
     task = Task("Explain quantum computing in one sentence.")
     
     step_times = {}
@@ -213,7 +213,7 @@ async def event_filtering_example():
     print("EXAMPLE 4: Event Filtering (Text Only)")
     print("=" * 70)
     
-    agent = Agent("openai/gpt-4o-mini")
+    agent = Agent("anthropic/claude-sonnet-4-5")
     task = Task("Count from 1 to 5 slowly.")
     
     print("\nFiltering for text events only:\n")
@@ -255,7 +255,7 @@ async def custom_handler_example():
         def get_text(self):
             return self.text_buffer
     
-    agent = Agent("openai/gpt-4o-mini", tools=[calculate])
+    agent = Agent("anthropic/claude-sonnet-4-5", tools=[calculate])
     task = Task("What is 99 + 1?")
     
     handler = EventHandler()

@@ -21,7 +21,7 @@ from upsonic.run.agent.output import AgentRunOutput
 # ---------------------------------------------------------------------------
 
 def test_do_list_of_strings() -> None:
-    agent: Agent = Agent(name="ListTester")
+    agent: Agent = Agent(model="anthropic/claude-sonnet-4-5", name="ListTester")
     results: List[str] = agent.do(["What is 2+2?", "What is 3+3?"])
 
     assert isinstance(results, list)
@@ -36,7 +36,7 @@ def test_do_list_of_strings() -> None:
 # ---------------------------------------------------------------------------
 
 def test_do_list_of_tasks() -> None:
-    agent: Agent = Agent(name="ListTester")
+    agent: Agent = Agent(model="anthropic/claude-sonnet-4-5", name="ListTester")
     tasks: List[Task] = [Task("What is the capital of France?"), Task("What is the capital of Germany?")]
     results: List[str] = agent.do(tasks)
 
@@ -51,7 +51,7 @@ def test_do_list_of_tasks() -> None:
 # ---------------------------------------------------------------------------
 
 def test_do_list_return_output() -> None:
-    agent: Agent = Agent(name="ListTester")
+    agent: Agent = Agent(model="anthropic/claude-sonnet-4-5", name="ListTester")
     results: List[AgentRunOutput] = agent.do(
         ["Say hello", "Say goodbye"], return_output=True,
     )
@@ -70,7 +70,7 @@ def test_do_list_return_output() -> None:
 # ---------------------------------------------------------------------------
 
 def test_do_single_element_list_returns_scalar() -> None:
-    agent: Agent = Agent(name="ListTester")
+    agent: Agent = Agent(model="anthropic/claude-sonnet-4-5", name="ListTester")
     result: str = agent.do(["What is 5+5?"])
 
     assert isinstance(result, str)
@@ -83,7 +83,7 @@ def test_do_single_element_list_returns_scalar() -> None:
 # ---------------------------------------------------------------------------
 
 def test_do_empty_list() -> None:
-    agent: Agent = Agent(name="ListTester")
+    agent: Agent = Agent(model="anthropic/claude-sonnet-4-5", name="ListTester")
     result: List[Any] = agent.do([])
 
     assert isinstance(result, list)
@@ -95,7 +95,7 @@ def test_do_empty_list() -> None:
 # ---------------------------------------------------------------------------
 
 def test_do_mixed_list() -> None:
-    agent: Agent = Agent(name="ListTester")
+    agent: Agent = Agent(model="anthropic/claude-sonnet-4-5", name="ListTester")
     results: List[str] = agent.do(["What is 1+1?", Task("What is 2+2?")])
 
     assert isinstance(results, list)
@@ -111,7 +111,7 @@ def test_do_mixed_list() -> None:
 
 @pytest.mark.asyncio
 async def test_do_async_list_of_strings() -> None:
-    agent: Agent = Agent(name="ListTester")
+    agent: Agent = Agent(model="anthropic/claude-sonnet-4-5", name="ListTester")
     results: List[str] = await agent.do_async(["What is 10+10?", "What is 20+20?"])
 
     assert isinstance(results, list)
@@ -127,7 +127,7 @@ async def test_do_async_list_of_strings() -> None:
 
 @pytest.mark.asyncio
 async def test_do_async_list_return_output() -> None:
-    agent: Agent = Agent(name="ListTester")
+    agent: Agent = Agent(model="anthropic/claude-sonnet-4-5", name="ListTester")
     results: List[AgentRunOutput] = await agent.do_async(
         [Task("Say yes"), Task("Say no")], return_output=True,
     )
@@ -145,7 +145,7 @@ async def test_do_async_list_return_output() -> None:
 
 @pytest.mark.asyncio
 async def test_do_async_single_element_list() -> None:
-    agent: Agent = Agent(name="ListTester")
+    agent: Agent = Agent(model="anthropic/claude-sonnet-4-5", name="ListTester")
     result: str = await agent.do_async(["What is 7+7?"])
 
     assert isinstance(result, str)
@@ -159,7 +159,7 @@ async def test_do_async_single_element_list() -> None:
 
 @pytest.mark.asyncio
 async def test_do_async_empty_list() -> None:
-    agent: Agent = Agent(name="ListTester")
+    agent: Agent = Agent(model="anthropic/claude-sonnet-4-5", name="ListTester")
     result: List[Any] = await agent.do_async([])
 
     assert isinstance(result, list)
@@ -171,7 +171,7 @@ async def test_do_async_empty_list() -> None:
 # ---------------------------------------------------------------------------
 
 def test_print_do_list_of_strings() -> None:
-    agent: Agent = Agent(name="ListTester")
+    agent: Agent = Agent(model="anthropic/claude-sonnet-4-5", name="ListTester")
     results: List[str] = agent.print_do(["Say hi", "Say bye"])
 
     assert isinstance(results, list)
@@ -187,7 +187,7 @@ def test_print_do_list_of_strings() -> None:
 
 @pytest.mark.asyncio
 async def test_print_do_async_list_of_strings() -> None:
-    agent: Agent = Agent(name="ListTester")
+    agent: Agent = Agent(model="anthropic/claude-sonnet-4-5", name="ListTester")
     results: List[str] = await agent.print_do_async(["Say hi", "Say bye"])
 
     assert isinstance(results, list)

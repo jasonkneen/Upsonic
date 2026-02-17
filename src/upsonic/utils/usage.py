@@ -86,6 +86,8 @@ MODEL_CONTEXT_WINDOWS: Dict[str, Optional[int]] = {
     'claude-opus-4-20250514': 200000,
     'claude-sonnet-4-0': 200000,
     'claude-sonnet-4-20250514': 200000,
+    'claude-sonnet-4-5': 200000,
+    'claude-sonnet-4-5-20250929': 200000,
     
     'gemini-3-pro-preview': 1048576,
     'gemini-3-pro-image-preview': 65536,
