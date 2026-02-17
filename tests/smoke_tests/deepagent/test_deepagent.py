@@ -46,7 +46,7 @@ async def test_deepagent_planning_and_filesystem_state_backend():
     # Create DeepAgent with StateBackend
     backend = StateBackend()
     agent = DeepAgent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Test DeepAgent",
         enable_planning=True,
         enable_filesystem=True,
@@ -101,7 +101,7 @@ async def test_deepagent_with_subagents():
     """Test DeepAgent with subagents."""
     # Create subagents
     researcher = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="researcher",
         role="Research Specialist",
         goal="Conduct thorough research on topics",
@@ -109,7 +109,7 @@ async def test_deepagent_with_subagents():
     )
     
     writer = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="writer",
         role="Content Writer",
         goal="Write clear and engaging content",
@@ -118,7 +118,7 @@ async def test_deepagent_with_subagents():
     
     # Create DeepAgent with subagents
     agent = DeepAgent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Test DeepAgent",
         enable_planning=True,
         enable_filesystem=True,
@@ -159,7 +159,6 @@ async def test_deepagent_with_subagents():
 @pytest.mark.timeout(180)
 async def test_deepagent_with_memory_backend_sqlite(sqlite_db_file):
     """Test DeepAgent with MemoryBackend using SqliteStorage."""
-    # Create storage and backend
     storage = AsyncSqliteStorage(
         db_file=sqlite_db_file,
         session_table="sessions",
@@ -172,7 +171,7 @@ async def test_deepagent_with_memory_backend_sqlite(sqlite_db_file):
     backend = MemoryBackend(storage)
     
     agent = DeepAgent(
-        model="openai/gpt-4o-mini",
+        model="anthropic/claude-sonnet-4-5",
         name="Test DeepAgent",
         enable_planning=True,
         enable_filesystem=True,
@@ -235,7 +234,7 @@ async def test_deepagent_with_composite_backend():
     )
     
     agent = DeepAgent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Test DeepAgent",
         enable_planning=True,
         enable_filesystem=True,
@@ -282,7 +281,7 @@ async def test_deepagent_full_features():
     """Test DeepAgent with all features enabled: planning, filesystem, subagents."""
     # Create subagent
     assistant = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="assistant",
         role="Assistant",
         goal="Help with various tasks",
@@ -292,7 +291,7 @@ async def test_deepagent_full_features():
     # Create DeepAgent with all features
     backend = StateBackend()
     agent = DeepAgent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Test DeepAgent",
         enable_planning=True,
         enable_filesystem=True,

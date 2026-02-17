@@ -44,7 +44,7 @@ async def test_reliability_evaluator_basic():
     _enable_print_capture()
     # Create agent with tools
     agent = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         tools=[calculate_sum, calculate_product],
         debug=True
     )
@@ -135,7 +135,7 @@ async def test_reliability_evaluator_order_matters():
     """Test ReliabilityEvaluator with order_matters=True."""
     _enable_print_capture()
     agent = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         tools=[calculate_sum, calculate_product],
         debug=True
     )
@@ -173,7 +173,7 @@ async def test_reliability_evaluator_exact_match():
     """Test ReliabilityEvaluator with exact_match=True."""
     _enable_print_capture()
     agent = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         tools=[calculate_sum, calculate_product, get_weather],
         debug=True
     )
@@ -214,7 +214,7 @@ async def test_reliability_evaluator_missing_tools():
     """Test ReliabilityEvaluator when expected tools are not called."""
     _enable_print_capture()
     agent = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         tools=[calculate_sum],
         debug=True
     )
@@ -252,7 +252,7 @@ async def test_reliability_evaluator_multiple_calls():
     """Test ReliabilityEvaluator with tools called multiple times."""
     _enable_print_capture()
     agent = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         tools=[calculate_sum],
         debug=True
     )
@@ -333,7 +333,7 @@ async def test_reliability_evaluator_result_assertion():
     """Test ReliabilityEvaluationResult.assert_passed() method."""
     _enable_print_capture()
     agent = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         tools=[calculate_sum],
         debug=True
     )
@@ -369,7 +369,7 @@ async def test_reliability_evaluator_logging_output(capsys):
     """Test that ReliabilityEvaluator properly logs results."""
     _enable_print_capture()
     agent = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         tools=[calculate_sum, calculate_product],
         debug=True
     )
@@ -414,7 +414,7 @@ async def test_reliability_evaluator_with_team():
     _enable_print_capture()
     # Create team agents with tools
     calculator_agent = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Calculator",
         role="Math Calculator",
         tools=[calculate_sum, calculate_product],
@@ -422,7 +422,7 @@ async def test_reliability_evaluator_with_team():
     )
     
     weather_agent = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="WeatherAgent",
         role="Weather Provider",
         tools=[get_weather],

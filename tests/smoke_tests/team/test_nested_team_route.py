@@ -29,13 +29,13 @@ async def test_route_nested_team_entity_routed(capsys: pytest.CaptureFixture[str
     _enable_print_capture()
 
     legal_expert = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Legal Expert",
         role="Legal Advisor",
         goal="Provide legal guidance",
     )
     tech_writer = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Tech Writer",
         role="Technical Writer",
         goal="Write technical documentation",
@@ -52,7 +52,7 @@ async def test_route_nested_team_entity_routed(capsys: pytest.CaptureFixture[str
     outer_team = Team(
         entities=[legal_expert, tech_team],
         mode="route",
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         debug=True,
     )
 
@@ -96,13 +96,13 @@ async def test_route_selects_tech_team_for_technical_task(capsys: pytest.Capture
     _enable_print_capture()
 
     legal_expert = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Legal Expert",
         role="Legal Advisor",
         goal="Provide legal guidance and compliance information",
     )
     tech_writer = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Tech Writer",
         role="Technical Writer",
         goal="Write technical documentation",
@@ -119,7 +119,7 @@ async def test_route_selects_tech_team_for_technical_task(capsys: pytest.Capture
     outer_team = Team(
         entities=[legal_expert, tech_team],
         mode="route",
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         debug=True,
     )
 

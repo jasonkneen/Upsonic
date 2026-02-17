@@ -25,14 +25,14 @@ async def test_team_accuracy_evaluation(capsys):
     _enable_print_capture()
     # Create team agents
     researcher = Agent(
-        model="openai/gpt-4o-mini",
+        model="anthropic/claude-sonnet-4-5",
         name="Researcher",
         role="Research Specialist",
         goal="Find accurate information",
         debug=True
     )
     writer = Agent(
-        model="openai/gpt-4o-mini",
+        model="anthropic/claude-sonnet-4-5",
         name="Writer",
         role="Content Writer",
         goal="Create concise summaries",
@@ -48,7 +48,7 @@ async def test_team_accuracy_evaluation(capsys):
     
     # Create judge agent
     judge_agent = Agent(
-        model="openai/gpt-4o-mini",
+        model="anthropic/claude-sonnet-4-5",
         name="Judge",
         debug=True
     )
@@ -122,7 +122,7 @@ async def test_team_performance_evaluation(capsys):
     _enable_print_capture()
     # Create team agents
     analyst = Agent(
-        model="openai/gpt-4o-mini",
+        model="anthropic/claude-sonnet-4-5",
         name="Analyst",
         role="Data Analyst",
         goal="Analyze data",
@@ -211,11 +211,11 @@ def test_team_evaluator_validation():
     """Test Team evaluator parameter validation."""
     
     team = Team(
-        entities=[Agent(model="openai/gpt-4o-mini", name="Agent1")],
+        entities=[Agent(model="anthropic/claude-sonnet-4-5", name="Agent1")],
         mode="sequential"
     )
     
-    judge = Agent(model="openai/gpt-4o-mini", name="Judge")
+    judge = Agent(model="anthropic/claude-sonnet-4-5", name="Judge")
     
     # Test AccuracyEvaluator validation
     with pytest.raises(TypeError, match="judge_agent.*Agent"):

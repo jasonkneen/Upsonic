@@ -31,7 +31,7 @@ async def test_reflection_basic():
     
     # Create agent with reflection enabled
     agent = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Test Agent",
         reflection=True,
         reflection_config=reflection_config,
@@ -76,7 +76,7 @@ async def test_reflection_with_low_threshold():
     
     # Create agent with reflection
     agent = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Test Agent",
         reflection=True,
         reflection_config=reflection_config,
@@ -115,13 +115,13 @@ async def test_reflection_config_attributes():
     reflection_config = ReflectionConfig(
         max_iterations=5,
         acceptance_threshold=0.85,
-        evaluator_model="openai/gpt-4o",
+        evaluator_model="anthropic/claude-sonnet-4-5",
         enable_self_critique=True,
         enable_improvement_suggestions=True
     )
     
     agent = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Test Agent",
         reflection=True,
         reflection_config=reflection_config,
@@ -131,7 +131,7 @@ async def test_reflection_config_attributes():
     # Verify config attributes
     assert agent.reflection_config.max_iterations == 5, "max_iterations should be 5"
     assert agent.reflection_config.acceptance_threshold == 0.85, "acceptance_threshold should be 0.85"
-    assert agent.reflection_config.evaluator_model == "openai/gpt-4o", "evaluator_model should be set"
+    assert agent.reflection_config.evaluator_model == "anthropic/claude-sonnet-4-5", "evaluator_model should be set"
     assert agent.reflection_config.enable_self_critique is True, "enable_self_critique should be True"
     assert agent.reflection_config.enable_improvement_suggestions is True, "enable_improvement_suggestions should be True"
     
@@ -155,7 +155,7 @@ async def test_reflection_without_config():
     """Test reflection with default config (no explicit config provided)."""
     # Create agent with reflection=True but no explicit config
     agent = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Test Agent",
         reflection=True,
         debug=True

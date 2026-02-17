@@ -48,13 +48,13 @@ async def test_coordinate_framework_creates_leader(capsys: pytest.CaptureFixture
     """Coordinate mode with model only: framework creates leader without memory by default."""
     _enable_print_capture()
     data_analyst = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Data Analyst",
         role="Data Analysis Expert",
         goal="Analyze data and extract insights",
     )
     report_writer = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Report Writer",
         role="Business Report Specialist",
         goal="Create professional business reports",
@@ -62,7 +62,7 @@ async def test_coordinate_framework_creates_leader(capsys: pytest.CaptureFixture
     team = Team(
         entities=[data_analyst, report_writer],
         mode="coordinate",
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
     )
     tasks = [
         Task(description="List three key metrics for sales analysis."),
@@ -101,19 +101,19 @@ async def test_coordinate_custom_leader_no_memory(capsys: pytest.CaptureFixture[
     """Coordinate mode with custom leader that has no memory: leader stays without memory when team has none."""
     _enable_print_capture()
     data_analyst = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Data Analyst",
         role="Data Analysis Expert",
         goal="Analyze data and extract insights",
     )
     report_writer = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Report Writer",
         role="Business Report Specialist",
         goal="Create professional business reports",
     )
     custom_leader = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Custom Coordinator",
         role="Coordinator",
         goal="Delegate and coordinate tasks",
@@ -162,19 +162,19 @@ async def test_coordinate_custom_leader_with_memory(capsys: pytest.CaptureFixtur
         session_id="smoke_leader_session",
     )
     data_analyst = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Data Analyst",
         role="Data Analysis Expert",
         goal="Analyze data and extract insights",
     )
     report_writer = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Report Writer",
         role="Business Report Specialist",
         goal="Create professional business reports",
     )
     custom_leader = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Coordinator With Memory",
         role="Coordinator",
         goal="Delegate and coordinate tasks",
@@ -223,13 +223,13 @@ async def test_coordinate_team_memory_set_no_leader(capsys: pytest.CaptureFixtur
         session_id="smoke_team_session",
     )
     data_analyst = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Data Analyst",
         role="Data Analysis Expert",
         goal="Analyze data and extract insights",
     )
     report_writer = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Report Writer",
         role="Business Report Specialist",
         goal="Create professional business reports",
@@ -237,7 +237,7 @@ async def test_coordinate_team_memory_set_no_leader(capsys: pytest.CaptureFixtur
     team = Team(
         entities=[data_analyst, report_writer],
         mode="coordinate",
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         memory=team_memory,
     )
     assert team.memory is team_memory, "Precondition: team memory is set"
@@ -272,14 +272,14 @@ async def test_route_framework_creates_router(capsys: pytest.CaptureFixture[str]
     """Route mode with model only: framework creates router."""
     _enable_print_capture()
     legal_expert = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Legal Expert",
         role="Legal Advisor",
         goal="Provide legal guidance",
         system_prompt="You are an expert in corporate law.",
     )
     tech_expert = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Tech Expert",
         role="Technology Specialist",
         goal="Provide technical solutions",
@@ -288,7 +288,7 @@ async def test_route_framework_creates_router(capsys: pytest.CaptureFixture[str]
     team = Team(
         entities=[legal_expert, tech_expert],
         mode="route",
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
     )
     task = Task(description="What are the best practices for implementing OAuth 2.0?")
     result = await team.multi_agent_async(
@@ -317,21 +317,21 @@ async def test_route_custom_router(capsys: pytest.CaptureFixture[str]):
     """Route mode with custom router agent."""
     _enable_print_capture()
     legal_expert = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Legal Expert",
         role="Legal Advisor",
         goal="Provide legal guidance",
         system_prompt="You are an expert in corporate law.",
     )
     tech_expert = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Tech Expert",
         role="Technology Specialist",
         goal="Provide technical solutions",
         system_prompt="You are an expert in software architecture.",
     )
     custom_router = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Request Router",
         role="Router",
         goal="Route queries to the best specialist",

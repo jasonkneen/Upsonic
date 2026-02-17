@@ -21,13 +21,13 @@ def test_coordinate_streaming_mixed_entities() -> None:
     """Coordinate mode: stream leader output; header and content should be present."""
     _reset_console()
     data_analyst = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Data Analyst",
         role="Data Analysis Expert",
         goal="Analyze data and extract insights",
     )
     report_writer = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Report Writer",
         role="Business Report Specialist",
         goal="Create professional business reports",
@@ -40,7 +40,7 @@ def test_coordinate_streaming_mixed_entities() -> None:
     team = Team(
         entities=[data_analyst, report_team],
         mode="coordinate",
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
     )
     tasks = [
         Task(description="Analyze Q4 sales data and identify trends"),

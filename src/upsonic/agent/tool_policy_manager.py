@@ -133,7 +133,7 @@ class ToolPolicyManager:
                         "confidence": rule_output.confidence
                     }
                 
-                if self.debug and rule_output.confidence > 0.0:
+                if self.debug:
                     from upsonic.utils.printing import tool_safety_check
                     tool_safety_check(
                         tool_name=tool_info.get("name", "unknown"),
@@ -238,7 +238,7 @@ class ToolPolicyManager:
                         "confidence": rule_output.confidence
                     }
                 
-                if self.debug and rule_output.confidence > 0.0:
+                if self.debug:
                     from upsonic.utils.printing import tool_safety_check
                     tool_safety_check(
                         tool_name=tool_call_info.get("name", "unknown"),

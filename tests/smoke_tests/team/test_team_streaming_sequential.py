@@ -21,13 +21,13 @@ def test_sequential_streaming_mixed_entities() -> None:
     """Sequential mode: stream with one Agent and one nested Team; output has headers and content."""
     _reset_console()
     researcher = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Researcher",
         role="Research Specialist",
         goal="Find accurate information and data",
     )
     editor = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Editor",
         role="Editor",
         goal="Polish and refine content",
@@ -35,7 +35,7 @@ def test_sequential_streaming_mixed_entities() -> None:
     writer_team = Team(
         entities=[
             Agent(
-                model="openai/gpt-4o",
+                model="anthropic/claude-sonnet-4-5",
                 name="Writer",
                 role="Content Writer",
                 goal="Create clear and engaging content",

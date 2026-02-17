@@ -5,7 +5,7 @@ from upsonic import Agent, Task
 def test_print_do_default_prints():
     """Test: print_do should print by default"""
     print("test_print_do_default_prints")
-    my_agent = Agent()
+    my_agent = Agent(model="anthropic/claude-sonnet-4-5")
     task = Task("test task")
     my_agent.print_do(task)
 
@@ -13,7 +13,7 @@ def test_print_do_default_prints():
 def test_do_default_no_prints():
     """Test: do should not print by default"""
     print("test_do_default_no_prints")
-    my_agent = Agent()
+    my_agent = Agent(model="anthropic/claude-sonnet-4-5")
     task = Task("test task")
     my_agent.do(task)
 
@@ -21,7 +21,7 @@ def test_do_default_no_prints():
 def test_print_do_with_print_false():
     """Test: print_do should not print when print=False"""
     print("test_print_do_with_print_false")
-    my_agent = Agent(print=False)
+    my_agent = Agent(model="anthropic/claude-sonnet-4-5", print=False)
     task = Task("test task")
     my_agent.print_do(task)
 
@@ -29,7 +29,7 @@ def test_print_do_with_print_false():
 def test_do_with_print_true():
     """Test: do should print when print=True"""
     print("test_do_with_print_true")
-    my_agent = Agent(print=True)
+    my_agent = Agent(model="anthropic/claude-sonnet-4-5", print=True)
     task = Task("test task")
     my_agent.do(task)
 
@@ -40,7 +40,7 @@ def test_do_with_env_print_true():
     original_env = os.environ.get("UPSONIC_AGENT_PRINT")
     try:
         os.environ["UPSONIC_AGENT_PRINT"] = "true"
-        my_agent = Agent()
+        my_agent = Agent(model="anthropic/claude-sonnet-4-5")
         task = Task("test task")
         my_agent.do(task)
     finally:
@@ -56,7 +56,7 @@ def test_do_with_env_print_false_and_agent_print_true():
     original_env = os.environ.get("UPSONIC_AGENT_PRINT")
     try:
         os.environ["UPSONIC_AGENT_PRINT"] = "false"
-        my_agent = Agent(print=True)
+        my_agent = Agent(model="anthropic/claude-sonnet-4-5", print=True)
         task = Task("test task")
         my_agent.do(task)
     finally:
@@ -72,7 +72,7 @@ def test_print_do_with_env_print_false():
     original_env = os.environ.get("UPSONIC_AGENT_PRINT")
     try:
         os.environ["UPSONIC_AGENT_PRINT"] = "false"
-        my_agent = Agent()
+        my_agent = Agent(model="anthropic/claude-sonnet-4-5")
         task = Task("test task")
         my_agent.print_do(task)
     finally:

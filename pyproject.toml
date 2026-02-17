@@ -234,6 +234,7 @@ ocr = [
 ]
 
 custom-tools = [
+    "firecrawl-py>=4.14.1",
     "slack-sdk>=3.38.0",
 ]
 gmail-interface = [

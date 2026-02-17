@@ -30,13 +30,13 @@ async def test_coordinate_nested_team_entity_delegated(capsys: pytest.CaptureFix
     _enable_print_capture()
 
     analyst = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Analyst",
         role="Data Analyst",
         goal="Analyze data and extract insights",
     )
     summarizer = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Summarizer",
         role="Summary Writer",
         goal="Summarize findings concisely",
@@ -53,7 +53,7 @@ async def test_coordinate_nested_team_entity_delegated(capsys: pytest.CaptureFix
     outer_team = Team(
         entities=[analysis_team, summarizer],
         mode="coordinate",
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         debug=True,
     )
 

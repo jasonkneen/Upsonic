@@ -29,13 +29,13 @@ async def test_sequential_nested_team_entity_called(capsys: pytest.CaptureFixtur
     _enable_print_capture()
 
     researcher = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Researcher",
         role="Research Specialist",
         goal="Find accurate information",
     )
     writer = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Writer",
         role="Content Writer",
         goal="Create clear content",

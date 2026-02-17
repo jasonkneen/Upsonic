@@ -21,14 +21,14 @@ def test_route_streaming_mixed_entities() -> None:
     """Route mode: stream chosen entity output; header and content should be present."""
     _reset_console()
     legal_expert = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Legal Expert",
         role="Legal Advisor",
         goal="Provide legal guidance and compliance information",
         system_prompt="You are an expert in corporate law and regulations",
     )
     tech_expert = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Tech Expert",
         role="Technology Specialist",
         goal="Provide technical solutions and architecture advice",
@@ -42,7 +42,7 @@ def test_route_streaming_mixed_entities() -> None:
     team = Team(
         entities=[legal_expert, tech_team],
         mode="route",
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
     )
     tasks = [
         Task(description="What are the best practices for implementing OAuth 2.0?"),

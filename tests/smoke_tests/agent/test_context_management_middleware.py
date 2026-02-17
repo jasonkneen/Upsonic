@@ -38,7 +38,7 @@ pytestmark = pytest.mark.timeout(120)
 
 def _get_real_model():
     """Create a real model instance via the framework's infer_model."""
-    return infer_model("openai/gpt-4o")
+    return infer_model("anthropic/claude-sonnet-4-5")
 
 
 def _make_user_request(text: str) -> ModelRequest:
@@ -53,7 +53,7 @@ def _make_text_response(
     text: str,
     input_tokens: int = 0,
     output_tokens: int = 0,
-    model_name: str = "gpt-4o",
+    model_name: str = "anthropic/claude-sonnet-4-5",
 ) -> ModelResponse:
     return ModelResponse(
         parts=[TextPart(content=text)],
@@ -240,7 +240,7 @@ class TestGetMaxContextWindow:
         mw = ContextManagementMiddleware(model=model)
         result = mw._get_max_context_window()
         assert result is not None
-        assert result == 128_000
+        assert result == 200_000
 
     def test_returns_none_for_unknown_model(self) -> None:
         model = _get_real_model()
@@ -351,28 +351,28 @@ class TestIsContextExceeded:
     def test_exceeded_with_large_context(self) -> None:
         model = _get_real_model()
         mw = ContextManagementMiddleware(model=model, safety_margin_ratio=0.90)
-        # gpt-4o has 128000 window; 90% = 115200; we exceed that
-        messages = [_make_text_response("hi", input_tokens=110_000, output_tokens=10_000)]
+        # 200000 * 0.90 = 180000; exceed that
+        messages = [_make_text_response("hi", input_tokens=170_000, output_tokens=20_000)]
         assert mw._is_context_exceeded(messages) is True
 
     def test_exactly_at_limit_not_exceeded(self) -> None:
         model = _get_real_model()
         mw = ContextManagementMiddleware(model=model, safety_margin_ratio=0.90)
-        # 128000 * 0.90 = 115200; exactly 115200 is not exceeded (> not >=)
-        messages = [_make_text_response("hi", input_tokens=115_000, output_tokens=200)]
+        # 200000 * 0.90 = 180000; exactly 180000 is not exceeded (> not >=)
+        messages = [_make_text_response("hi", input_tokens=179_000, output_tokens=1_000)]
         assert mw._is_context_exceeded(messages) is False
 
     def test_just_over_limit_exceeded(self) -> None:
         model = _get_real_model()
         mw = ContextManagementMiddleware(model=model, safety_margin_ratio=0.90)
-        messages = [_make_text_response("hi", input_tokens=115_000, output_tokens=201)]
+        messages = [_make_text_response("hi", input_tokens=179_000, output_tokens=2_000)]
         assert mw._is_context_exceeded(messages) is True
 
     def test_custom_safety_margin(self) -> None:
         model = _get_real_model()
         mw = ContextManagementMiddleware(model=model, safety_margin_ratio=0.50)
-        # 128000 * 0.50 = 64000
-        messages = [_make_text_response("hi", input_tokens=60_000, output_tokens=5_000)]
+        # 200000 * 0.50 = 100000; exceed that
+        messages = [_make_text_response("hi", input_tokens=95_000, output_tokens=10_000)]
         assert mw._is_context_exceeded(messages) is True
 
 
@@ -638,7 +638,7 @@ class TestReconstructMessages:
             ]),
         ])
         result = mw._reconstruct_messages(summary)
-        assert result[0].model_name == "gpt-4o"
+        assert result[0].model_name == model.model_name
 
     def test_empty_parts_skipped(self) -> None:
         model = _get_real_model()
@@ -698,7 +698,7 @@ class TestBuildContextFullResponse:
     def test_contains_context_full_message(self) -> None:
         model = _get_real_model()
         mw = ContextManagementMiddleware(model=model)
-        resp = mw._build_context_full_response(model_name="gpt-4o")
+        resp = mw._build_context_full_response(model_name="anthropic/claude-sonnet-4-5")
         assert isinstance(resp, ModelResponse)
         assert len(resp.parts) == 1
         assert isinstance(resp.parts[0], TextPart)

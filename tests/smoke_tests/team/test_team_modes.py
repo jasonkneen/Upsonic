@@ -32,14 +32,14 @@ async def test_sequential_mode_agent_name_logging(capsys: pytest.CaptureFixture[
     """
     _enable_print_capture()
     researcher = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Researcher",
         role="Research Specialist",
         goal="Find accurate information and data"
     )
     
     writer = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Writer",
         role="Content Writer",
         goal="Create clear and engaging content"
@@ -73,7 +73,7 @@ async def test_route_mode_selected_agent_logging(capsys: pytest.CaptureFixture[s
     """Test that route mode logs show the selected agent name."""
     _enable_print_capture()
     legal_expert = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Legal Expert",
         role="Legal Advisor",
         goal="Provide legal guidance and compliance information",
@@ -81,7 +81,7 @@ async def test_route_mode_selected_agent_logging(capsys: pytest.CaptureFixture[s
     )
     
     tech_expert = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Tech Expert",
         role="Technology Specialist",
         goal="Provide technical solutions and architecture advice",
@@ -91,7 +91,7 @@ async def test_route_mode_selected_agent_logging(capsys: pytest.CaptureFixture[s
     team = Team(
         entities=[legal_expert, tech_expert],
         mode="route",
-        model="openai/gpt-4o"
+        model="anthropic/claude-sonnet-4-5"
     )
     
     task = Task(description="What are the best practices for implementing OAuth 2.0?")
@@ -115,14 +115,14 @@ async def test_coordinate_mode_agent_name_logging(capsys: pytest.CaptureFixture[
     """Test that coordinate mode logs show agent names (leader and members)."""
     _enable_print_capture()
     data_analyst = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Data Analyst",
         role="Data Analysis Expert",
         goal="Analyze data and extract insights"
     )
     
     report_writer = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Report Writer",
         role="Business Report Specialist",
         goal="Create professional business reports"
@@ -131,7 +131,7 @@ async def test_coordinate_mode_agent_name_logging(capsys: pytest.CaptureFixture[
     team = Team(
         entities=[data_analyst, report_writer],
         mode="coordinate",
-        model="openai/gpt-4o"
+        model="anthropic/claude-sonnet-4-5"
     )
     
     tasks = [

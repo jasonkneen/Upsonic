@@ -147,7 +147,7 @@ async def test_all_basic_events():
     print("=" * 80)
     
     tracker = EventTracker()
-    agent = Agent("openai/gpt-4o-mini")
+    agent = Agent("anthropic/claude-sonnet-4-5")
     task = Task("Write a haiku about Python programming.")
     
     async for event in agent.astream(task, events=True):
@@ -191,7 +191,7 @@ async def test_model_and_tool_events():
     print("=" * 80)
     
     tracker = EventTracker()
-    agent = Agent("openai/gpt-4o-mini", tools=[calculate, get_weather])
+    agent = Agent("anthropic/claude-sonnet-4-5", tools=[calculate, get_weather])
     task = Task("What is 15 * 23? Also, what's the weather in San Francisco?")
     
     async for event in agent.astream(task, events=True):
@@ -235,7 +235,7 @@ async def test_cache_events():
     print("=" * 80)
     
     tracker = EventTracker()
-    agent = Agent("openai/gpt-4o-mini")
+    agent = Agent("anthropic/claude-sonnet-4-5")
     
     # First run - should be cache miss
     task1 = Task("What is 2+2?", enable_cache=True)
@@ -287,7 +287,7 @@ async def test_memory_events():
     storage = InMemoryStorage()
     memory = Memory(storage=storage, session_id="test_session_memory")
     agent = Agent(
-        "openai/gpt-4o-mini",
+        "anthropic/claude-sonnet-4-5",
         memory=memory
     )
     
@@ -323,7 +323,7 @@ async def test_reflection_events():
     
     tracker = EventTracker()
     # Note: Reflection might not be enabled by default
-    agent = Agent("openai/gpt-4o-mini")
+    agent = Agent("anthropic/claude-sonnet-4-5")
     task = Task("Write a short story about a robot.")
     
     async for event in agent.astream(task, events=True):
@@ -354,7 +354,7 @@ async def test_execution_complete_event():
     print("=" * 80)
     
     tracker = EventTracker()
-    agent = Agent("openai/gpt-4o-mini")
+    agent = Agent("anthropic/claude-sonnet-4-5")
     task = Task("Count to 3.")
     
     async for event in agent.astream(task, events=True):
@@ -388,7 +388,7 @@ async def test_all_event_types_comprehensive():
     storage = InMemoryStorage()
     memory = Memory(storage=storage, session_id="comprehensive_test_session")
     agent = Agent(
-        "openai/gpt-4o-mini",
+        "anthropic/claude-sonnet-4-5",
         tools=[calculate, get_weather, search_web],
         memory=memory
     )

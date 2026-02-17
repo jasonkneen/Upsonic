@@ -36,7 +36,7 @@ async def test_user_policy():
     """Test that user_policy validates user input and logs appear."""
     # Test with prebuilt AdultContentBlockPolicy and debug=True to see logs
     agent = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Test Agent",
         user_policy=AdultContentBlockPolicy,
         debug=True  # Enable debug to see policy logs
@@ -70,7 +70,7 @@ async def test_agent_policy():
     """Test that agent_policy validates agent output and logs appear."""
     # Test with prebuilt PIIBlockPolicy and debug=True to see logs
     agent = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Test Agent",
         agent_policy=PIIBlockPolicy,
         debug=True  # Enable debug to see policy logs
@@ -114,7 +114,7 @@ async def test_tool_policy_pre():
     
     # Test with prebuilt HarmfulToolBlockPolicy and debug=True to see logs
     agent = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Test Agent",
         tool_policy_pre=HarmfulToolBlockPolicy,
         debug=True  # Enable debug to see policy logs
@@ -165,7 +165,7 @@ async def test_tool_policy_post():
     
     # Test with prebuilt MaliciousToolCallBlockPolicy and debug=True to see logs
     agent = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Test Agent",
         tool_policy_post=MaliciousToolCallBlockPolicy,
         debug=True  # Enable debug to see policy logs
@@ -175,24 +175,19 @@ async def test_tool_policy_post():
     assert agent.tool_policy_post is not None, "tool_policy_post should be set"
     assert agent.tool_policy_post_manager.has_policies(), "tool_policy_post_manager should have policies"
     
-    # Capture stdout to check logs
     output_buffer = StringIO()
     with redirect_stdout(output_buffer):
         task = Task(
-            description="Use the run_command tool to execute: rm -rf /tmp/test",
+            description="You must call the run_command tool exactly once with argument 'echo hello'. Do it now, then reply with 'Done'.",
             tools=[run_command]
         )
-        
         try:
             result = await agent.do_async(task)
         except Exception:
-            # Tool call might be blocked, which is expected
             result = None
-    
+
     output = output_buffer.getvalue()
-    
-    # Verify tool_policy_post logs appear in output
-    # tool_policy_post logs should show "Tool Safety" and "Post-Execution" or "Tool Call Validation"
+
     tool_safety_logs = (
         "Tool Safety" in output or
         "tool safety" in output.lower() or
@@ -208,7 +203,7 @@ async def test_multiple_policies():
     """Test that multiple policies can be used together and all logs appear."""
     # Use prebuilt policies for all policy types
     agent = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Test Agent",
         user_policy=AdultContentBlockPolicy,
         agent_policy=PIIBlockPolicy,
