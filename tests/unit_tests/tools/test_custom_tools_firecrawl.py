@@ -1,13 +1,17 @@
 """Unit tests for Firecrawl custom tools."""
 
 import json
-import pytest
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
-from typing import Dict, Any, List
 import os
+import pytest
+from unittest.mock import Mock, AsyncMock, patch
+from typing import Dict, Any, List
 
+FIRECRAWL_API_KEY: str | None = os.getenv("FIRECRAWL_API_KEY")
 
-FIRECRAWL_API_KEY = os.getenv("FIRECRAWL_API_KEY")
+pytestmark = pytest.mark.skipif(
+    not FIRECRAWL_API_KEY,
+    reason="FIRECRAWL_API_KEY not set; skipping Firecrawl tests",
+)
 
 
 @pytest.fixture
