@@ -33,6 +33,19 @@ def _decompress_data(compressed_data: str) -> str:
     return gzip.decompress(compressed_bytes).decode('utf-8')
 
 
+def _epoch_to_iso(epoch: int) -> str:
+    """Convert epoch seconds to ISO 8601 datetime string for Mem0 compatibility."""
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
+
+
+def _iso_to_epoch(iso_str: str) -> int:
+    """Convert ISO 8601 datetime string back to epoch seconds."""
+    from datetime import datetime
+    dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+    return int(dt.timestamp())
+
+
 # ======================== Session Schema Definition ========================
 
 SESSION_SCHEMA: Dict[str, Dict[str, Any]] = {
@@ -290,8 +303,8 @@ def serialize_session_to_mem0(
         "team_id": session_dict.get("team_id"),
         "workflow_id": session_dict.get("workflow_id"),
         "user_id": session_dict.get("user_id"),
-        "created_at": data_payload["created_at"],
-        "updated_at": data_payload["updated_at"],
+        "created_at": _epoch_to_iso(data_payload["created_at"]),
+        "updated_at": _epoch_to_iso(data_payload["updated_at"]),
     }
     
     # Remove None values from metadata
@@ -438,12 +451,12 @@ def serialize_user_memory_to_mem0(
         "_type": "user_memory",
         "_table": table_name,
         "_upsonic_memory_id": memory_id,
-        "_data": json.dumps(data_payload),  # Store actual data in metadata
+        "_data": json.dumps(data_payload),
         "user_id": user_id,
         "agent_id": agent_id,
         "team_id": team_id,
-        "created_at": current_time,
-        "updated_at": current_time,
+        "created_at": _epoch_to_iso(current_time),
+        "updated_at": _epoch_to_iso(current_time),
     }
     
     # Remove None values from metadata
@@ -561,13 +574,13 @@ def serialize_cultural_knowledge_to_mem0(
         "_type": "cultural_knowledge",
         "_table": table_name,
         "_upsonic_memory_id": memory_id,
-        "_data": json.dumps(data_payload),  # Store actual data in metadata
+        "_data": json.dumps(data_payload),
         "id": cultural_knowledge.id,
         "name": cultural_knowledge.name,
         "agent_id": cultural_knowledge.agent_id,
         "team_id": cultural_knowledge.team_id,
-        "created_at": data_payload["created_at"],
-        "updated_at": data_payload["updated_at"],
+        "created_at": _epoch_to_iso(data_payload["created_at"]),
+        "updated_at": _epoch_to_iso(data_payload["updated_at"]),
     }
     
     # Remove None values from metadata
@@ -793,6 +806,8 @@ def sort_records_by_field(
     """
     Sort records by a given field.
     
+    Handles both ISO 8601 datetime strings and integer epoch timestamps.
+    
     Args:
         records: List of record dictionaries
         sort_by: Field to sort by (default: created_at)
@@ -807,10 +822,16 @@ def sort_records_by_field(
     reverse = sort_order != "asc"
     
     def get_sort_key(record: Dict[str, Any]) -> Any:
-        # Try to get from metadata first, then from root
         metadata = record.get("metadata", {})
         value = metadata.get(sort_by) or record.get(sort_by, 0)
-        return value if value is not None else 0
+        if value is None:
+            return 0
+        if isinstance(value, str):
+            try:
+                return _iso_to_epoch(value)
+            except (ValueError, TypeError):
+                return 0
+        return value
     
     return sorted(records, key=get_sort_key, reverse=reverse)
 
