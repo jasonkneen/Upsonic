@@ -221,7 +221,7 @@ class Agent(BaseAgent):
             db: Database instance (overrides memory if provided)
             debug: Enable debug logging
             debug_level: Debug level (1 = standard, 2 = detailed). Only used when debug=True
-            print: Enable printing of agent output and execution details. If None, reads from UPSONIC_AGENT_PRINT env variable. If set, overrides env variable.
+            print: Enable printing for do() (and allow print_do() when not False). If None, do() does not print unless UPSONIC_AGENT_PRINT=true. If False, print_do() also does not print. UPSONIC_AGENT_PRINT=false overrides everything.
             company_url: Company URL for context
             company_objective: Company objective for context
             company_description: Company description for context
@@ -320,9 +320,9 @@ class Agent(BaseAgent):
         # 3. Method name (print_do=True, do=False) - lowest priority (resolved per-method call)
         self._print_env: Optional[bool] = get_env_bool_optional("UPSONIC_AGENT_PRINT")
         self._print_param: Optional[bool] = print
-        # Initialize with resolved default for introspection (ENV > param > True)
-        # Note: This is the "default" value; per-method resolution uses _resolve_print_flag()
-        self.print: bool = self._print_env if self._print_env is not None else (print if print is not None else True)
+        # Resolved default for introspection: ENV > param > False (do() does not print by default)
+        # Per-method resolution uses _resolve_print_flag()
+        self.print: bool = self._print_env if self._print_env is not None else (print if print is not None else False)
 
         # Set db attribute
         self.db = db

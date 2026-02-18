@@ -112,7 +112,10 @@ try:
         BetaWebSearchToolResultBlockParam,
         BetaWebSearchToolResultBlockParamContentParam,
     )
-    from anthropic.types.beta.beta_web_search_tool_20250305_param import UserLocation
+    try:
+        from anthropic.types.beta.beta_web_search_tool_20250305_param import UserLocation
+    except ImportError:
+        from anthropic.types.beta.beta_web_search_tool_20250305_param import BetaUserLocationParam as UserLocation
     from anthropic.types.model_param import ModelParam
 
 except ImportError:

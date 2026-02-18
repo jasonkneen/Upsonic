@@ -95,23 +95,6 @@ class FirecrawlTools:
         poll_interval: Default poll interval for job status checks in seconds
     """
 
-    SUPPORTED_FORMATS: List[str] = [
-        "markdown", "html", "rawHtml", "links",
-        "screenshot", "screenshot@fullPage",
-    ]
-
-    SEARCH_SOURCES: List[str] = ["web", "news", "images"]
-
-    SEARCH_CATEGORIES: List[str] = ["pdf", "research", "github"]
-
-    TIME_BASED_SEARCH_VALUES: Dict[str, str] = {
-        "past_hour": "qdr:h",
-        "past_day": "qdr:d",
-        "past_week": "qdr:w",
-        "past_month": "qdr:m",
-        "past_year": "qdr:y",
-    }
-
     def __init__(
         self,
         api_key: Optional[str] = None,
@@ -234,7 +217,7 @@ class FirecrawlTools:
 
         Args:
             url: The URL to scrape.
-            formats: Output formats (markdown, html, rawHtml, links, screenshot, screenshot@fullPage).
+            formats: Output formats (markdown, html, rawHtml, links, summary, images).
             only_main_content: Extract only the main content, excluding headers/footers/navs.
             include_tags: HTML tags to include in extraction.
             exclude_tags: HTML tags to exclude from extraction.
@@ -307,7 +290,7 @@ class FirecrawlTools:
 
         Args:
             url: The URL to scrape.
-            formats: Output formats (markdown, html, rawHtml, links, screenshot, screenshot@fullPage).
+            formats: Output formats (markdown, html, rawHtml, links, summary, images).
             only_main_content: Extract only the main content, excluding headers/footers/navs.
             include_tags: HTML tags to include in extraction.
             exclude_tags: HTML tags to exclude from extraction.
@@ -966,7 +949,8 @@ class FirecrawlTools:
             if enable_web_search is not None:
                 kwargs["enable_web_search"] = enable_web_search
             if scrape_options is not None:
-                kwargs["scrape_options"] = scrape_options
+                from firecrawl.types import ScrapeOptions as _ScrapeOptions
+                kwargs["scrape_options"] = _ScrapeOptions(**scrape_options) if isinstance(scrape_options, dict) else scrape_options
 
             result = self.sync_client.extract(**kwargs)
             return _serialize(result)
@@ -1007,7 +991,8 @@ class FirecrawlTools:
             if enable_web_search is not None:
                 kwargs["enable_web_search"] = enable_web_search
             if scrape_options is not None:
-                kwargs["scrape_options"] = scrape_options
+                from firecrawl.types import ScrapeOptions as _ScrapeOptions
+                kwargs["scrape_options"] = _ScrapeOptions(**scrape_options) if isinstance(scrape_options, dict) else scrape_options
 
             result = await self.async_client.extract(**kwargs)
             return _serialize(result)
