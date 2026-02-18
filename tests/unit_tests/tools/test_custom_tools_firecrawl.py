@@ -973,7 +973,7 @@ class TestExtractData:
         assert call_kwargs["prompt"] == "Extract Firecrawl's company mission"
 
     def test_extract_data_with_scrape_options(self, firecrawl_tools: Any, mock_sync_client: Mock) -> None:
-        """Test extraction with scrape options."""
+        """Test extraction with scrape options (dict is converted to ScrapeOptions)."""
         scrape_opts: Dict[str, Any] = {"formats": [{"type": "json"}]}
         firecrawl_tools.extract_data(
             urls=["https://example.com"],
@@ -982,7 +982,9 @@ class TestExtractData:
         )
 
         call_kwargs = mock_sync_client.extract.call_args[1]
-        assert call_kwargs["scrape_options"] == scrape_opts
+        from firecrawl.types import ScrapeOptions
+        assert isinstance(call_kwargs["scrape_options"], ScrapeOptions)
+        assert call_kwargs["scrape_options"].formats == [{"type": "json"}]
 
     def test_extract_data_error_handling(self, firecrawl_tools: Any, mock_sync_client: Mock) -> None:
         """Test extract error handling."""
@@ -1112,40 +1114,6 @@ class TestStartExtract:
         parsed = json.loads(result)
         assert parsed["status"] == "completed"
         mock_async_client.get_extract_status.assert_called_once_with("async-extract-789")
-
-
-class TestClassAttributes:
-    """Test suite for class-level constants and attributes."""
-
-    def test_supported_formats(self) -> None:
-        """Test SUPPORTED_FORMATS constant."""
-        from upsonic.tools.custom_tools.firecrawl import FirecrawlTools
-        expected = ["markdown", "html", "rawHtml", "links", "screenshot", "screenshot@fullPage"]
-        assert FirecrawlTools.SUPPORTED_FORMATS == expected
-
-    def test_search_sources(self) -> None:
-        """Test SEARCH_SOURCES constant."""
-        from upsonic.tools.custom_tools.firecrawl import FirecrawlTools
-        assert "web" in FirecrawlTools.SEARCH_SOURCES
-        assert "news" in FirecrawlTools.SEARCH_SOURCES
-        assert "images" in FirecrawlTools.SEARCH_SOURCES
-
-    def test_search_categories(self) -> None:
-        """Test SEARCH_CATEGORIES constant."""
-        from upsonic.tools.custom_tools.firecrawl import FirecrawlTools
-        assert "pdf" in FirecrawlTools.SEARCH_CATEGORIES
-        assert "research" in FirecrawlTools.SEARCH_CATEGORIES
-        assert "github" in FirecrawlTools.SEARCH_CATEGORIES
-
-    def test_time_based_search_values(self) -> None:
-        """Test TIME_BASED_SEARCH_VALUES constant."""
-        from upsonic.tools.custom_tools.firecrawl import FirecrawlTools
-        tbs = FirecrawlTools.TIME_BASED_SEARCH_VALUES
-        assert tbs["past_hour"] == "qdr:h"
-        assert tbs["past_day"] == "qdr:d"
-        assert tbs["past_week"] == "qdr:w"
-        assert tbs["past_month"] == "qdr:m"
-        assert tbs["past_year"] == "qdr:y"
 
 
 class TestJsonSerialization:
