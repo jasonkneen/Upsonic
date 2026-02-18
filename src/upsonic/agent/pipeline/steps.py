@@ -1047,7 +1047,7 @@ class ModelExecutionStep(Step):
                 task,
                 debug=agent.debug,
                 print_output=context.print_flag,
-                show_tool_calls=agent.show_tool_calls
+                show_tool_calls=agent.show_tool_calls and context.print_flag,
             )
             if pipeline_manager:
                 pipeline_manager.set_manager('call_manager', call_manager)
@@ -1669,7 +1669,7 @@ class CallManagementStep(Step):
                     agent.debug,
                     getattr(task, 'price_id', None),
                     print_output=context.print_flag,
-                    show_tool_calls=agent.show_tool_calls
+                    show_tool_calls=agent.show_tool_calls and context.print_flag,
                 )
             
             step_result = StepResult(
