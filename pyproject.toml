@@ -1,6 +1,6 @@
 [project]
 name = "upsonic"
-version = "0.72.3"
+version = "0.72.4"
 description = "Agent Framework For Fintech"
 readme = "README.md"
 authors = [
@@ -68,6 +68,9 @@ pgvector = [
     "pgvector>=0.4.1",
     "sqlalchemy>=2.0.44",
 ]
+supermemory = [
+    "supermemory>=3.25.0",
+]
 vectordb = [
     "chromadb>=1.0.20; python_version < '3.14'",
     "faiss-cpu>=1.12.0",
@@ -82,6 +85,7 @@ vectordb = [
     "pgvector>=0.4.1",
     "sqlalchemy>=2.0.44",
     "pinecone-text>=0.11.0; python_version < '3.14'",
+    "supermemory>=3.25.0",
 ]
 
 sqlite-storage = [

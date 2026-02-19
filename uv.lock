@@ -7932,6 +7932,23 @@ wheels = [
 ]
 
 [[package]]
+name = "supermemory"
+version = "3.25.0"
+source = { registry = "https://pypi.org/simple/" }
+dependencies = [
+    { name = "anyio" },
+    { name = "distro" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "sniffio" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/99/b1/7519ebb3415975ef94a8708b590caa43225c0b6eec246604e163917953c1/supermemory-3.25.0.tar.gz", hash = "sha256:5ea4c69b55574ff49c9dace076e3715404acff50eb2c48a9697b78de89ecc5c2", size = 154380, upload-time = "2026-02-18T19:18:34.071Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/43/ef/04951a7b2e6a9200e597fee341bba86acac5d27736fef73b203fc2cd9910/supermemory-3.25.0-py3-none-any.whl", hash = "sha256:fd77796ce498b131e604a6dd532559c9b9897c37ede1adb601918ed2f39629ae", size = 140000, upload-time = "2026-02-18T19:18:32.617Z" },
+]
+
+[[package]]
 name = "sympy"
 version = "1.14.0"
 source = { registry = "https://pypi.org/simple/" }
@@ -8548,7 +8565,7 @@ wheels = [
 
 [[package]]
 name = "upsonic"
-version = "0.72.3"
+version = "0.72.4"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -8746,6 +8763,9 @@ storage = [
     { name = "redis" },
     { name = "sqlalchemy" },
 ]
+supermemory = [
+    { name = "supermemory" },
+]
 text-loader = [
     { name = "aiofiles" },
 ]
@@ -8772,6 +8792,7 @@ vectordb = [
     { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple/" }, marker = "python_full_version < '3.11'" },
     { name = "scipy", version = "1.16.3", source = { registry = "https://pypi.org/simple/" }, marker = "python_full_version >= '3.11'" },
     { name = "sqlalchemy" },
+    { name = "supermemory" },
     { name = "weaviate-client" },
 ]
 weaviate = [
@@ -8940,6 +8961,8 @@ requires-dist = [
     { name = "sqlalchemy", marker = "extra == 'postgres-storage'", specifier = ">=2.0.42" },
     { name = "sqlalchemy", marker = "extra == 'sqlite-storage'", specifier = ">=2.0.42" },
     { name = "sqlalchemy", marker = "extra == 'vectordb'", specifier = ">=2.0.44" },
+    { name = "supermemory", marker = "extra == 'supermemory'", specifier = ">=3.25.0" },
+    { name = "supermemory", marker = "extra == 'vectordb'", specifier = ">=3.25.0" },
     { name = "tavily-python", marker = "extra == 'tools'", specifier = ">=0.7.12" },
     { name = "toml", specifier = ">=0.10.2" },
     { name = "torch", marker = "extra == 'embeddings'", specifier = ">=2.8.0" },
@@ -8958,7 +8981,7 @@ requires-dist = [
     { name = "weaviate-client", marker = "extra == 'weaviate'", specifier = ">=4.16.9" },
     { name = "yfinance", marker = "extra == 'tools'", specifier = ">=0.2.66" },
 ]
-provides-extras = ["chroma", "qdrant", "milvus", "weaviate", "pinecone", "faiss", "pgvector", "vectordb", "sqlite-storage", "redis-storage", "postgres-storage", "mongo-storage", "mem0-storage", "storage", "models", "embeddings", "csv-loader", "docling-loader", "docx-loader", "html-loader", "json-loader", "markdown-loader", "pdf-loader", "pdfplumber-loader", "pymupdf-loader", "text-loader", "xml-loader", "yaml-loader", "loaders", "tools", "web", "ocr", "custom-tools", "gmail-interface", "safety-engine", "slack-interface"]
+provides-extras = ["chroma", "qdrant", "milvus", "weaviate", "pinecone", "faiss", "pgvector", "supermemory", "vectordb", "sqlite-storage", "redis-storage", "postgres-storage", "mongo-storage", "mem0-storage", "storage", "models", "embeddings", "csv-loader", "docling-loader", "docx-loader", "html-loader", "json-loader", "markdown-loader", "pdf-loader", "pdfplumber-loader", "pymupdf-loader", "text-loader", "xml-loader", "yaml-loader", "loaders", "tools", "web", "ocr", "custom-tools", "gmail-interface", "safety-engine", "slack-interface"]
 
 [package.metadata.requires-dev]
 dev = [
