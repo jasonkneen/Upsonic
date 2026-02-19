@@ -472,6 +472,9 @@ class Agent(BaseAgent):
         self._tool_call_count = 0
         self._tool_limit_reached = False
         
+        # Agent-level accumulated usage across all runs
+        self.usage: Optional["RunUsage"] = None
+        
         # Run cancellation tracking
         self.run_id: Optional[str] = None
         
@@ -2971,6 +2974,7 @@ class Agent(BaseAgent):
                     return self._agent_run_output
                 return self._agent_run_output.output
         finally:
+            self._finalize_agent_usage(resolved_print_flag)
             self.run_id = None
     
     async def _run_call_management_step(self, task: "Task", debug: bool = False) -> None:
@@ -2989,6 +2993,41 @@ class Agent(BaseAgent):
             )
         except Exception:
             pass  # Best-effort — don't let tracking errors mask the result
+
+    def _accumulate_run_usage(self, run_usage: Optional["RunUsage"]) -> None:
+        """Accumulate a run's usage metrics into the agent-level usage.
+        
+        Args:
+            run_usage: The RunUsage from a completed run. If None, no-op.
+        """
+        if run_usage is None:
+            return
+        
+        from upsonic.usage import RunUsage as RunUsageClass
+        
+        if self.usage is None:
+            self.usage = RunUsageClass()
+        
+        self.usage.incr(run_usage)
+
+    def _finalize_agent_usage(self, print_flag: bool) -> None:
+        """Accumulate current run usage into agent-level usage and optionally print agent metrics.
+        
+        Should be called at the end of every do_async / astream execution.
+        
+        Args:
+            print_flag: Whether printing is enabled for this execution.
+        """
+        output = getattr(self, '_agent_run_output', None)
+        if output is None:
+            return
+        
+        self._accumulate_run_usage(output.usage)
+        
+        task = output.task
+        if print_flag and task and not getattr(task, 'not_main_task', False):
+            from upsonic.utils.printing import print_agent_metrics
+            print_agent_metrics(self, print_output=print_flag)
 
     def _extract_output(self, task: "Task", response: "ModelResponse") -> Any:
         """Extract the output from a model response."""
@@ -3409,6 +3448,8 @@ class Agent(BaseAgent):
             
             
         finally:
+            stream_print_flag = self._resolve_print_flag(False)
+            self._finalize_agent_usage(stream_print_flag)
             cleanup_run(run_id)
             self.run_id = None
     

@@ -333,14 +333,32 @@ class LoaderFactory:
                 
             except Exception as e:
                 logger.warning(f"Failed to create loader for {source}: {e}")
-                try:
-                    fallback_config = self._create_optimized_config(source_str, 'text', **global_config_kwargs)
-                    fallback_loader = self.get_loader(source_str, 'text', **fallback_config)
-                    loaders.append(fallback_loader)
-                    logger.info(f"Using text loader fallback for {source}")
-                except Exception as fallback_error:
-                    logger.error(f"Fallback loader also failed for {source}: {fallback_error}")
-                    raise
+                extension = Path(source_str).suffix.lower()
+                alt_candidates: List[str] = [
+                    name for name, cls in self._loaders.items()
+                    if name != loader_type
+                    and extension in getattr(cls, 'get_supported_extensions', lambda: [])()
+                ]
+                created = False
+                for alt_name in alt_candidates:
+                    try:
+                        alt_config = self._create_optimized_config(source_str, alt_name, **global_config_kwargs)
+                        alt_loader = self.get_loader(source_str, alt_name, **alt_config)
+                        loaders.append(alt_loader)
+                        logger.info(f"Using {alt_name} loader fallback for {source}")
+                        created = True
+                        break
+                    except Exception:
+                        continue
+                if not created:
+                    try:
+                        fallback_config = self._create_optimized_config(source_str, 'text', **global_config_kwargs)
+                        fallback_loader = self.get_loader(source_str, 'text', **fallback_config)
+                        loaders.append(fallback_loader)
+                        logger.info(f"Using text loader fallback for {source}")
+                    except Exception as fallback_error:
+                        logger.error(f"Fallback loader also failed for {source}: {fallback_error}")
+                        raise
         
         return loaders
     

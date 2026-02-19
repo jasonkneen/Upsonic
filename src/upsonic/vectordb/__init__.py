@@ -20,6 +20,7 @@ if TYPE_CHECKING:
         MilvusConfig,
         WeaviateConfig,
         PgVectorConfig,
+        SuperMemoryConfig,
         create_config,
     )
 
@@ -31,6 +32,7 @@ if TYPE_CHECKING:
     from .providers.milvus import MilvusProvider
     from .providers.weaviate import WeaviateProvider
     from .providers.pgvector import PgVectorProvider
+    from .providers.supermemory import SuperMemoryProvider
 
 # Provider class mapping for lazy imports
 _PROVIDER_MAP = {
@@ -41,6 +43,7 @@ _PROVIDER_MAP = {
     'MilvusProvider': '.providers.milvus',
     'WeaviateProvider': '.providers.weaviate',
     'PgVectorProvider': '.providers.pgvector',
+    'SuperMemoryProvider': '.providers.supermemory',
 }
 
 # Cache for lazily imported providers and configs
@@ -76,6 +79,7 @@ def _get_config_classes():
         MilvusConfig,
         WeaviateConfig,
         PgVectorConfig,
+        SuperMemoryConfig,
         create_config,
     )
     
@@ -96,6 +100,7 @@ def _get_config_classes():
         'MilvusConfig': MilvusConfig,
         'WeaviateConfig': WeaviateConfig,
         'PgVectorConfig': PgVectorConfig,
+        'SuperMemoryConfig': SuperMemoryConfig,
         'create_config': create_config,
     })
     
@@ -152,6 +157,7 @@ __all__ = [
     'MilvusProvider',
     'WeaviateProvider',
     'PgVectorProvider',
+    'SuperMemoryProvider',
     
     # Config classes
     'BaseVectorDBConfig',
@@ -170,6 +176,7 @@ __all__ = [
     'MilvusConfig',
     'WeaviateConfig',
     'PgVectorConfig',
+    'SuperMemoryConfig',
     'create_config',
 ]
 
