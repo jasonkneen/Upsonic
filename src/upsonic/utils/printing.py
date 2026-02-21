@@ -3,6 +3,7 @@ from decimal import Decimal
 
 if TYPE_CHECKING:
     from upsonic.models import Model
+    from upsonic.agent.agent import Agent
 from rich.console import Console, Group
 from rich.panel import Panel
 from rich.table import Table
@@ -1329,6 +1330,72 @@ def print_price_id_summary(price_id: str, task, print_output: bool = True) -> di
     spacing()
 
     return summary
+
+
+def print_agent_metrics(agent: "Agent", print_output: bool = True) -> Optional[Dict[str, Any]]:
+    """Print accumulated agent-level usage metrics in a formatted panel.
+    
+    Displays the total accumulated metrics across all runs for the given agent,
+    including total requests, tokens, tool calls, cost, and duration.
+    
+    Args:
+        agent: The Agent instance whose accumulated usage to display.
+        print_output: Whether to print the output (default: True).
+        
+    Returns:
+        Dictionary containing the accumulated usage summary, or None if no usage data.
+    """
+    from upsonic.usage import RunUsage
+    
+    usage: Optional[RunUsage] = agent.usage
+    if usage is None:
+        return None
+    
+    summary: Dict[str, Any] = {
+        "requests": usage.requests,
+        "input_tokens": usage.input_tokens,
+        "output_tokens": usage.output_tokens,
+        "tool_calls": usage.tool_calls,
+        "cost": usage.cost,
+        "duration": usage.duration,
+    }
+    
+    if not print_output:
+        return summary
+    
+    agent_name: str = agent.name or agent.agent_id or "Agent"
+    agent_name_display: str = escape_rich_markup(agent_name)
+    
+    table = Table(show_header=False, expand=True, box=None)
+    table.width = 60
+    
+    table.add_row("[bold]Agent:[/bold]", f"[cyan]{agent_name_display}[/cyan]")
+    table.add_row("")
+    table.add_row("[bold]Total Requests/Tasks:[/bold]", f"[cyan]{usage.requests:,}[/cyan]")
+    table.add_row("[bold]Total Input Tokens:[/bold]", f"[cyan]{usage.input_tokens:,}[/cyan]")
+    table.add_row("[bold]Total Output Tokens:[/bold]", f"[cyan]{usage.output_tokens:,}[/cyan]")
+    table.add_row("[bold]Total Tool Calls:[/bold]", f"[cyan]{usage.tool_calls:,}[/cyan]")
+    
+    if usage.cost is not None:
+        table.add_row("[bold]Total Estimated Cost:[/bold]", f"[cyan]${usage.cost:.4f}[/cyan]")
+    
+    if usage.duration is not None:
+        time_str: str = f"{usage.duration:.2f} seconds"
+        table.add_row("[bold]Total Duration:[/bold]", f"[cyan]{time_str}[/cyan]")
+    
+    panel = Panel(
+        table,
+        title="[bold cyan]Agent Metrics[/bold cyan]",
+        border_style="cyan",
+        expand=True,
+        width=70
+    )
+    
+    console.print(panel)
+    spacing()
+    
+    return summary
+
 
 def agent_retry(retry_count: int, max_retries: int):
     table = Table(show_header=False, expand=True, box=None)

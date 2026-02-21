@@ -536,11 +536,13 @@ class ToolSetupStep(Step):
             if hasattr(agent, '_planning_toolkit') and agent._planning_toolkit:
                 agent._planning_toolkit.set_current_task(task)
             
-            tool_names = []
-            has_mcp = False
+            tool_names: list = []
+            has_mcp: bool = False
             
-            if hasattr(agent, '_tool_manager') and agent._tool_manager:
-                tool_defs = agent._tool_manager.get_tool_definitions()
+            if hasattr(agent, 'tool_manager') and agent.tool_manager:
+                tool_defs = list(agent.tool_manager.get_tool_definitions())
+                if task and task.tool_manager is not None:
+                    tool_defs.extend(task.tool_manager.get_tool_definitions())
                 tool_names = [t.name for t in tool_defs]
                 
                 if agent.debug and agent.debug_level >= 2:
@@ -2746,14 +2748,20 @@ class StreamModelExecutionStep(Step):
                     yield event
                 return
             
-            # Check for stop execution flag
             should_stop = False
+            from upsonic.output import DEFAULT_OUTPUT_TOOL_NAME
             for tool_result in tool_results:
                 if hasattr(tool_result, 'content') and isinstance(tool_result.content, dict):
+                    if (
+                        getattr(tool_result, "tool_name", None) == DEFAULT_OUTPUT_TOOL_NAME
+                        and "result" in tool_result.content
+                    ):
+                        should_stop = True
+                        break
                     if tool_result.content.get('_stop_execution'):
                         should_stop = True
                         tool_result.content.pop('_stop_execution', None)
-            
+
             if should_stop:
                 # Create stop response
                 final_text = ""

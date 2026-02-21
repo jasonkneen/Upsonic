@@ -488,6 +488,48 @@ class PgVectorConfig(BaseVectorDBConfig):
 
 
 
+class SuperMemoryConfig(BaseVectorDBConfig):
+    """
+    Configuration for SuperMemory provider.
+    
+    SuperMemory is a managed memory API that handles its own embedding, chunking,
+    and indexing internally. This provider adapts its API to the BaseVectorDBProvider
+    interface, using text-based ingestion and search rather than raw vectors.
+    
+    The ``collection_name`` is used as the default ``container_tag`` for grouping
+    memories unless an explicit ``container_tag`` is provided.
+    """
+    api_key: Optional[pydantic.SecretStr] = None
+    container_tag: Optional[str] = None
+    search_mode: Literal['hybrid', 'memories', 'documents'] = 'hybrid'
+    threshold: float = 0.5
+    rerank: bool = False
+    max_retries: int = 2
+    timeout: float = 60.0
+    batch_delay: float = 0.1
+    batch_size: int = 50
+
+    vector_size: int = 0
+    dense_search_enabled: bool = False
+    full_text_search_enabled: bool = True
+    hybrid_search_enabled: bool = True
+
+    @pydantic.field_validator('threshold')
+    @classmethod
+    def validate_threshold(cls, v: float) -> float:
+        if not (0.0 <= v <= 1.0):
+            raise ValueError("threshold must be between 0.0 and 1.0")
+        return v
+
+    def model_post_init(self, __context: Any) -> None:
+        if self.container_tag is None:
+            object.__setattr__(self, 'container_tag', self.collection_name)
+
+    @classmethod
+    def from_dict(cls, config_dict: Dict[str, Any]) -> 'SuperMemoryConfig':
+        return cls(**config_dict)
+
+
 Config = Union[
     ChromaConfig,
     FaissConfig,
@@ -495,7 +537,8 @@ Config = Union[
     PineconeConfig,
     MilvusConfig,
     WeaviateConfig,
-    PgVectorConfig
+    PgVectorConfig,
+    SuperMemoryConfig,
 ]
 
 
@@ -519,6 +562,7 @@ def create_config(provider: str, **kwargs) -> Config:
         'milvus': MilvusConfig,
         'weaviate': WeaviateConfig,
         'pgvector': PgVectorConfig,
+        'supermemory': SuperMemoryConfig,
     }
     
     config_class = provider_map.get(provider.lower())

@@ -47,8 +47,8 @@ class KnowledgeBase(ToolKit):
     def __init__(
         self,
         sources: Union[str, Path, List[Union[str, Path]]],
-        embedding_provider: EmbeddingProvider,
         vectordb: BaseVectorDBProvider,
+        embedding_provider: Optional[EmbeddingProvider] = None,
         splitters: Optional[Union[BaseChunker, List[BaseChunker]]] = None,
         loaders: Optional[Union[BaseLoader, List[BaseLoader]]] = None,
         name: Optional[str] = None,
@@ -75,8 +75,9 @@ class KnowledgeBase(ToolKit):
         Args:
             sources: Source identifiers (file paths, directory paths, or direct content strings).
                     Can be a single source or a list of sources.
-            embedding_provider: An instance of EmbeddingProvider for converting text to vectors.
             vectordb: An instance of BaseVectorDBProvider for vector storage and retrieval.
+            embedding_provider: An instance of EmbeddingProvider for converting text to vectors.
+                    Optional for providers that handle their own embeddings (e.g. SuperMemory).
             splitters: Optional text chunking strategy. If None, intelligent auto-detection is used.
                       Can be a single BaseChunker or a list matching source count.
             loaders: Optional document loaders for various file types. If None, auto-detected.
@@ -96,8 +97,8 @@ class KnowledgeBase(ToolKit):
             ```python
             kb = KnowledgeBase(
                 sources=["docs/", "README.md"],
-                embedding_provider=OpenAIEmbedding(),
                 vectordb=ChromaProvider(config=chroma_config),
+                embedding_provider=OpenAIEmbedding(),
                 use_case="rag_retrieval"
             )
             await kb.setup_async()  # Process and index documents
@@ -115,7 +116,7 @@ class KnowledgeBase(ToolKit):
 
         # Core components
         self.sources: List[Union[str, Path]] = self._resolve_sources(sources)
-        self.embedding_provider: EmbeddingProvider = embedding_provider
+        self.embedding_provider: Optional[EmbeddingProvider] = embedding_provider
         self.vectordb: BaseVectorDBProvider = vectordb
         
         # Setup loaders with intelligent auto-detection
@@ -657,7 +658,7 @@ class KnowledgeBase(ToolKit):
             "sources": sorted(sources_serializable),
             "loaders": [loader.__class__.__name__ for loader in self.loaders] if self.loaders else [],
             "splitters": [splitter.__class__.__name__ for splitter in self.splitters],
-            "embedding_provider": self.embedding_provider.__class__.__name__,
+            "embedding_provider": self.embedding_provider.__class__.__name__ if self.embedding_provider else "none",
         }
         
         config_string = json.dumps(config_representation, sort_keys=True)
@@ -959,12 +960,25 @@ class KnowledgeBase(ToolKit):
         """
         Generate embeddings for all chunks.
         
+        When no embedding_provider is configured (e.g. SuperMemory which embeds
+        internally), returns placeholder zero-vectors so the vectordb upsert
+        interface contract is satisfied.
+        
         Args:
             chunks: List of chunks to embed
             
         Returns:
             List of embedding vectors
         """
+        if self.embedding_provider is None:
+            vector_size: int = getattr(self.vectordb._config, "vector_size", 0) or 1
+            info_log(
+                f"[Step 3/4] No embedding provider — generating {len(chunks)} placeholder vectors "
+                f"(vectordb handles embeddings internally)",
+                context="KnowledgeBase",
+            )
+            return [[0.0] * vector_size for _ in chunks]
+
         info_log(f"[Step 3/4] Generating embeddings for {len(chunks)} chunks...", context="KnowledgeBase")
         
         try:
@@ -1099,8 +1113,12 @@ class KnowledgeBase(ToolKit):
         info_log(f"Querying '{self.name}': '{query[:100]}...'", context="KnowledgeBase")
         
         try:
-            # Generate query embedding
-            query_vector = await self.embedding_provider.embed_query(query)
+            # Generate query embedding (skip for providers that embed internally)
+            if self.embedding_provider is not None:
+                query_vector: List[float] = await self.embedding_provider.embed_query(query)
+            else:
+                vector_size: int = getattr(self.vectordb._config, "vector_size", 0) or 1
+                query_vector = [0.0] * vector_size
 
             # Perform search based on type
             search_results = await self._perform_search(
@@ -1605,8 +1623,8 @@ class KnowledgeBase(ToolKit):
                 "indexed_processing": len(self.splitters) > 1
             },
             "embedding_provider": {
-                "class": self.embedding_provider.__class__.__name__,
-                "provider": getattr(self.embedding_provider, 'provider', 'unknown')
+                "class": self.embedding_provider.__class__.__name__ if self.embedding_provider else "none",
+                "provider": getattr(self.embedding_provider, 'provider', 'unknown') if self.embedding_provider else "none"
             },
             "vectordb": vectordb_config,
             "processing_stats": self._processing_stats
@@ -1633,8 +1651,15 @@ class KnowledgeBase(ToolKit):
         }
         
         try:
-            # Check embedding provider
-            health_status["components"]["embedding_provider"] = await self._check_embedding_provider_health()
+            # Check embedding provider (skip if not configured)
+            if self.embedding_provider is not None:
+                health_status["components"]["embedding_provider"] = await self._check_embedding_provider_health()
+            else:
+                health_status["components"]["embedding_provider"] = {
+                    "healthy": True,
+                    "provider": "none",
+                    "note": "Vectordb handles embeddings internally"
+                }
             
             # Check splitters
             health_status["components"]["splitters"] = self._check_splitters_health()
@@ -1804,8 +1829,8 @@ class KnowledgeBase(ToolKit):
         debug_log(f"Closing KnowledgeBase '{self.name}'...", context="KnowledgeBase")
         
         try:
-            # Close embedding provider
-            if hasattr(self.embedding_provider, 'close'):
+            # Close embedding provider (if configured)
+            if self.embedding_provider is not None and hasattr(self.embedding_provider, 'close'):
                 try:
                     if asyncio.iscoroutinefunction(self.embedding_provider.close):
                         await self.embedding_provider.close()

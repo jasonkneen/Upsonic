@@ -338,7 +338,7 @@ class AnthropicModel(Model):
                 extra_headers['anthropic-beta'] = ','.join(beta_features)
 
             return await self.client.beta.messages.create(
-                max_tokens=model_settings.get('max_tokens', 4096),
+                max_tokens=model_settings.get('max_tokens', 16384),
                 system=system_prompt or OMIT,
                 messages=anthropic_messages,
                 model=self._model_name,

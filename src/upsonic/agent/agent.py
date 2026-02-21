@@ -40,8 +40,22 @@ def _get_bg_loop() -> asyncio.AbstractEventLoop:
 
 
 def _run_in_bg_loop(coro):
-    """Submit *coro* to the persistent background loop and block until done."""
+    """Submit *coro* to the persistent background loop and block until done.
+    
+    If already running on the background loop thread, runs the coroutine
+    directly via a nested event loop to avoid deadlock.
+    """
     loop = _get_bg_loop()
+    try:
+        running_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        running_loop = None
+    
+    if running_loop is loop:
+        import nest_asyncio as _nest_asyncio
+        _nest_asyncio.apply(loop)
+        return loop.run_until_complete(coro)
+    
     future = asyncio.run_coroutine_threadsafe(coro, loop)
     return future.result()
 from upsonic.agent.base import BaseAgent
@@ -66,7 +80,7 @@ if TYPE_CHECKING:
     from upsonic.profiles import ModelProfile
     from upsonic.reflection import ReflectionConfig
     from upsonic.safety_engine.base import Policy
-    from upsonic.tools import ToolDefinition
+    from upsonic.tools import ToolDefinition, ToolManager
     from upsonic.usage import RequestUsage, RunUsage
     from upsonic.agent.context_managers import (
         MemoryManager
@@ -471,6 +485,9 @@ class Agent(BaseAgent):
         # Kept for backwards compatibility
         self._tool_call_count = 0
         self._tool_limit_reached = False
+        
+        # Agent-level accumulated usage across all runs
+        self.usage: Optional["RunUsage"] = None
         
         # Run cancellation tracking
         self.run_id: Optional[str] = None
@@ -1071,16 +1088,18 @@ class Agent(BaseAgent):
     def _validate_tools_with_policy_pre(
         self, 
         context_description: str = "Tool Validation",
+        task: Optional["Task"] = None,
         registered_tools_dicts: Optional[List[Dict[str, Any]]] = None
     ) -> None:
         """
         Validate all currently registered tools with tool_policy_pre before use.
         
-        This is a centralized method for tool safety validation that can be called
-        from different registration points (_register_agent_tools, add_tools, _setup_task_tools).
+        Combines tool definitions from both the agent's ToolManager and the task's
+        ToolManager (if provided) for comprehensive validation.
         
         Args:
             context_description: Description of where this validation is being called from
+            task: Optional task whose ToolManager should also be validated
             registered_tools_dicts: List of registered tools dictionaries to check when removing tools.
                                    If None, defaults to [self.registered_agent_tools]
             
@@ -1090,15 +1109,15 @@ class Agent(BaseAgent):
         if not hasattr(self, 'tool_policy_pre_manager') or not self.tool_policy_pre_manager.has_policies():
             return
         
-        # Default to agent tools if not specified
         if registered_tools_dicts is None:
             registered_tools_dicts = [self.registered_agent_tools]
         
         import asyncio
-        tool_definitions = self.tool_manager.get_tool_definitions()
+        tool_definitions = list(self.tool_manager.get_tool_definitions())
+        if task is not None and task.tool_manager is not None:
+            tool_definitions.extend(task.tool_manager.get_tool_definitions())
         
         for tool_def in tool_definitions:
-            # Skip built-in orchestration tools
             if tool_def.name == 'plan_and_execute':
                 continue
                 
@@ -1109,7 +1128,6 @@ class Agent(BaseAgent):
                 "metadata": tool_def.metadata or {}
             }
             
-            # Execute validation synchronously via persistent background loop
             validation_result = _run_in_bg_loop(
                 self.tool_policy_pre_manager.execute_tool_validation_async(
                     tool_info=tool_info,
@@ -1118,13 +1136,9 @@ class Agent(BaseAgent):
             )
             
             if validation_result.should_block():
-                # Handle blocking based on action type
-                # If DisallowedOperation was raised by a RAISE action policy, re-raise it
                 if validation_result.disallowed_exception:
                     raise validation_result.disallowed_exception
                 
-                # Otherwise it's a BLOCK action - skip this tool without raising exception
-                # Remove the tool from the tool manager to prevent its use
                 if self.debug:
                     from upsonic.utils.printing import warning_log
                     warning_log(
@@ -1132,16 +1146,15 @@ class Agent(BaseAgent):
                         "Tool Safety"
                     )
                 
-                # Find which registered_tools dict contains this tool and remove it
-                # Try each dict in the provided list
                 for registered_tools_dict in registered_tools_dicts:
-                    self.tool_manager.remove_tools(
-                        tools=[tool_def.name],
-                        registered_tools=registered_tools_dict
-                    )
-                    
-                    # Also remove from the tracking dict to keep it clean
                     if tool_def.name in registered_tools_dict:
+                        target_manager = self.tool_manager
+                        if task is not None and task.tool_manager is not None and tool_def.name in (task.tool_manager.wrapped_tools or {}):
+                            target_manager = task.tool_manager
+                        target_manager.remove_tools(
+                            tools=[tool_def.name],
+                            registered_tools=registered_tools_dict
+                        )
                         del registered_tools_dict[tool_def.name]
     
     def _register_agent_tools(self) -> None:
@@ -1349,41 +1362,38 @@ class Agent(BaseAgent):
         return self.tool_manager.get_tool_definitions()
     
     def _setup_task_tools(self, task: "Task") -> None:
-        """Setup tools with ToolManager for the current task (task tools only)."""
+        """Setup tools with a dedicated ToolManager on the task (task tools only)."""
         self._tool_limit_reached = False
         
-        # Always initialize tool metrics (needed for both agent and task tools)
         from upsonic.tools import ToolMetrics
         self._tool_metrics = ToolMetrics(
             tool_call_count=self._tool_call_count,
             tool_call_limit=self.tool_call_limit
         )
         
-        # Only process task-level tools (agent tools already registered in __init__)
-        task_tools = task.tools if task.tools else []
+        task_tools: list = task.tools if task.tools else []
         
-        # Determine thinking/reasoning settings (Task overrides Agent)
-        is_thinking_enabled = self.enable_thinking_tool
+        is_thinking_enabled: bool = self.enable_thinking_tool
         if task.enable_thinking_tool is not None:
             is_thinking_enabled = task.enable_thinking_tool
         
-        is_reasoning_enabled = self.enable_reasoning_tool
+        is_reasoning_enabled: bool = self.enable_reasoning_tool
         if task.enable_reasoning_tool is not None:
             is_reasoning_enabled = task.enable_reasoning_tool
 
         if is_reasoning_enabled and not is_thinking_enabled:
             raise ValueError("Configuration error: 'enable_reasoning_tool' cannot be True if 'enable_thinking_tool' is False.")
 
-        # If thinking is enabled at task level, add plan_and_execute to task tools
-        # (unless it's already explicitly added as a regular tool)
         from upsonic.tools.orchestration import plan_and_execute
         
-        tools_to_register = list(task_tools) if task_tools else []
+        tools_to_register: list = list(task_tools) if task_tools else []
         
         if is_thinking_enabled and plan_and_execute not in tools_to_register:
             tools_to_register.append(plan_and_execute)
         
-        # If no tools to register, return early
+        from upsonic.tools import ToolManager
+        task_tool_manager: ToolManager = task._ensure_tool_manager()
+        
         if not tools_to_register:
             return
 
@@ -1391,10 +1401,9 @@ class Agent(BaseAgent):
         agent_for_this_run.enable_thinking_tool = is_thinking_enabled
         agent_for_this_run.enable_reasoning_tool = is_reasoning_enabled
 
-        # Separate builtin tools from regular tools
         from upsonic.tools.builtin_tools import AbstractBuiltinTool
-        builtin_tools = []
-        regular_tools = []
+        builtin_tools: list = []
+        regular_tools: list = []
         
         for tool in tools_to_register:
             if tool is not None and isinstance(tool, AbstractBuiltinTool):
@@ -1402,12 +1411,10 @@ class Agent(BaseAgent):
             else:
                 regular_tools.append(tool)
         
-        # Handle builtin tools separately - they don't need ToolManager/ToolProcessor
         task.task_builtin_tools = builtin_tools
         
-        # Register only regular task tools and store them in task.registered_task_tools
         if regular_tools:
-            newly_registered = self.tool_manager.register_tools(
+            newly_registered = task_tool_manager.register_tools(
                 tools=regular_tools,
                 task=task,
                 agent_instance=agent_for_this_run
@@ -1415,16 +1422,44 @@ class Agent(BaseAgent):
         else:
             newly_registered = {}
         
-        # Update task's registered_task_tools with newly registered tools
         task.registered_task_tools.update(newly_registered)
         
-        # PRE-EXECUTION TOOL VALIDATION
-        # Validate all registered tools (agent + task) with tool_policy_pre before execution
         self._validate_tools_with_policy_pre(
             context_description="Task Tool Setup",
+            task=task,
             registered_tools_dicts=[self.registered_agent_tools, task.registered_task_tools]
         )
     
+    def _get_combined_tool_definitions(self) -> List["ToolDefinition"]:
+        """Combine tool definitions from the agent's ToolManager and the current task's ToolManager."""
+        tool_definitions: list = list(self.tool_manager.get_tool_definitions())
+        current_task = getattr(self, 'current_task', None)
+        if current_task is not None and current_task.tool_manager is not None:
+            tool_definitions.extend(current_task.tool_manager.get_tool_definitions())
+        return tool_definitions
+
+    def _resolve_tool_manager(self, tool_name: str) -> "ToolManager":
+        """Determine which ToolManager owns the given tool by name.
+        
+        Checks the agent's ToolManager first, then the current task's ToolManager.
+        
+        Args:
+            tool_name: Name of the tool to look up
+            
+        Returns:
+            The ToolManager that owns the tool
+            
+        Raises:
+            ValueError: If the tool is not found in any manager
+        """
+        if tool_name in self.tool_manager.wrapped_tools:
+            return self.tool_manager
+        current_task = getattr(self, 'current_task', None)
+        if current_task is not None and current_task.tool_manager is not None:
+            if tool_name in current_task.tool_manager.wrapped_tools:
+                return current_task.tool_manager
+        raise ValueError(f"Tool '{tool_name}' not found in any ToolManager")
+
     async def _build_model_request(
         self, 
         task: "Task", 
@@ -1559,7 +1594,9 @@ class Agent(BaseAgent):
             tool_definitions = []
             self._tool_limit_reached = True
         else:
-            tool_definitions = self.tool_manager.get_tool_definitions()
+            tool_definitions = list(self.tool_manager.get_tool_definitions())
+            if task is not None and task.tool_manager is not None:
+                tool_definitions.extend(task.tool_manager.get_tool_definitions())
         
         # Combine agent-level and task-level builtin tools
         agent_builtin_tools = getattr(self, 'agent_builtin_tools', [])
@@ -1626,6 +1663,33 @@ class Agent(BaseAgent):
             strict=True
         )]
     
+    def _handle_output_tool_call(
+        self,
+        tool_call: "ToolCallPart",
+        response_format: type | None,
+        use_output_tool: bool,
+    ) -> "ToolReturnPart | None":
+        """Handle the structured-output tool (final_result) if applicable. Returns ToolReturnPart or None."""
+        from upsonic.messages import ToolReturnPart
+        
+        if not use_output_tool or response_format is None or tool_call.tool_name != DEFAULT_OUTPUT_TOOL_NAME:
+            return None
+        try:
+            validated = response_format.model_validate(tool_call.args_as_dict())
+        except Exception as e:
+            return ToolReturnPart(
+                tool_name=tool_call.tool_name,
+                content=f"Validation error: {str(e)}",
+                tool_call_id=tool_call.tool_call_id,
+                timestamp=now_utc(),
+            )
+        return ToolReturnPart(
+            tool_name=tool_call.tool_name,
+            content={"result": validated.model_dump()},
+            tool_call_id=tool_call.tool_call_id,
+            timestamp=now_utc(),
+        )
+    
     async def _execute_tool_calls(self, tool_calls: List["ToolCallPart"]) -> List["ToolReturnPart"]:
         """
         Execute tool calls and return results.
@@ -1654,7 +1718,20 @@ class Agent(BaseAgent):
             self._tool_limit_reached = True
             return error_results
         
-        tool_defs = {td.name: td for td in self.tool_manager.get_tool_definitions()}
+        current_task = getattr(self, "current_task", None)
+        response_format = getattr(current_task, "response_format", None) if current_task else None
+        try:
+            from pydantic import BaseModel
+            use_output_tool = (
+                isinstance(response_format, type)
+                and issubclass(response_format, BaseModel)
+                and response_format is not str
+                and response_format != str
+            )
+        except TypeError:
+            use_output_tool = False
+        
+        tool_defs = {td.name: td for td in self._get_combined_tool_definitions()}
         
         sequential_calls = []
         parallel_calls = []
@@ -1669,6 +1746,10 @@ class Agent(BaseAgent):
         results = []
         
         for tool_call in sequential_calls:
+            output_part = self._handle_output_tool_call(tool_call, response_format, use_output_tool)
+            if output_part is not None:
+                results.append(output_part)
+                continue
             # POST-EXECUTION TOOL CALL VALIDATION
             if hasattr(self, 'tool_policy_post_manager') and self.tool_policy_post_manager.has_policies():
                 tool_def = tool_defs.get(tool_call.tool_name)
@@ -1709,7 +1790,8 @@ class Agent(BaseAgent):
             try:
                 import time
                 tool_start_time = time.time()
-                result = await self.tool_manager.execute_tool(
+                target_manager = self._resolve_tool_manager(tool_call.tool_name)
+                result = await target_manager.execute_tool(
                     tool_name=tool_call.tool_name,
                     args=tool_call.args_as_dict(),
                     metrics=self._tool_metrics,
@@ -1729,7 +1811,6 @@ class Agent(BaseAgent):
                 )
                 results.append(tool_return)
                 
-                # Track tool execution in AgentRunOutput
                 if hasattr(self, '_agent_run_output') and self._agent_run_output:
                     from upsonic.run.tools.tools import ToolExecution
                     tool_exec = ToolExecution(
@@ -1742,7 +1823,6 @@ class Agent(BaseAgent):
                         self._agent_run_output.tools = []
                     self._agent_run_output.tools.append(tool_exec)
                 
-                # Drain accumulated usage from AgentTool sub-agent executions (sequential path)
                 if hasattr(self, '_agent_run_output') and self._agent_run_output:
                     self._drain_agent_tool_usage(tool_call.tool_name)
                 
@@ -1798,6 +1878,9 @@ class Agent(BaseAgent):
         if parallel_calls:
             async def execute_single_tool(tool_call: "ToolCallPart") -> "ToolReturnPart":
                 """Execute a single tool call and return the result."""
+                output_part = self._handle_output_tool_call(tool_call, response_format, use_output_tool)
+                if output_part is not None:
+                    return output_part
                 # POST-EXECUTION TOOL CALL VALIDATION (for parallel execution)
                 if hasattr(self, 'tool_policy_post_manager') and self.tool_policy_post_manager.has_policies():
                     tool_def = tool_defs.get(tool_call.tool_name)
@@ -1835,14 +1918,14 @@ class Agent(BaseAgent):
                         )
                 
                 try:
-                    result = await self.tool_manager.execute_tool(
+                    target_manager = self._resolve_tool_manager(tool_call.tool_name)
+                    result = await target_manager.execute_tool(
                         tool_name=tool_call.tool_name,
                         args=tool_call.args_as_dict(),
                         metrics=self._tool_metrics,
                         tool_call_id=tool_call.tool_call_id
                     )
                     
-                    # Track tool execution in AgentRunOutput (parallel)
                     if hasattr(self, '_agent_run_output') and self._agent_run_output:
                         from upsonic.run.tools.tools import ToolExecution
                         tool_exec = ToolExecution(
@@ -1855,7 +1938,6 @@ class Agent(BaseAgent):
                             self._agent_run_output.tools = []
                         self._agent_run_output.tools.append(tool_exec)
                     
-                    # Drain accumulated usage from AgentTool sub-agent executions (parallel path)
                     if hasattr(self, '_agent_run_output') and self._agent_run_output:
                         self._drain_agent_tool_usage(tool_call.tool_name)
                     
@@ -1982,6 +2064,61 @@ class Agent(BaseAgent):
         if tool_calls and not regular_tool_calls:
             return response
         
+        # Handle max_tokens truncation: when finish_reason is 'length', tool call
+        # arguments may be incomplete/truncated. Instead of executing broken calls,
+        # inform the model and let it retry with smaller output.
+        if response.finish_reason == 'length' and regular_tool_calls:
+            from upsonic.messages import ToolReturnPart
+            truncation_results: List[ToolReturnPart] = []
+            for tc in regular_tool_calls:
+                truncation_results.append(
+                    ToolReturnPart(
+                        tool_name=tc.tool_name,
+                        content=(
+                            "[ERROR] Your response was truncated (hit max_tokens limit) so this tool call "
+                            "could not be executed — its arguments are likely incomplete. "
+                            "Please retry with shorter content, or split the operation into smaller steps."
+                        ),
+                        tool_call_id=tc.tool_call_id,
+                    )
+                )
+            
+            truncation_request = ModelRequest(parts=truncation_results)
+            messages.append(response)
+            messages.append(truncation_request)
+            
+            # Apply context management middleware before retry
+            if self.context_management and self._context_management_middleware:
+                managed_msgs, ctx_full = await self._context_management_middleware.apply(messages)
+                messages.clear()
+                messages.extend(managed_msgs)
+                self._propagate_context_management_usage()
+                if ctx_full:
+                    return self._context_management_middleware._build_context_full_response(
+                        model_name=self.model.model_name
+                    )
+            
+            model_params = self._build_model_request_parameters(getattr(self, 'current_task', None))
+            model_params = self.model.customize_request_parameters(model_params)
+            
+            retry_response: "ModelResponse" = await self.model.request(
+                messages=messages,
+                model_settings=self.model.settings,
+                model_request_parameters=model_params
+            )
+            
+            if hasattr(self, '_agent_run_output') and self._agent_run_output:
+                if hasattr(retry_response, 'usage') and retry_response.usage:
+                    self._agent_run_output.update_usage_from_response(retry_response.usage)
+                    try:
+                        from upsonic.utils.usage import calculate_cost_from_usage
+                        cost_value: float = calculate_cost_from_usage(retry_response.usage, self.model)
+                        self._agent_run_output.set_usage_cost(cost_value)
+                    except Exception:
+                        pass
+            
+            return await self._handle_model_response(retry_response, messages)
+        
         if regular_tool_calls:
             tool_results = await self._execute_tool_calls(regular_tool_calls)
             
@@ -2033,10 +2170,16 @@ class Agent(BaseAgent):
             should_stop = False
             for tool_result in tool_results:
                 if hasattr(tool_result, 'content') and isinstance(tool_result.content, dict):
+                    if (
+                        getattr(tool_result, "tool_name", None) == DEFAULT_OUTPUT_TOOL_NAME
+                        and "result" in tool_result.content
+                    ):
+                        should_stop = True
+                        break
                     if tool_result.content.get('_stop_execution'):
                         should_stop = True
                         tool_result.content.pop('_stop_execution', None)
-            
+
             tool_request = ModelRequest(parts=tool_results)
             messages.append(response)
             messages.append(tool_request)
@@ -2126,8 +2269,11 @@ class Agent(BaseAgent):
         """
         from upsonic.tools.wrappers import AgentTool
         
-        # Look up the tool in the processor's registered tools
         registered_tool = self.tool_manager.processor.registered_tools.get(tool_name)
+        if registered_tool is None:
+            current_task = getattr(self, 'current_task', None)
+            if current_task is not None and current_task.tool_manager is not None:
+                registered_tool = current_task.tool_manager.processor.registered_tools.get(tool_name)
         if registered_tool and isinstance(registered_tool, AgentTool):
             agent_tool_usage = registered_tool.drain_accumulated_usage()
             if agent_tool_usage is not None:
@@ -2971,6 +3117,7 @@ class Agent(BaseAgent):
                     return self._agent_run_output
                 return self._agent_run_output.output
         finally:
+            self._finalize_agent_usage(resolved_print_flag)
             self.run_id = None
     
     async def _run_call_management_step(self, task: "Task", debug: bool = False) -> None:
@@ -2989,6 +3136,41 @@ class Agent(BaseAgent):
             )
         except Exception:
             pass  # Best-effort — don't let tracking errors mask the result
+
+    def _accumulate_run_usage(self, run_usage: Optional["RunUsage"]) -> None:
+        """Accumulate a run's usage metrics into the agent-level usage.
+        
+        Args:
+            run_usage: The RunUsage from a completed run. If None, no-op.
+        """
+        if run_usage is None:
+            return
+        
+        from upsonic.usage import RunUsage as RunUsageClass
+        
+        if self.usage is None:
+            self.usage = RunUsageClass()
+        
+        self.usage.incr(run_usage)
+
+    def _finalize_agent_usage(self, print_flag: bool) -> None:
+        """Accumulate current run usage into agent-level usage and optionally print agent metrics.
+        
+        Should be called at the end of every do_async / astream execution.
+        
+        Args:
+            print_flag: Whether printing is enabled for this execution.
+        """
+        output = getattr(self, '_agent_run_output', None)
+        if output is None:
+            return
+        
+        self._accumulate_run_usage(output.usage)
+        
+        task = output.task
+        if print_flag and task and not getattr(task, 'not_main_task', False):
+            from upsonic.utils.printing import print_agent_metrics
+            print_agent_metrics(self, print_output=print_flag)
 
     def _extract_output(self, task: "Task", response: "ModelResponse") -> Any:
         """Extract the output from a model response."""
@@ -3409,6 +3591,8 @@ class Agent(BaseAgent):
             
             
         finally:
+            stream_print_flag = self._resolve_print_flag(False)
+            self._finalize_agent_usage(stream_print_flag)
             cleanup_run(run_id)
             self.run_id = None
     

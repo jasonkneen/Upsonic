@@ -9,6 +9,8 @@ from upsonic.run.base import RunStatus
 
 if TYPE_CHECKING:
     from upsonic.agent.deepagent.tools.planning_toolkit import TodoList
+    from upsonic.tools import ToolManager
+    from upsonic.tools.base import ToolDefinition
 
 
 CacheMethod = Literal["vector_search", "llm_call"]
@@ -61,6 +63,7 @@ class Task(BaseModel):
     
     registered_task_tools: Dict[str, Any] = {}
     task_builtin_tools: List[Any] = []
+    _tool_manager: Optional[Any] = None
         
     vector_search_top_k: Optional[int] = None
     vector_search_alpha: Optional[float] = None
@@ -426,6 +429,32 @@ class Task(BaseModel):
 
                         control_result = tool.__control__()
 
+    @property
+    def tool_manager(self) -> Optional["ToolManager"]:
+        return self._tool_manager
+
+    @tool_manager.setter
+    def tool_manager(self, value: Optional["ToolManager"]) -> None:
+        self._tool_manager = value
+
+    def _ensure_tool_manager(self) -> "ToolManager":
+        if self._tool_manager is None:
+            from upsonic.tools import ToolManager as _ToolManager
+            self._tool_manager = _ToolManager()
+        return self._tool_manager
+
+    def get_tool_defs(self) -> List["ToolDefinition"]:
+        """
+        Get the tool definitions for all currently registered task-level tools.
+        
+        Returns:
+            List[ToolDefinition]: List of tool definitions from the Task's ToolManager.
+                                  Returns empty list if no ToolManager is initialized.
+        """
+        if self._tool_manager is None:
+            return []
+        return self._tool_manager.get_tool_definitions()
+
     def add_tools(self, tools: Union[Any, List[Any]]) -> None:
         """
         Add tools to the task's tool list.
@@ -451,13 +480,12 @@ class Task(BaseModel):
             if tool not in self.tools:
                 self.tools.append(tool)
     
-    def remove_tools(self, tools: Union[str, List[str], Any, List[Any]], agent: Any) -> None:
+    def remove_tools(self, tools: Union[str, List[str], Any, List[Any]], agent: Optional[Any] = None) -> None:
         """
         Remove tools from the task.
         
-        This method requires an agent instance because task tools are registered
-        at runtime (not in __init__), so we need access to the agent's ToolManager
-        to properly remove tools from all relevant data structures.
+        Uses the task's own ToolManager to remove tools from all relevant
+        data structures.
         
         Supports removing:
         - Tool names (strings)
@@ -469,15 +497,14 @@ class Task(BaseModel):
         
         Args:
             tools: Single tool or list of tools to remove (any type)
-            agent: Agent instance for accessing ToolManager
+            agent: Deprecated. No longer needed since Task owns its own ToolManager.
         """
         if not isinstance(tools, list):
             tools = [tools]
         
-        # Separate builtin tools from regular tools
         from upsonic.tools.builtin_tools import AbstractBuiltinTool
-        builtin_tools_to_remove = []
-        regular_tools_to_remove = []
+        builtin_tools_to_remove: List[Any] = []
+        regular_tools_to_remove: List[Any] = []
         
         for tool in tools:
             if tool is not None and isinstance(tool, AbstractBuiltinTool):
@@ -485,35 +512,27 @@ class Task(BaseModel):
             else:
                 regular_tools_to_remove.append(tool)
         
-        # Handle regular tools through ToolManager
-        removed_tool_names = []
-        removed_objects = []
+        removed_tool_names: List[str] = []
+        removed_objects: List[Any] = []
         
-        if regular_tools_to_remove:
-            # Call ToolManager to handle all removal logic for regular tools
-            # Pass self.registered_task_tools instead of agent.registered_agent_tools
-            removed_tool_names, removed_objects = agent.tool_manager.remove_tools(
+        if regular_tools_to_remove and self._tool_manager is not None:
+            removed_tool_names, removed_objects = self._tool_manager.remove_tools(
                 tools=regular_tools_to_remove,
                 registered_tools=self.registered_task_tools
             )
             
-            # Update self.registered_task_tools - remove the tool names
             for tool_name in removed_tool_names:
                 if tool_name in self.registered_task_tools:
                     del self.registered_task_tools[tool_name]
         
-        # Handle builtin tools separately - they don't use ToolManager/ToolProcessor
         if builtin_tools_to_remove and hasattr(self, 'task_builtin_tools'):
-            # Remove from task_builtin_tools by unique_id
             builtin_ids_to_remove = {tool.unique_id for tool in builtin_tools_to_remove}
             self.task_builtin_tools = [
                 tool for tool in self.task_builtin_tools 
                 if tool.unique_id not in builtin_ids_to_remove
             ]
-            # Add to removed_objects for self.tools cleanup
             removed_objects.extend(builtin_tools_to_remove)
         
-        # Update self.tools - remove all removed objects (regular + builtin)
         if self.tools and removed_objects:
             self.tools = [t for t in self.tools if t not in removed_objects]
 

@@ -392,6 +392,27 @@ class ToolManager:
         
         return newly_registered
     
+    def _validate_required_args(self, tool_name: str, args: Dict[str, Any]) -> Optional[str]:
+        """Validate that all required arguments are present before executing a tool.
+        
+        Returns an error message if validation fails, None if args are valid.
+        """
+        tool = self.processor.registered_tools.get(tool_name)
+        if not tool or not tool.schema:
+            return None
+        
+        json_schema: Dict[str, Any] = tool.schema.json_schema
+        required_params: list[str] = json_schema.get("required", [])
+        
+        missing: list[str] = [p for p in required_params if p not in args]
+        if missing:
+            return (
+                f"Missing required argument(s) for '{tool_name}': {', '.join(missing)}. "
+                f"This usually means the model's response was truncated (max_tokens too low). "
+                f"Please retry with all required parameters: {required_params}"
+            )
+        return None
+
     async def execute_tool(
         self,
         tool_name: str,
@@ -406,6 +427,17 @@ class ToolManager:
         
         if not tool_call_id:
             tool_call_id = f"call_{uuid.uuid4().hex[:8]}"
+        
+        validation_error: Optional[str] = self._validate_required_args(tool_name, args)
+        if validation_error is not None:
+            from upsonic.tools.base import ToolResult
+            return ToolResult(
+                tool_name=tool_name,
+                content=validation_error,
+                tool_call_id=tool_call_id,
+                success=False,
+                error=validation_error,
+            )
         
         try:
             start_time = time.time()
