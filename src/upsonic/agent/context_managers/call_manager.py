@@ -70,10 +70,7 @@ class CallManager:
             
             # Calculate usage and tool usage from context (AgentRunOutput)
             usage = llm_usage(context)
-            if self.show_tool_calls:
-                tool_usage_result = tool_usage(context, self.task)
-            else:
-                tool_usage_result = None
+            tool_usage_result = tool_usage(context, self.task)
             # Call the end logging
             call_end(
                 context.output,

@@ -1,12 +1,13 @@
 """
-Test 14: Test all variants of adding, removing of all type of tools
+Test 14: Test all variants of adding, removing of all type of tools (Agent-level)
 
 Success criteria:
-- Tests all tool types: ToolKit, function tools, pure classes, Agent as tool, 
+- Tests all agent-level tool types: ToolKit, function tools, pure classes, Agent as tool, 
   financial_tools, duckduckgo, tavily, builtin tools
-- Tests using Task and Agent class remove_tools, add_tools
-- Tests runtime registration when running a Task using Agent (agent.do_async(task))
-- Checks agent, task and tool_manager attributes (registered_task_tools, registered_agent_tools, etc.)
+- Tests using Agent class remove_tools, add_tools
+- Checks agent and agent.tool_manager attributes (registered_agent_tools, etc.)
+
+Note: Task-level tool management is tested in test_task_tool_management.py
 """
 
 import pytest
@@ -73,7 +74,7 @@ class TextToolKit(ToolKit):
 @pytest.mark.asyncio
 async def test_agent_add_remove_custom_tools():
     """Test adding and removing custom tools (functions) from Agent."""
-    agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
     
     # Initially no tools
     assert len(agent.registered_agent_tools) == 0, "Agent should start with no tools"
@@ -107,7 +108,7 @@ async def test_agent_add_remove_custom_tools():
 @pytest.mark.asyncio
 async def test_agent_add_remove_toolkit():
     """Test adding and removing ToolKit instances from Agent."""
-    agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
     
     # Add ToolKit
     math_kit = MathToolKit()
@@ -140,7 +141,7 @@ async def test_agent_add_remove_toolkit():
 @pytest.mark.asyncio
 async def test_agent_remove_individual_toolkit_methods():
     """Test removing individual methods from a ToolKit by name (keeping the toolkit instance)."""
-    agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
     
     # Add ToolKit
     math_kit = MathToolKit()
@@ -179,7 +180,7 @@ async def test_agent_remove_individual_class_methods():
     try:
         from upsonic.tools.common_tools.financial_tools import YFinanceTools
         
-        agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
         
         # Create and add financial tools instance (pure class, not ToolKit)
         financial_tools = YFinanceTools(stock_price=True, enable_all=False)
@@ -216,19 +217,29 @@ async def test_agent_remove_individual_class_methods():
 @pytest.mark.asyncio
 async def test_task_remove_individual_toolkit_methods():
     """Test removing individual methods from a ToolKit in a Task by name."""
-    agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
     
     # Create task with ToolKit
     math_kit = MathToolKit()
     task = Task(
-        description="Test task with toolkit",
+        description="Use add_numbers to calculate 1 + 1. Return the number.",
         tools=[math_kit, add_numbers]
     )
     
     # Execute task to trigger registration
     output_buffer = StringIO()
     with redirect_stdout(output_buffer):
-        result = await agent.do_async(task)
+        result = await agent.print_do_async(task)
+    
+    # Verify printed output shows tool calls
+    output_text = output_buffer.getvalue()
+    assert "Tool Calls" in output_text, "Output should contain 'Tool Calls' table"
+    assert "add_numbers" in output_text, "Output should show add_numbers was called"
+    
+    # Verify task.tool_calls attribute
+    assert len(task.tool_calls) > 0, "task.tool_calls should not be empty"
+    called_names = [tc.get("tool_name", "") for tc in task.tool_calls]
+    assert "add_numbers" in called_names, f"add_numbers should be in tool_calls, got: {called_names}"
     
     # Verify tools are registered
     assert "subtract" in task.registered_task_tools, "subtract should be registered"
@@ -258,7 +269,7 @@ async def test_task_remove_individual_toolkit_methods():
 @pytest.mark.asyncio
 async def test_agent_add_remove_builtin_tools():
     """Test adding and removing builtin tools from Agent."""
-    agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
     
     # Initially no tools
     assert len(agent.registered_agent_tools) == 0, "Agent should start with no regular tools"
@@ -309,7 +320,7 @@ async def test_agent_add_remove_builtin_tools():
 @pytest.mark.asyncio
 async def test_task_add_remove_builtin_tools():
     """Test adding and removing builtin tools from Task (without execution)."""
-    agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
     
     # Create task with builtin tools
     # Note: We're testing tool management, not execution, so we don't actually run the task
@@ -336,30 +347,8 @@ async def test_task_add_remove_builtin_tools():
     assert img_gen in task.tools, "ImageGenerationTool should be in task.tools"
     assert len(task.tools) == 3, "Should have 3 tools in task.tools"
     
-    # Manually trigger tool registration (simulating what happens during execution)
-    # Separate builtin tools from regular tools (same logic as in agent.py during execution)
-    from upsonic.tools.builtin_tools import AbstractBuiltinTool
-    tools_to_register = task.tools if task.tools else []
-    builtin_tools = []
-    regular_tools = []
-    
-    for tool in tools_to_register:
-        if tool is not None and isinstance(tool, AbstractBuiltinTool):
-            builtin_tools.append(tool)
-        else:
-            regular_tools.append(tool)
-    
-    # Set task_builtin_tools (same as agent.py line 848)
-    task.task_builtin_tools = builtin_tools
-    
-    # Register only regular tools (in this case there are none)
-    if regular_tools:
-        newly_registered = agent.tool_manager.register_tools(
-            tools=regular_tools,
-            task=task,
-            agent_instance=agent
-        )
-        task.registered_task_tools.update(newly_registered)
+    # Trigger tool registration via _setup_task_tools (creates task.tool_manager)
+    agent._setup_task_tools(task)
     
     # After registration, builtin tools should be in task_builtin_tools
     assert len(task.task_builtin_tools) == 3, "Should have 3 builtin tools after registration"
@@ -371,8 +360,11 @@ async def test_task_add_remove_builtin_tools():
     # Builtin tools should NOT be in registered_task_tools
     assert len(task.registered_task_tools) == 0, "Builtin tools should NOT be in registered_task_tools"
     
-    # Test removing builtin tools from task (requires agent parameter)
-    task.remove_tools([code_exec], agent)
+    # Task should have its own tool_manager
+    assert task.tool_manager is not None, "Task should have a ToolManager after setup"
+    
+    # Test removing builtin tools from task (agent param is optional/deprecated)
+    task.remove_tools([code_exec])
     
     # Verify removal
     assert code_exec not in task.tools, "CodeExecutionTool should be removed from task.tools"
@@ -380,7 +372,7 @@ async def test_task_add_remove_builtin_tools():
     assert not any(tool.unique_id == "code_execution" for tool in task.task_builtin_tools), "code_execution should be removed from task_builtin_tools"
     
     # Remove remaining builtin tools
-    task.remove_tools([web_search, img_gen], agent)
+    task.remove_tools([web_search, img_gen])
     
     # Verify all removed
     assert len(task.task_builtin_tools) == 0, "All builtin tools should be removed"
@@ -390,7 +382,7 @@ async def test_task_add_remove_builtin_tools():
 @pytest.mark.asyncio
 async def test_runtime_builtin_tool_registration():
     """Test that builtin tools in tasks are properly separated during registration."""
-    agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
     
     # Create task with builtin tools (not registered yet)
     code_exec = CodeExecutionTool()
@@ -407,30 +399,8 @@ async def test_runtime_builtin_tool_registration():
     assert len(task.registered_task_tools) == 0, "Task tools should not be registered before registration"
     assert len(task.task_builtin_tools) == 0, "Task builtin tools should be empty before registration"
     
-    # Trigger tool registration (simulating what happens during execution)
-    # Separate builtin tools from regular tools (same logic as in agent.py)
-    from upsonic.tools.builtin_tools import AbstractBuiltinTool
-    tools_to_register = task.tools if task.tools else []
-    builtin_tools = []
-    regular_tools = []
-    
-    for tool in tools_to_register:
-        if tool is not None and isinstance(tool, AbstractBuiltinTool):
-            builtin_tools.append(tool)
-        else:
-            regular_tools.append(tool)
-    
-    # Set task_builtin_tools
-    task.task_builtin_tools = builtin_tools
-    
-    # Register regular tools (in this case there are none)
-    if regular_tools:
-        newly_registered = agent.tool_manager.register_tools(
-            tools=regular_tools,
-            task=task,
-            agent_instance=agent
-        )
-        task.registered_task_tools.update(newly_registered)
+    # Trigger tool registration via _setup_task_tools (creates task.tool_manager)
+    agent._setup_task_tools(task)
     
     # After registration, builtin tools should be in task_builtin_tools
     assert len(task.task_builtin_tools) == 3, "Should have 3 builtin tools after registration"
@@ -442,6 +412,9 @@ async def test_runtime_builtin_tool_registration():
     # Builtin tools should NOT be in registered_task_tools
     assert len(task.registered_task_tools) == 0, "Builtin tools should NOT be in registered_task_tools"
     
+    # Task should have its own tool_manager
+    assert task.tool_manager is not None, "Task should have a ToolManager after setup"
+    
     # Verify builtin tools are in task.tools
     assert code_exec in task.tools, "CodeExecutionTool should still be in task.tools"
     assert img_gen in task.tools, "ImageGenerationTool should still be in task.tools"
@@ -451,7 +424,7 @@ async def test_runtime_builtin_tool_registration():
 @pytest.mark.asyncio
 async def test_task_mixed_builtin_and_regular_tools():
     """Test mixing builtin tools and regular tools in a task."""
-    agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
     
     # Create task with both builtin and regular tools
     code_exec = CodeExecutionTool()
@@ -467,30 +440,8 @@ async def test_task_mixed_builtin_and_regular_tools():
     assert len(task.registered_task_tools) == 0, "No tools registered before registration"
     assert len(task.task_builtin_tools) == 0, "No builtin tools registered before registration"
     
-    # Trigger tool registration (simulating what happens during execution)
-    # Separate builtin tools from regular tools (same logic as in agent.py)
-    from upsonic.tools.builtin_tools import AbstractBuiltinTool
-    tools_to_register = task.tools if task.tools else []
-    builtin_tools = []
-    regular_tools = []
-    
-    for tool in tools_to_register:
-        if tool is not None and isinstance(tool, AbstractBuiltinTool):
-            builtin_tools.append(tool)
-        else:
-            regular_tools.append(tool)
-    
-    # Set task_builtin_tools
-    task.task_builtin_tools = builtin_tools
-    
-    # Register regular tools
-    if regular_tools:
-        newly_registered = agent.tool_manager.register_tools(
-            tools=regular_tools,
-            task=task,
-            agent_instance=agent
-        )
-        task.registered_task_tools.update(newly_registered)
+    # Trigger tool registration via _setup_task_tools (creates task.tool_manager)
+    agent._setup_task_tools(task)
     
     # After registration, verify separation of builtin vs regular tools
     assert len(task.task_builtin_tools) == 2, "Should have 2 builtin tools"
@@ -503,11 +454,18 @@ async def test_task_mixed_builtin_and_regular_tools():
     assert "add_numbers" in task.registered_task_tools, "add_numbers should be in registered_task_tools"
     assert "multiply_numbers" in task.registered_task_tools, "multiply_numbers should be in registered_task_tools"
     
+    # Task should have its own tool_manager with regular tools
+    assert task.tool_manager is not None, "Task should have a ToolManager after setup"
+    task_tool_defs = task.get_tool_defs()
+    task_tool_names = [td.name for td in task_tool_defs]
+    assert "add_numbers" in task_tool_names, "add_numbers should be in task tool_manager"
+    assert "multiply_numbers" in task_tool_names, "multiply_numbers should be in task tool_manager"
+    
     # All tools should still be in task.tools
     assert len(task.tools) == 4, "All tools should still be in task.tools"
     
-    # Test removing builtin tool
-    task.remove_tools([code_exec], agent)
+    # Test removing builtin tool (agent param is optional/deprecated)
+    task.remove_tools([code_exec])
     
     # Verify builtin tool removed but regular tools remain
     assert len(task.task_builtin_tools) == 1, "Should have 1 builtin tool left"
@@ -516,7 +474,7 @@ async def test_task_mixed_builtin_and_regular_tools():
     assert add_numbers in task.tools, "add_numbers should still be in task.tools"
     
     # Test removing regular tool
-    task.remove_tools(["add_numbers"], agent)
+    task.remove_tools(["add_numbers"])
     
     # Verify regular tool removed
     assert len(task.registered_task_tools) == 1, "Should have 1 regular tool left"
@@ -532,7 +490,7 @@ async def test_agent_initialization_with_builtin_tools():
     
     # Initialize agent with both builtin and regular tools
     agent = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Test Agent",
         tools=[web_search, code_exec, add_numbers, multiply_numbers],
         debug=True
@@ -560,7 +518,7 @@ async def test_agent_initialization_with_builtin_tools():
 @pytest.mark.asyncio
 async def test_builtin_tools_not_in_tool_processor():
     """Verify that builtin tools are NOT processed by ToolProcessor."""
-    agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
     
     # Get initial count of registered tools in processor
     initial_processor_count = len(agent.tool_manager.processor.registered_tools)
@@ -597,7 +555,7 @@ async def test_agent_add_remove_financial_tools():
     try:
         from upsonic.tools.common_tools.financial_tools import YFinanceTools
         
-        agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
         
         # Create financial tools instance (pure class, not ToolKit)
         # YFinanceTools is a regular class instance, processor extracts public methods
@@ -639,7 +597,7 @@ async def test_agent_add_remove_mcp_handler():
     try:
         from upsonic.tools.mcp import MCPHandler
         
-        agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
         
         # Create MCP handler (using filesystem server as example)
         # Note: This tests the tool management logic, not actual MCP execution
@@ -684,7 +642,7 @@ async def test_agent_remove_individual_mcp_tools():
     try:
         from upsonic.tools.mcp import MCPHandler
         
-        agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
         
         # Create MCP handler
         handler = MCPHandler(
@@ -743,7 +701,7 @@ async def test_agent_add_remove_multiple_mcp_handlers():
     try:
         from upsonic.tools.mcp import MCPHandler
         
-        agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
         
         # Create first MCP handler
         handler1 = MCPHandler(
@@ -806,7 +764,7 @@ async def test_task_add_remove_mcp_handler():
     try:
         from upsonic.tools.mcp import MCPHandler
         
-        agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
         
         # Create MCP handler
         handler = MCPHandler(
@@ -822,7 +780,7 @@ async def test_task_add_remove_mcp_handler():
         # Execute task to trigger registration
         output_buffer = StringIO()
         with redirect_stdout(output_buffer):
-            result = await agent.do_async(task)
+            result = await agent.print_do_async(task)
         
         # Verify MCP tools registered
         assert len(task.registered_task_tools) > 1, "Should have MCP tools + add_numbers"
@@ -862,7 +820,7 @@ async def test_agent_add_remove_duckduckgo_tool():
     try:
         from upsonic.tools.common_tools.duckduckgo import duckduckgo_search_tool
         
-        agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
         
         # Create DuckDuckGo tool (function tool)
         ddg_tool = duckduckgo_search_tool()
@@ -891,7 +849,7 @@ async def test_agent_add_remove_tavily_tool():
         if not tavily_api_key:
             pytest.skip("TAVILY_API_KEY not set")
         
-        agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
         
         # Create Tavily tool (function tool)
         tavily_tool = tavily_search_tool(api_key=tavily_api_key)
@@ -916,7 +874,7 @@ async def test_agent_add_remove_thinking_tool():
     
     # Test 1: Auto-added via enable_thinking_tool with other tools
     agent = Agent(
-        model="openai/gpt-4o", 
+        model="anthropic/claude-sonnet-4-5", 
         name="Test Agent", 
         debug=True, 
         enable_thinking_tool=True,
@@ -933,7 +891,7 @@ async def test_agent_add_remove_thinking_tool():
     assert "add_numbers" in agent.registered_agent_tools, "add_numbers should still be registered"
     
     # Test 2: Explicitly added as regular tool
-    agent2 = Agent(model="openai/gpt-4o", name="Test Agent 2", debug=True, enable_thinking_tool=False)
+    agent2 = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent 2", debug=True, enable_thinking_tool=False)
     
     # Initially no plan_and_execute
     assert "plan_and_execute" not in agent2.registered_agent_tools, "plan_and_execute should not be present initially"
@@ -947,11 +905,11 @@ async def test_agent_add_remove_thinking_tool():
     assert "plan_and_execute" not in agent2.registered_agent_tools, "plan_and_execute should be removed"
     
     # Test 3: Task-level override
-    agent3 = Agent(model="openai/gpt-4o", name="Test Agent 3", debug=True, enable_thinking_tool=False)
+    agent3 = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent 3", debug=True, enable_thinking_tool=False)
     
     # Task with thinking enabled (overrides agent)
     task = Task(
-        description="Test task with thinking",
+        description="Use add_numbers to calculate 10 + 20. Return only the number.",
         tools=[add_numbers],
         enable_thinking_tool=True
     )
@@ -959,7 +917,18 @@ async def test_agent_add_remove_thinking_tool():
     # Execute to trigger registration
     output_buffer = StringIO()
     with redirect_stdout(output_buffer):
-        result = await agent3.do_async(task)
+        result = await agent3.print_do_async(task)
+    
+    # Verify printed output shows tool calls
+    output_text = output_buffer.getvalue()
+    assert "Tool Calls" in output_text, "Output should contain 'Tool Calls' table"
+    
+    # Verify task.tool_calls attribute
+    assert len(task.tool_calls) > 0, "task.tool_calls should not be empty"
+    called_names = [tc.get("tool_name", "") for tc in task.tool_calls]
+    # With enable_thinking_tool, the LLM may use plan_and_execute which internally calls add_numbers
+    assert "plan_and_execute" in called_names or "add_numbers" in called_names, \
+        f"plan_and_execute or add_numbers should be in tool_calls, got: {called_names}"
     
     # plan_and_execute should be in task tools
     assert "plan_and_execute" in task.registered_task_tools, "plan_and_execute should be in task tools"
@@ -976,14 +945,14 @@ async def test_agent_as_tool():
     """Test adding and removing Agent as a tool."""
     # Create sub-agent
     sub_agent = Agent(
-        model="openai/gpt-4o",
+        model="anthropic/claude-sonnet-4-5",
         name="Math Assistant",
         role="Math Specialist",
         goal="Help with mathematical calculations"
     )
     
     # Create main agent
-    main_agent = Agent(model="openai/gpt-4o", name="Main Agent", debug=True)
+    main_agent = Agent(model="anthropic/claude-sonnet-4-5", name="Main Agent", debug=True)
     
     # Add sub-agent as tool
     main_agent.add_tools(sub_agent)
@@ -1003,10 +972,10 @@ async def test_agent_as_tool():
 @pytest.mark.asyncio
 async def test_task_add_remove_tools():
     """Test adding and removing tools from Task."""
-    agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
     
     # Create task with tools
-    task = Task(description="Test task", tools=[add_numbers])
+    task = Task(description="Use add_numbers to calculate 2 + 3. Return the number.", tools=[add_numbers])
     
     # Verify task has tools but not registered yet (runtime registration)
     assert add_numbers in task.tools, "add_numbers should be in task.tools"
@@ -1020,7 +989,17 @@ async def test_task_add_remove_tools():
     # Execute task to trigger runtime registration
     output_buffer = StringIO()
     with redirect_stdout(output_buffer):
-        result = await agent.do_async(task)
+        result = await agent.print_do_async(task)
+    
+    # Verify printed output shows tool calls
+    output_text = output_buffer.getvalue()
+    assert "Tool Calls" in output_text, "Output should contain 'Tool Calls' table"
+    assert "add_numbers" in output_text, "Output should show add_numbers was called"
+    
+    # Verify task.tool_calls attribute
+    assert len(task.tool_calls) > 0, "task.tool_calls should not be empty"
+    called_names = [tc.get("tool_name", "") for tc in task.tool_calls]
+    assert "add_numbers" in called_names, f"add_numbers should be in tool_calls, got: {called_names}"
     
     # Verify tools are registered after execution
     assert "add_numbers" in task.registered_task_tools, "add_numbers should be registered after execution"
@@ -1042,12 +1021,12 @@ async def test_task_add_remove_tools():
 
 @pytest.mark.asyncio
 async def test_runtime_task_tool_registration():
-    """Test that task tools are registered at runtime when agent.do_async(task) is called."""
-    agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+    """Test that task tools are registered at runtime when agent.print_do_async(task) is called."""
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
     
     # Create task with tools (not registered yet)
     task = Task(
-        description="Use add_numbers to calculate 5 + 3",
+        description="Use add_numbers to calculate 5 + 3. Return only the number.",
         tools=[add_numbers]
     )
     
@@ -1058,22 +1037,41 @@ async def test_runtime_task_tool_registration():
     # Execute task
     output_buffer = StringIO()
     with redirect_stdout(output_buffer):
-        result = await agent.do_async(task)
+        result = await agent.print_do_async(task)
+    
+    # Verify printed output shows tool calls
+    output_text = output_buffer.getvalue()
+    assert "Tool Calls" in output_text, "Output should contain 'Tool Calls' table"
+    assert "add_numbers" in output_text, "Output should show add_numbers was called"
+    
+    # Verify task.tool_calls attribute
+    assert len(task.tool_calls) > 0, "task.tool_calls should not be empty"
+    called_names = [tc.get("tool_name", "") for tc in task.tool_calls]
+    assert "add_numbers" in called_names, f"add_numbers should be in tool_calls, got: {called_names}"
+    add_call = next(tc for tc in task.tool_calls if tc.get("tool_name") == "add_numbers")
+    assert "params" in add_call, "Tool call should have 'params' key"
+    assert "tool_result" in add_call, "Tool call should have 'tool_result' key"
     
     # After execution, tools should be registered
     assert "add_numbers" in task.registered_task_tools, "add_numbers should be registered after execution"
     assert len(task.registered_task_tools) > 0, "Task should have registered tools after execution"
     
-    # Verify tool_manager has the tools
-    tool_defs = agent.tool_manager.get_tool_definitions()
-    tool_names = [t.name for t in tool_defs]
-    assert "add_numbers" in tool_names, "add_numbers should be in tool_manager definitions"
+    # Task should have its own tool_manager with task tools
+    assert task.tool_manager is not None, "Task should have a ToolManager after execution"
+    task_tool_defs = task.get_tool_defs()
+    task_tool_names = [t.name for t in task_tool_defs]
+    assert "add_numbers" in task_tool_names, "add_numbers should be in task's tool_manager definitions"
+    
+    # Agent's tool_manager should NOT have task tools
+    agent_tool_defs = agent.tool_manager.get_tool_definitions()
+    agent_tool_names = [t.name for t in agent_tool_defs]
+    assert "add_numbers" not in agent_tool_names, "Task tool should NOT be in agent's tool_manager"
 
 
 @pytest.mark.asyncio
 async def test_mixed_tool_types():
     """Test mixing custom tools, toolkits, and builtin tools."""
-    agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
     
     # Add mixed tool types
     math_kit = MathToolKit()
@@ -1114,7 +1112,7 @@ async def test_mixed_tool_types():
 @pytest.mark.asyncio
 async def test_tool_manager_attributes():
     """Test that tool_manager attributes are properly updated."""
-    agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
     
     # Add tools
     agent.add_tools([add_numbers, multiply_numbers])
@@ -1140,21 +1138,34 @@ async def test_tool_manager_attributes():
 @pytest.mark.asyncio
 async def test_task_tool_attributes_after_execution():
     """Test that task tool attributes are properly set after execution."""
-    agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
     
     # Add agent tools
     agent.add_tools([add_numbers])
     
     # Create task with different tools
     task = Task(
-        description="Use multiply_numbers to calculate 4 * 2",
+        description="Use multiply_numbers to calculate 4 * 2. Return only the number.",
         tools=[multiply_numbers]
     )
     
     # Execute task
     output_buffer = StringIO()
     with redirect_stdout(output_buffer):
-        result = await agent.do_async(task)
+        result = await agent.print_do_async(task)
+    
+    # Verify printed output shows tool calls
+    output_text = output_buffer.getvalue()
+    assert "Tool Calls" in output_text, "Output should contain 'Tool Calls' table"
+    assert "multiply_numbers" in output_text, "Output should show multiply_numbers was called"
+    
+    # Verify task.tool_calls attribute
+    assert len(task.tool_calls) > 0, "task.tool_calls should not be empty"
+    called_names = [tc.get("tool_name", "") for tc in task.tool_calls]
+    assert "multiply_numbers" in called_names, f"multiply_numbers should be in tool_calls, got: {called_names}"
+    mul_call = next(tc for tc in task.tool_calls if tc.get("tool_name") == "multiply_numbers")
+    assert "params" in mul_call, "Tool call should have 'params' key"
+    assert "tool_result" in mul_call, "Tool call should have 'tool_result' key"
     
     # Verify task attributes
     assert "multiply_numbers" in task.registered_task_tools, "Task should have registered tools"
@@ -1163,17 +1174,23 @@ async def test_task_tool_attributes_after_execution():
     # Verify agent still has its tools
     assert "add_numbers" in agent.registered_agent_tools, "Agent should still have its tools"
     
-    # Verify both are in tool_manager
-    tool_defs = agent.tool_manager.get_tool_definitions()
-    tool_names = [t.name for t in tool_defs]
-    assert "add_numbers" in tool_names, "Agent tool should be in tool_manager"
-    assert "multiply_numbers" in tool_names, "Task tool should be in tool_manager"
+    # Agent's tool_manager should have agent tools only
+    agent_tool_defs = agent.get_tool_defs()
+    agent_tool_names = [t.name for t in agent_tool_defs]
+    assert "add_numbers" in agent_tool_names, "Agent tool should be in agent's tool_manager"
+    assert "multiply_numbers" not in agent_tool_names, "Task tool should NOT be in agent's tool_manager"
+    
+    # Task's tool_manager should have task tools only
+    task_tool_defs = task.get_tool_defs()
+    task_tool_names = [t.name for t in task_tool_defs]
+    assert "multiply_numbers" in task_tool_names, "Task tool should be in task's tool_manager"
+    assert "add_numbers" not in task_tool_names, "Agent tool should NOT be in task's tool_manager"
 
 
 @pytest.mark.asyncio
 async def test_all_tool_types_comprehensive():
     """Comprehensive test of all tool types together."""
-    agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
     
     regular_tools_added = []
     builtin_tools_added = []
@@ -1206,7 +1223,7 @@ async def test_all_tool_types_comprehensive():
     assert "code_execution" not in agent.registered_agent_tools, "Builtin tools should NOT be in registered_agent_tools"
     
     # 4. Add Agent as tool
-    sub_agent = Agent(model="openai/gpt-4o", name="Helper")
+    sub_agent = Agent(model="anthropic/claude-sonnet-4-5", name="Helper")
     agent.add_tools(sub_agent)
     tool_names = list(agent.registered_agent_tools.keys())
     agent_tool_name = [name for name in tool_names if name.startswith("ask_")][0]
@@ -1299,7 +1316,7 @@ async def test_all_tool_types_comprehensive():
 @pytest.mark.asyncio
 async def test_deduplication_prevents_reprocessing():
     """Test that registering the same tool twice doesn't re-process it."""
-    agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
     
     # Get initial state
     processor = agent.tool_manager.processor
@@ -1329,7 +1346,7 @@ async def test_deduplication_prevents_reprocessing():
 @pytest.mark.asyncio
 async def test_toolkit_deduplication_no_duplicate_tracking():
     """Test that registering the same ToolKit twice doesn't create duplicate tracking entries."""
-    agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
     processor = agent.tool_manager.processor
     
     # Create and add ToolKit
@@ -1356,7 +1373,7 @@ async def test_toolkit_deduplication_no_duplicate_tracking():
 @pytest.mark.asyncio
 async def test_class_instance_to_tools_cleanup_on_individual_removal():
     """Test that class_instance_to_tools is properly cleaned up when removing individual tools."""
-    agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
     processor = agent.tool_manager.processor
     
     # Add ToolKit
@@ -1386,7 +1403,7 @@ async def test_class_instance_to_tools_cleanup_on_individual_removal():
 @pytest.mark.asyncio
 async def test_raw_tool_ids_cleanup_on_removal():
     """Test that _raw_tool_ids is properly cleaned up when tools are removed."""
-    agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
     processor = agent.tool_manager.processor
     
     # Track initial state
@@ -1411,7 +1428,7 @@ async def test_raw_tool_ids_cleanup_on_removal():
 @pytest.mark.asyncio
 async def test_raw_tool_ids_cleanup_on_object_removal():
     """Test that _raw_tool_ids is properly cleaned up when removing by object."""
-    agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
     processor = agent.tool_manager.processor
     
     # Track initial state
@@ -1438,7 +1455,7 @@ async def test_mcp_handlers_list_cleanup_on_individual_removal():
     try:
         from upsonic.tools.mcp import MCPHandler
         
-        agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
         processor = agent.tool_manager.processor
         
         # Create MCP handler
@@ -1477,7 +1494,7 @@ async def test_mcp_handlers_list_cleanup_on_individual_removal():
 @pytest.mark.asyncio
 async def test_function_tool_deduplication():
     """Test that registering the same function tool twice doesn't create duplicates."""
-    agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
     processor = agent.tool_manager.processor
     
     # Add function tool
@@ -1499,7 +1516,7 @@ async def test_function_tool_deduplication():
 @pytest.mark.asyncio
 async def test_re_add_after_removal():
     """Test that removing and re-adding a tool works correctly."""
-    agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
     processor = agent.tool_manager.processor
     
     # Add tool
@@ -1531,7 +1548,7 @@ async def test_re_add_after_removal():
 @pytest.mark.asyncio  
 async def test_toolkit_re_add_after_removal():
     """Test that removing and re-adding a ToolKit works correctly."""
-    agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
     processor = agent.tool_manager.processor
     
     # Add ToolKit
@@ -1562,7 +1579,7 @@ async def test_toolkit_re_add_after_removal():
 @pytest.mark.asyncio
 async def test_mixed_deduplication():
     """Test deduplication with mixed tool types."""
-    agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
     
     math_kit = MathToolKit()
     text_kit = TextToolKit()
@@ -1585,7 +1602,7 @@ async def test_mixed_deduplication():
 @pytest.mark.asyncio
 async def test_processor_tracking_consistency():
     """Test that processor tracking dictionaries stay consistent through operations."""
-    agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
     processor = agent.tool_manager.processor
     
     # Start clean
@@ -1644,7 +1661,7 @@ async def test_mcp_handler_with_tool_name_prefix_agent_init():
         
         # Initialize agent with prefixed handler
         agent = Agent(
-            model="openai/gpt-4o",
+            model="anthropic/claude-sonnet-4-5",
             name="Test Agent",
             tools=[handler],
             debug=True
@@ -1685,7 +1702,7 @@ async def test_mcp_handler_with_tool_name_prefix_add_tools():
     try:
         from upsonic.tools.mcp import MCPHandler
         
-        agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
         
         # Create MCP handler with prefix
         handler = MCPHandler(
@@ -1734,7 +1751,7 @@ async def test_mcp_prefixed_tools_removal_by_name():
     try:
         from upsonic.tools.mcp import MCPHandler
         
-        agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
         
         # Create MCP handler with prefix
         handler = MCPHandler(
@@ -1786,7 +1803,7 @@ async def test_mcp_prefix_prevents_collisions():
     try:
         from upsonic.tools.mcp import MCPHandler
         
-        agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
         
         # Create two handlers pointing to same server type but different dirs
         # Without prefix, they would have identical tool names and collision would occur
@@ -1855,7 +1872,7 @@ async def test_multi_mcp_handler_with_single_prefix():
     try:
         from upsonic.tools.mcp import MultiMCPHandler
         
-        agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
         
         # Create MultiMCPHandler with single prefix (will become prefix_0, prefix_1)
         multi_handler = MultiMCPHandler(
@@ -1906,7 +1923,7 @@ async def test_multi_mcp_handler_with_prefixes_list():
     try:
         from upsonic.tools.mcp import MultiMCPHandler
         
-        agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
         
         # Create MultiMCPHandler with specific prefixes for each server
         multi_handler = MultiMCPHandler(
@@ -1975,7 +1992,7 @@ async def test_multi_mcp_handler_prefixes_validation():
         )
         
         # The validation happens during connect(), which happens when we add to agent
-        agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
         
         # Adding handler with mismatched prefixes - validation error is logged
         # and no tools are registered (graceful failure)
@@ -2004,7 +2021,7 @@ async def test_task_mcp_handler_with_prefix():
     try:
         from upsonic.tools.mcp import MCPHandler
         
-        agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
         
         # Create MCP handler with prefix
         handler = MCPHandler(
@@ -2021,7 +2038,7 @@ async def test_task_mcp_handler_with_prefix():
         # Execute task to trigger registration
         output_buffer = StringIO()
         with redirect_stdout(output_buffer):
-            result = await agent.do_async(task)
+            result = await agent.print_do_async(task)
         
         # Verify tools are registered
         task_tools = list(task.registered_task_tools.keys())
@@ -2065,7 +2082,7 @@ async def test_mcp_tool_metadata_contains_prefix_info():
     try:
         from upsonic.tools.mcp import MCPHandler
         
-        agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
         
         # Create MCP handler with prefix
         handler = MCPHandler(
@@ -2111,7 +2128,7 @@ async def test_mcp_handler_without_prefix_no_prefix_metadata():
     try:
         from upsonic.tools.mcp import MCPHandler
         
-        agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
         
         # Create MCP handler WITHOUT prefix
         handler = MCPHandler(
@@ -2152,7 +2169,7 @@ async def test_mcp_handler_processor_tracking_with_prefix():
     try:
         from upsonic.tools.mcp import MCPHandler
         
-        agent = Agent(model="openai/gpt-4o", name="Test Agent", debug=True)
+        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
         processor = agent.tool_manager.processor
         
         # Create MCP handler with prefix
@@ -2195,6 +2212,716 @@ async def test_mcp_handler_processor_tracking_with_prefix():
         assert handler not in processor.mcp_handlers, \
             "Handler should be removed from tracking"
         
+    except ImportError:
+        pytest.skip("MCP dependencies not available")
+    except Exception as e:
+        if "Failed to connect" in str(e) or "ENOENT" in str(e):
+            pytest.skip(f"MCP server not available: {e}")
+        else:
+            raise
+
+
+# ============================================================
+# TASK-LEVEL TOOL MANAGEMENT TESTS
+# Mirror of agent-level tests above, using Task.add_tools /
+# Task.remove_tools / agent._setup_task_tools(task).
+# ============================================================
+
+
+@pytest.mark.asyncio
+async def test_task_add_remove_custom_tools_management():
+    """Test adding and removing custom tools (functions) from Task via management API."""
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+
+    task = Task(description="test", tools=[add_numbers])
+    assert add_numbers in task.tools
+    assert len(task.registered_task_tools) == 0, "Not registered until setup"
+
+    task.add_tools([multiply_numbers, greet])
+    assert multiply_numbers in task.tools
+    assert greet in task.tools
+    assert len(task.tools) == 3
+
+    agent._setup_task_tools(task)
+
+    assert "add_numbers" in task.registered_task_tools
+    assert "multiply_numbers" in task.registered_task_tools
+    assert "greet" in task.registered_task_tools
+    assert len(task.registered_task_tools) == 3
+
+    task.remove_tools("add_numbers")
+    assert "add_numbers" not in task.registered_task_tools
+    assert add_numbers not in task.tools
+
+    task.remove_tools("multiply_numbers")
+    assert "multiply_numbers" not in task.registered_task_tools
+
+    task.remove_tools(["greet"])
+    assert len(task.registered_task_tools) == 0
+
+
+@pytest.mark.asyncio
+async def test_task_add_remove_toolkit():
+    """Test adding and removing ToolKit instances from Task."""
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+
+    math_kit = MathToolKit()
+    text_kit = TextToolKit()
+    task = Task(description="test", tools=[math_kit])
+    task.add_tools(text_kit)
+
+    agent._setup_task_tools(task)
+
+    assert "subtract" in task.registered_task_tools
+    assert "divide" in task.registered_task_tools
+    assert "uppercase" in task.registered_task_tools
+    assert "lowercase" in task.registered_task_tools
+
+    task.remove_tools(math_kit)
+    assert "subtract" not in task.registered_task_tools
+    assert "divide" not in task.registered_task_tools
+    assert math_kit not in task.tools
+
+    assert "uppercase" in task.registered_task_tools
+    assert "lowercase" in task.registered_task_tools
+
+    task.remove_tools(text_kit)
+    assert "uppercase" not in task.registered_task_tools
+    assert "lowercase" not in task.registered_task_tools
+    assert text_kit not in task.tools
+
+
+@pytest.mark.asyncio
+async def test_task_remove_individual_class_methods():
+    """Test removing individual methods from a regular class by name on Task."""
+    try:
+        from upsonic.tools.common_tools.financial_tools import YFinanceTools
+
+        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+
+        financial_tools = YFinanceTools(stock_price=True, enable_all=False)
+        task = Task(description="test", tools=[financial_tools])
+
+        agent._setup_task_tools(task)
+
+        initial_count = len(task.registered_task_tools)
+        assert initial_count > 0, "Financial tools should be registered"
+
+        tool_names = list(task.registered_task_tools.keys())
+        tool_to_remove = tool_names[0]
+
+        task.remove_tools(tool_to_remove)
+        assert tool_to_remove not in task.registered_task_tools
+        assert len(task.registered_task_tools) == initial_count - 1
+
+        assert financial_tools in task.tools, "Class instance should still be in task.tools"
+
+    except ImportError:
+        pytest.skip("Financial tools dependencies not available")
+
+
+@pytest.mark.asyncio
+async def test_task_add_remove_financial_tools():
+    """Test adding and removing financial tools (pure class) from Task."""
+    try:
+        from upsonic.tools.common_tools.financial_tools import YFinanceTools
+
+        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+
+        financial_tools = YFinanceTools(stock_price=True, enable_all=False)
+        task = Task(description="test", tools=[financial_tools])
+
+        agent._setup_task_tools(task)
+
+        tool_names = list(task.registered_task_tools.keys())
+        assert len(tool_names) > 0, f"Financial tools should be registered. Found: {tool_names}"
+
+        financial_tool_found = any(
+            "stock" in name.lower() or "price" in name.lower() or "get_current" in name.lower()
+            for name in tool_names
+        )
+        assert financial_tool_found, f"Financial tool should be registered. Found: {tool_names}"
+
+        task.remove_tools(financial_tools)
+
+        tool_names_after = list(task.registered_task_tools.keys())
+        financial_tool_still_there = any(
+            "stock" in name.lower() or "price" in name.lower() or "get_current" in name.lower()
+            for name in tool_names_after
+        )
+        assert not financial_tool_still_there, "Financial tools should be removed"
+        assert financial_tools not in task.tools
+
+    except ImportError:
+        pytest.skip("Financial tools dependencies not available")
+
+
+@pytest.mark.asyncio
+async def test_task_remove_individual_mcp_tools():
+    """Test removing individual MCP tools from Task by name (keeping the handler)."""
+    try:
+        from upsonic.tools.mcp import MCPHandler
+
+        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+
+        handler = MCPHandler(
+            command="npx -y @modelcontextprotocol/server-filesystem /tmp"
+        )
+        task = Task(description="test", tools=[handler, add_numbers])
+
+        agent._setup_task_tools(task)
+
+        initial_count = len(task.registered_task_tools)
+        assert initial_count > 1, "Should have MCP tools + add_numbers"
+
+        mcp_tool_names = [n for n in task.registered_task_tools.keys() if n != "add_numbers"]
+        assert len(mcp_tool_names) > 0
+
+        task.remove_tools(mcp_tool_names[0])
+        assert mcp_tool_names[0] not in task.registered_task_tools
+        assert len(task.registered_task_tools) == initial_count - 1
+        assert "add_numbers" in task.registered_task_tools
+
+        assert handler in task.tools, "MCP handler should still be in task.tools"
+
+    except ImportError:
+        pytest.skip("MCP dependencies not available")
+    except Exception as e:
+        if "Failed to connect" in str(e) or "ENOENT" in str(e):
+            pytest.skip(f"MCP server not available: {e}")
+        else:
+            raise
+
+
+@pytest.mark.asyncio
+async def test_task_add_remove_duckduckgo_tool():
+    """Test adding and removing DuckDuckGo search tool from Task."""
+    try:
+        from upsonic.tools.common_tools.duckduckgo import duckduckgo_search_tool
+
+        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+
+        ddg_tool = duckduckgo_search_tool()
+        task = Task(description="test", tools=[ddg_tool])
+
+        agent._setup_task_tools(task)
+
+        assert "duckduckgo_search" in task.registered_task_tools
+
+        task.remove_tools("duckduckgo_search")
+        assert "duckduckgo_search" not in task.registered_task_tools
+
+    except ImportError:
+        pytest.skip("DuckDuckGo dependencies not available")
+
+
+@pytest.mark.asyncio
+async def test_task_add_remove_tavily_tool():
+    """Test adding and removing Tavily search tool from Task."""
+    try:
+        from upsonic.tools.common_tools.tavily import tavily_search_tool
+
+        tavily_api_key = os.getenv("TAVILY_API_KEY")
+        if not tavily_api_key:
+            pytest.skip("TAVILY_API_KEY not set")
+
+        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+
+        tavily_tool = tavily_search_tool(api_key=tavily_api_key)
+        task = Task(description="test", tools=[tavily_tool])
+
+        agent._setup_task_tools(task)
+
+        assert "tavily_search" in task.registered_task_tools
+
+        task.remove_tools("tavily_search")
+        assert "tavily_search" not in task.registered_task_tools
+
+    except ImportError:
+        pytest.skip("Tavily dependencies not available")
+
+
+@pytest.mark.asyncio
+async def test_task_agent_as_tool():
+    """Test adding and removing Agent as a tool on Task."""
+    sub_agent = Agent(
+        model="anthropic/claude-sonnet-4-5",
+        name="Math Assistant",
+        role="Math Specialist",
+        goal="Help with mathematical calculations"
+    )
+
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Main Agent", debug=True)
+    task = Task(description="test", tools=[sub_agent, add_numbers])
+
+    agent._setup_task_tools(task)
+
+    tool_names = list(task.registered_task_tools.keys())
+    agent_tool_name = [name for name in tool_names if name.startswith("ask_")][0]
+    assert agent_tool_name is not None
+    assert "add_numbers" in task.registered_task_tools
+
+    task.remove_tools(sub_agent)
+    assert agent_tool_name not in task.registered_task_tools
+    assert sub_agent not in task.tools
+    assert "add_numbers" in task.registered_task_tools
+
+
+@pytest.mark.asyncio
+async def test_task_initialization_with_builtin_tools():
+    """Test Task initialized with builtin + regular tools before setup."""
+    web_search = WebSearchTool()
+    code_exec = CodeExecutionTool()
+
+    task = Task(
+        description="test",
+        tools=[web_search, code_exec, add_numbers, multiply_numbers]
+    )
+
+    assert len(task.tools) == 4
+    assert web_search in task.tools
+    assert code_exec in task.tools
+    assert add_numbers in task.tools
+    assert multiply_numbers in task.tools
+
+    assert len(task.registered_task_tools) == 0, "Not registered until setup"
+    assert len(task.task_builtin_tools) == 0, "Not populated until setup"
+
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent._setup_task_tools(task)
+
+    assert len(task.task_builtin_tools) == 2
+    builtin_ids = {t.unique_id for t in task.task_builtin_tools}
+    assert "web_search" in builtin_ids
+    assert "code_execution" in builtin_ids
+
+    assert len(task.registered_task_tools) == 2
+    assert "add_numbers" in task.registered_task_tools
+    assert "multiply_numbers" in task.registered_task_tools
+
+
+@pytest.mark.asyncio
+async def test_task_builtin_tools_not_in_tool_processor():
+    """Verify that builtin tools are NOT processed by Task's ToolProcessor."""
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+
+    web_search = WebSearchTool()
+    code_exec = CodeExecutionTool()
+
+    task = Task(description="test", tools=[web_search, code_exec, add_numbers])
+
+    agent._setup_task_tools(task)
+
+    processor = task.tool_manager.processor
+    processor_count = len(processor.registered_tools)
+
+    assert "add_numbers" in processor.registered_tools
+    assert "web_search" not in processor.registered_tools
+    assert "code_execution" not in processor.registered_tools
+
+    assert processor_count == 1, (
+        f"Processor should only have 1 regular tool, got {processor_count}"
+    )
+
+    assert len(task.task_builtin_tools) == 2
+
+
+@pytest.mark.asyncio
+async def test_task_tool_manager_attributes_full():
+    """Test that task tool_manager attributes are properly updated."""
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+
+    task = Task(description="test", tools=[add_numbers, multiply_numbers])
+    agent._setup_task_tools(task)
+
+    tool_defs = task.tool_manager.get_tool_definitions()
+    tool_names = [t.name for t in tool_defs]
+    assert "add_numbers" in tool_names
+    assert "multiply_numbers" in tool_names
+
+    assert "add_numbers" in task.tool_manager.wrapped_tools
+    assert "multiply_numbers" in task.tool_manager.wrapped_tools
+    assert "add_numbers" in task.tool_manager.processor.registered_tools
+    assert "multiply_numbers" in task.tool_manager.processor.registered_tools
+
+    task.remove_tools("add_numbers")
+
+    tool_defs_after = task.tool_manager.get_tool_definitions()
+    tool_names_after = [t.name for t in tool_defs_after]
+    assert "add_numbers" not in tool_names_after
+    assert "add_numbers" not in task.tool_manager.wrapped_tools
+    assert "add_numbers" not in task.tool_manager.processor.registered_tools
+
+    assert "multiply_numbers" in tool_names_after
+    assert "multiply_numbers" in task.tool_manager.wrapped_tools
+
+
+@pytest.mark.asyncio
+async def test_task_mixed_tool_types():
+    """Test mixing custom tools, toolkits, and builtin tools on Task."""
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+
+    math_kit = MathToolKit()
+    web_search = WebSearchTool()
+
+    task = Task(description="test", tools=[add_numbers, math_kit, web_search])
+    agent._setup_task_tools(task)
+
+    assert "add_numbers" in task.registered_task_tools
+    assert "subtract" in task.registered_task_tools
+    assert "divide" in task.registered_task_tools
+    assert len(task.registered_task_tools) == 3
+
+    assert len(task.task_builtin_tools) == 1
+    assert any(t.unique_id == "web_search" for t in task.task_builtin_tools)
+
+    task.remove_tools(["add_numbers", "subtract", "divide"])
+    assert len(task.registered_task_tools) == 0
+
+    assert len(task.task_builtin_tools) == 1
+    assert any(t.unique_id == "web_search" for t in task.task_builtin_tools)
+
+    task.remove_tools([web_search])
+    assert len(task.task_builtin_tools) == 0
+    assert web_search not in task.tools
+
+
+@pytest.mark.asyncio
+async def test_task_all_tool_types_comprehensive():
+    """Comprehensive test of all tool types together on Task."""
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+
+    regular_tools_added: list = []
+    builtin_tools_added: list = []
+
+    math_kit = MathToolKit()
+    web_search = WebSearchTool()
+    code_exec = CodeExecutionTool()
+
+    sub_agent = Agent(model="anthropic/claude-sonnet-4-5", name="Helper")
+
+    tools_list: list = [add_numbers, math_kit, web_search, code_exec, sub_agent]
+
+    financial_tools_instance = None
+    try:
+        from upsonic.tools.common_tools.financial_tools import YFinanceTools
+        financial_tools_instance = YFinanceTools(stock_price=True, enable_all=False)
+        tools_list.append(financial_tools_instance)
+    except (ImportError, Exception):
+        pass
+
+    try:
+        from upsonic.tools.common_tools.duckduckgo import duckduckgo_search_tool
+        ddg_tool = duckduckgo_search_tool()
+        tools_list.append(ddg_tool)
+    except (ImportError, Exception):
+        pass
+
+    task = Task(description="test", tools=tools_list)
+    agent._setup_task_tools(task)
+
+    assert "add_numbers" in task.registered_task_tools
+    regular_tools_added.append("add_numbers")
+
+    assert "subtract" in task.registered_task_tools
+    assert "divide" in task.registered_task_tools
+    regular_tools_added.extend(["subtract", "divide"])
+
+    assert len(task.task_builtin_tools) == 2
+    builtin_tools_added.extend([web_search, code_exec])
+
+    tool_names = list(task.registered_task_tools.keys())
+    agent_tool_names = [n for n in tool_names if n.startswith("ask_")]
+    assert len(agent_tool_names) > 0
+    regular_tools_added.extend(agent_tool_names)
+
+    if "duckduckgo_search" in task.registered_task_tools:
+        regular_tools_added.append("duckduckgo_search")
+
+    assert len(task.registered_task_tools) >= len(regular_tools_added)
+
+    task.remove_tools(regular_tools_added)
+    for name in regular_tools_added:
+        assert name not in task.registered_task_tools, f"{name} should be removed"
+
+    assert len(task.task_builtin_tools) == 2
+
+    task.remove_tools(builtin_tools_added)
+    assert len(task.task_builtin_tools) == 0
+
+    if math_kit in task.tools:
+        task.remove_tools(math_kit)
+    if sub_agent in task.tools:
+        task.remove_tools(sub_agent)
+    if financial_tools_instance and financial_tools_instance in task.tools:
+        task.remove_tools(financial_tools_instance)
+
+
+# ============================================================
+# Task-level ToolProcessor internal state management
+# ============================================================
+
+
+@pytest.mark.asyncio
+async def test_task_deduplication_prevents_reprocessing():
+    """Test that registering the same tool twice on a task doesn't re-process it."""
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+
+    task = Task(description="test", tools=[add_numbers, add_numbers])
+    agent._setup_task_tools(task)
+
+    assert "add_numbers" in task.registered_task_tools
+    defs = task.get_tool_defs()
+    add_defs = [d for d in defs if d.name == "add_numbers"]
+    assert len(add_defs) == 1, "Should have exactly 1 add_numbers definition"
+
+
+@pytest.mark.asyncio
+async def test_task_toolkit_deduplication_no_duplicate_tracking():
+    """Test that registering the same ToolKit twice on task doesn't create duplicate tracking."""
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+
+    math_kit = MathToolKit()
+    task = Task(description="test", tools=[math_kit])
+    agent._setup_task_tools(task)
+
+    processor = task.tool_manager.processor
+    kit_id = id(math_kit)
+    assert kit_id in processor.class_instance_to_tools
+    first_tracking = list(processor.class_instance_to_tools[kit_id])
+    assert len(first_tracking) == 2
+    assert "subtract" in first_tracking
+    assert "divide" in first_tracking
+
+
+@pytest.mark.asyncio
+async def test_task_class_instance_to_tools_cleanup_on_individual_removal():
+    """Test task processor class_instance_to_tools cleanup on individual tool removal."""
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+
+    math_kit = MathToolKit()
+    task = Task(description="test", tools=[math_kit])
+    agent._setup_task_tools(task)
+
+    processor = task.tool_manager.processor
+    kit_id = id(math_kit)
+    assert kit_id in processor.class_instance_to_tools
+    assert len(processor.class_instance_to_tools[kit_id]) == 2
+
+    task.remove_tools("subtract")
+
+    assert kit_id in processor.class_instance_to_tools
+    assert len(processor.class_instance_to_tools[kit_id]) == 1
+    assert "divide" in processor.class_instance_to_tools[kit_id]
+    assert "subtract" not in processor.class_instance_to_tools[kit_id]
+
+    task.remove_tools("divide")
+
+    assert kit_id not in processor.class_instance_to_tools
+
+
+@pytest.mark.asyncio
+async def test_task_raw_tool_ids_cleanup_on_removal():
+    """Test task processor _raw_tool_ids cleanup when tools are removed individually."""
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+
+    math_kit = MathToolKit()
+    task = Task(description="test", tools=[math_kit])
+    agent._setup_task_tools(task)
+
+    processor = task.tool_manager.processor
+    kit_id = id(math_kit)
+    assert kit_id in processor._raw_tool_ids
+
+    task.remove_tools("subtract")
+    task.remove_tools("divide")
+
+    assert kit_id not in processor._raw_tool_ids
+
+
+@pytest.mark.asyncio
+async def test_task_raw_tool_ids_cleanup_on_object_removal():
+    """Test task processor _raw_tool_ids cleanup when removing toolkit by object."""
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+
+    math_kit = MathToolKit()
+    task = Task(description="test", tools=[math_kit])
+    agent._setup_task_tools(task)
+
+    processor = task.tool_manager.processor
+    kit_id = id(math_kit)
+    assert kit_id in processor._raw_tool_ids
+
+    task.remove_tools(math_kit)
+
+    assert kit_id not in processor._raw_tool_ids
+
+
+@pytest.mark.asyncio
+async def test_task_function_tool_deduplication():
+    """Test that registering the same function tool twice on task doesn't duplicate."""
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+
+    task = Task(description="test", tools=[add_numbers, add_numbers, add_numbers])
+    agent._setup_task_tools(task)
+
+    assert "add_numbers" in task.registered_task_tools
+    defs = task.get_tool_defs()
+    add_defs = [d for d in defs if d.name == "add_numbers"]
+    assert len(add_defs) == 1, "Should have exactly 1 add_numbers definition"
+
+
+@pytest.mark.asyncio
+async def test_task_toolkit_re_add_after_removal():
+    """Test that removing and re-adding a ToolKit on task works correctly."""
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+
+    math_kit = MathToolKit()
+    task = Task(description="test", tools=[math_kit])
+    agent._setup_task_tools(task)
+
+    processor = task.tool_manager.processor
+    kit_id = id(math_kit)
+
+    assert "subtract" in task.registered_task_tools
+    assert "divide" in task.registered_task_tools
+    assert kit_id in processor._raw_tool_ids
+    assert kit_id in processor.class_instance_to_tools
+
+    task.remove_tools(math_kit)
+
+    assert "subtract" not in task.registered_task_tools
+    assert "divide" not in task.registered_task_tools
+    assert kit_id not in processor._raw_tool_ids
+    assert kit_id not in processor.class_instance_to_tools
+
+    newly_registered = task.tool_manager.register_tools(tools=[math_kit])
+    task.registered_task_tools.update(newly_registered)
+
+    assert "subtract" in task.registered_task_tools
+    assert "divide" in task.registered_task_tools
+    assert kit_id in processor._raw_tool_ids
+    assert kit_id in processor.class_instance_to_tools
+
+
+@pytest.mark.asyncio
+async def test_task_mixed_deduplication():
+    """Test deduplication with mixed tool types on Task."""
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+
+    math_kit = MathToolKit()
+    text_kit = TextToolKit()
+
+    task = Task(
+        description="test",
+        tools=[add_numbers, math_kit, text_kit, multiply_numbers]
+    )
+    agent._setup_task_tools(task)
+
+    initial_count = len(task.registered_task_tools)
+    assert initial_count == 6, (
+        f"Should have 6 tools (2 functions + 2 math kit + 2 text kit), got {initial_count}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_task_processor_tracking_consistency():
+    """Test that task processor tracking stays consistent through operations."""
+    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+
+    math_kit = MathToolKit()
+    task = Task(description="test", tools=[math_kit])
+    agent._setup_task_tools(task)
+
+    processor = task.tool_manager.processor
+    kit_id = id(math_kit)
+
+    assert len(processor.registered_tools) == 2
+    assert kit_id in processor.class_instance_to_tools
+    assert len(processor.class_instance_to_tools[kit_id]) == 2
+    assert kit_id in processor._raw_tool_ids
+
+    task.remove_tools("subtract")
+
+    assert len(processor.registered_tools) == 1
+    assert kit_id in processor.class_instance_to_tools
+    assert len(processor.class_instance_to_tools[kit_id]) == 1
+    assert kit_id in processor._raw_tool_ids
+
+    task.remove_tools("divide")
+
+    assert len(processor.registered_tools) == 0
+    assert kit_id not in processor.class_instance_to_tools
+    assert kit_id not in processor._raw_tool_ids
+    assert len(task.registered_task_tools) == 0
+
+
+@pytest.mark.asyncio
+async def test_task_mcp_handlers_list_cleanup_on_individual_removal():
+    """Test task MCP handler cleanup when all MCP tools are removed individually."""
+    try:
+        from upsonic.tools.mcp import MCPHandler
+
+        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+
+        handler = MCPHandler(
+            command="npx -y @modelcontextprotocol/server-filesystem /tmp"
+        )
+        task = Task(description="test", tools=[handler])
+        agent._setup_task_tools(task)
+
+        processor = task.tool_manager.processor
+        assert handler in processor.mcp_handlers
+
+        handler_id = id(handler)
+        mcp_tool_names = list(processor.mcp_handler_to_tools.get(handler_id, []))
+        assert len(mcp_tool_names) > 0
+
+        for tool_name in mcp_tool_names:
+            task.remove_tools(tool_name)
+
+        assert handler not in processor.mcp_handlers
+        assert handler_id not in processor.mcp_handler_to_tools
+
+    except ImportError:
+        pytest.skip("MCP dependencies not available")
+    except Exception as e:
+        if "Failed to connect" in str(e) or "ENOENT" in str(e):
+            pytest.skip(f"MCP server not available: {e}")
+        else:
+            raise
+
+
+@pytest.mark.asyncio
+async def test_task_mcp_handler_with_tool_name_prefix_management():
+    """Test MCPHandler with tool_name_prefix on Task via _setup_task_tools."""
+    try:
+        from upsonic.tools.mcp import MCPHandler
+
+        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+
+        handler = MCPHandler(
+            command="npx -y @modelcontextprotocol/server-filesystem /tmp",
+            tool_name_prefix="task_prefix"
+        )
+        task = Task(description="test", tools=[handler, add_numbers])
+        agent._setup_task_tools(task)
+
+        assert "add_numbers" in task.registered_task_tools
+
+        mcp_tools = [n for n in task.registered_task_tools.keys() if n.startswith("task_prefix_")]
+        assert len(mcp_tools) > 0, "MCP tools should have 'task_prefix_' prefix"
+
+        tool_to_remove = mcp_tools[0]
+        task.remove_tools(tool_to_remove)
+        assert tool_to_remove not in task.registered_task_tools
+        assert "add_numbers" in task.registered_task_tools
+
+        task.remove_tools(handler)
+        remaining = [n for n in task.registered_task_tools.keys() if n.startswith("task_prefix_")]
+        assert len(remaining) == 0
+        assert "add_numbers" in task.registered_task_tools
+
     except ImportError:
         pytest.skip("MCP dependencies not available")
     except Exception as e:
