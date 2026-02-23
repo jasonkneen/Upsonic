@@ -2740,9 +2740,10 @@ class StreamModelExecutionStep(Step):
                 limit_message = ModelRequest(parts=[limit_notification])
                 context.chat_history.append(limit_message)
                 
-                # Reset accumulated_text for new streaming round
+                # Emit separator only if this round produced visible text
+                if accumulated_text.strip():
+                    yield TextDeltaEvent(run_id=run_id, content="\n\n")
                 accumulated_text = ""
-                
                 # Continue streaming with limit notification
                 async for event in self._stream_with_tool_calls(context, task, agent, model, model_params, accumulated_text, first_token_time):
                     yield event
@@ -2792,9 +2793,10 @@ class StreamModelExecutionStep(Step):
             # Add tool results to chat_history (response already added above)
             context.chat_history.append(ModelRequest(parts=tool_results))
             
-            # Reset accumulated_text for new streaming round
+            # Emit separator only if this round produced visible text
+            if accumulated_text.strip():
+                yield TextDeltaEvent(run_id=run_id, content="\n\n")
             accumulated_text = ""
-            
             # Recursively continue streaming with tool results
             async for event in self._stream_with_tool_calls(context, task, agent, model, model_params, accumulated_text, first_token_time):
                 yield event

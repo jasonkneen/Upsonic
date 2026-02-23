@@ -129,6 +129,10 @@ def infer_provider_class(provider: str) -> type[Provider[Any]]:  # noqa: C901
         from .ollama import OllamaProvider
 
         return OllamaProvider
+    elif provider == 'lmstudio':
+        from .lmstudio import LMStudioProvider
+
+        return LMStudioProvider
     elif provider == 'github':
         from .github import GitHubProvider
 
