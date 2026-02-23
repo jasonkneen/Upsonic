@@ -25,7 +25,8 @@ from upsonic.vectordb.config import (
     Mode,
     DistanceMetric,
     HNSWIndexConfig,
-    FlatIndexConfig
+    FlatIndexConfig,
+    PayloadFieldConfig,
 )
 from upsonic.utils.package.exception import (
     VectorDBConnectionError,
@@ -2619,3 +2620,1805 @@ class TestQdrantProviderCLOUD:
             assert all(isinstance(r, VectorSearchResult) for r in results)
             assert all(r.score >= 0.0 for r in results)
             await provider2.disconnect()
+
+
+
+class TestQdrantConfigAttributesIN_MEMORY:
+    """Tests every config attribute of QdrantConfig, ConnectionConfig,
+    HNSWIndexConfig, PayloadFieldConfig, and BaseVectorDBConfig
+    using IN_MEMORY mode."""
+
+    def _make_config(self, **overrides) -> QdrantConfig:
+        import uuid
+        defaults = {
+            "vector_size": 5,
+            "collection_name": f"cfg_test_{uuid.uuid4().hex[:8]}",
+            "connection": ConnectionConfig(mode=Mode.IN_MEMORY),
+            "distance_metric": DistanceMetric.COSINE,
+        }
+        defaults.update(overrides)
+        return QdrantConfig(**defaults)
+
+    def _make_provider(self, config: QdrantConfig) -> QdrantProvider:
+        return QdrantProvider(config)
+
+    # ------------------------------------------------------------------
+    # provider_name / provider_description / provider_id
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_provider_name_custom(self):
+        config = self._make_config(provider_name="MyCustomProvider")
+        provider = self._make_provider(config)
+        assert provider.provider_name == "MyCustomProvider"
+
+    @pytest.mark.asyncio
+    async def test_provider_name_default(self):
+        config = self._make_config()
+        provider = self._make_provider(config)
+        assert provider.provider_name == f"QdrantProvider_{config.collection_name}"
+
+    @pytest.mark.asyncio
+    async def test_provider_description(self):
+        config = self._make_config(provider_description="Test provider for CI")
+        provider = self._make_provider(config)
+        assert provider.provider_description == "Test provider for CI"
+
+    @pytest.mark.asyncio
+    async def test_provider_id_custom(self):
+        config = self._make_config(provider_id="custom-id-123")
+        provider = self._make_provider(config)
+        assert provider.provider_id == "custom-id-123"
+
+    @pytest.mark.asyncio
+    async def test_provider_id_auto_generated(self):
+        config = self._make_config()
+        provider = self._make_provider(config)
+        assert provider.provider_id is not None
+        assert len(provider.provider_id) == 16
+
+    # ------------------------------------------------------------------
+    # default_metadata
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_default_metadata_merged_into_payload(self):
+        config = self._make_config(
+            default_metadata={"source": "unit_test", "version": "1.0"}
+        )
+        provider = self._make_provider(config)
+        await provider.connect()
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=[SAMPLE_VECTORS[0]],
+            payloads=[SAMPLE_PAYLOADS[0]],
+            ids=[SAMPLE_IDS[0]],
+            chunks=[SAMPLE_CHUNKS[0]],
+        )
+        results = await provider.fetch([SAMPLE_IDS[0]])
+        assert len(results) == 1
+        payload = results[0].payload
+        assert "metadata" in payload
+        assert payload["metadata"]["source"] == "unit_test"
+        assert payload["metadata"]["version"] == "1.0"
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_default_metadata_overridden_by_per_record_metadata(self):
+        config = self._make_config(
+            default_metadata={"source": "default", "env": "test"}
+        )
+        provider = self._make_provider(config)
+        await provider.connect()
+        await provider.create_collection()
+        record_payload = {
+            "content": SAMPLE_CHUNKS[0],
+            "metadata": {"source": "override", "extra": "field"},
+        }
+        await provider.upsert(
+            vectors=[SAMPLE_VECTORS[0]],
+            payloads=[record_payload],
+            ids=[SAMPLE_IDS[0]],
+        )
+        results = await provider.fetch([SAMPLE_IDS[0]])
+        payload = results[0].payload
+        assert payload["metadata"]["source"] == "override"
+        assert payload["metadata"]["env"] == "test"
+        assert payload["metadata"]["extra"] == "field"
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_no_default_metadata(self):
+        config = self._make_config()
+        provider = self._make_provider(config)
+        await provider.connect()
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=[SAMPLE_VECTORS[0]],
+            payloads=[{"content": SAMPLE_CHUNKS[0]}],
+            ids=[SAMPLE_IDS[0]],
+        )
+        results = await provider.fetch([SAMPLE_IDS[0]])
+        payload = results[0].payload
+        assert "metadata" not in payload or payload.get("metadata") is None or payload.get("metadata") == {}
+        await provider.disconnect()
+
+    # ------------------------------------------------------------------
+    # default_top_k
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_default_top_k_used_when_not_specified(self):
+        config = self._make_config(default_top_k=2)
+        provider = self._make_provider(config)
+        await provider.connect()
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        results = await provider.search(
+            query_vector=QUERY_VECTOR,
+            similarity_threshold=0.0,
+        )
+        assert len(results) <= 2
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_default_top_k_overridden_by_explicit(self):
+        config = self._make_config(default_top_k=1)
+        provider = self._make_provider(config)
+        await provider.connect()
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        results = await provider.search(
+            query_vector=QUERY_VECTOR,
+            top_k=3,
+            similarity_threshold=0.0,
+        )
+        assert len(results) <= 3
+        assert len(results) > 1
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_default_similarity_threshold_filters_results(self):
+        config = self._make_config(default_similarity_threshold=0.99)
+        provider = self._make_provider(config)
+        await provider.connect()
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        results = await provider.dense_search(
+            query_vector=QUERY_VECTOR,
+            top_k=10,
+        )
+        for r in results:
+            assert r.score >= 0.99
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_default_similarity_threshold_overridden(self):
+        config = self._make_config(default_similarity_threshold=0.99)
+        provider = self._make_provider(config)
+        await provider.connect()
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        strict_results = await provider.dense_search(
+            query_vector=QUERY_VECTOR,
+            top_k=10,
+        )
+        loose_results = await provider.dense_search(
+            query_vector=QUERY_VECTOR,
+            top_k=10,
+            similarity_threshold=0.0,
+        )
+        assert len(loose_results) == 5
+        assert len(loose_results) >= len(strict_results)
+        for r in loose_results:
+            assert isinstance(r, VectorSearchResult)
+            assert r.score is not None
+            assert r.payload is not None
+            assert "content" in r.payload
+            assert r.vector is not None
+            assert len(r.vector) == 5
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_on_disk_payload_true(self):
+        config = self._make_config(on_disk_payload=True)
+        provider = self._make_provider(config)
+        assert provider._config.on_disk_payload is True
+        await provider.connect()
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        results = await provider.fetch(SAMPLE_IDS)
+        assert len(results) == 5
+        for r in results:
+            assert isinstance(r, VectorSearchResult)
+            assert "content" in r.payload
+            assert r.payload["content"] in SAMPLE_CHUNKS
+            assert r.vector is not None
+            assert len(r.vector) == 5
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_on_disk_payload_false(self):
+        config = self._make_config(on_disk_payload=False)
+        provider = self._make_provider(config)
+        assert provider._config.on_disk_payload is False
+        await provider.connect()
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        results = await provider.fetch(SAMPLE_IDS)
+        assert len(results) == 5
+        for r in results:
+            assert isinstance(r, VectorSearchResult)
+            assert "content" in r.payload
+            assert r.payload["content"] in SAMPLE_CHUNKS
+            assert r.vector is not None
+            assert len(r.vector) == 5
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_write_consistency_factor_default(self):
+        config = self._make_config()
+        provider = self._make_provider(config)
+        assert provider._config.write_consistency_factor == 1
+        await provider.connect()
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        count = await provider.get_count()
+        assert count == 5
+        fetched = await provider.fetch(SAMPLE_IDS)
+        assert len(fetched) == 5
+        fetched_contents = {r.payload["content"] for r in fetched}
+        assert fetched_contents == set(SAMPLE_CHUNKS)
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_write_consistency_factor_higher(self):
+        config = self._make_config(write_consistency_factor=2)
+        provider = self._make_provider(config)
+        assert provider._config.write_consistency_factor == 2
+        await provider.connect()
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        count = await provider.get_count()
+        assert count == 5
+        fetched = await provider.fetch(SAMPLE_IDS)
+        assert len(fetched) == 5
+        fetched_contents = {r.payload["content"] for r in fetched}
+        assert fetched_contents == set(SAMPLE_CHUNKS)
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_shard_number(self):
+        config = self._make_config(shard_number=2)
+        provider = self._make_provider(config)
+        assert provider._config.shard_number == 2
+        await provider.connect()
+        await provider.create_collection()
+        assert await provider.collection_exists()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        count = await provider.get_count()
+        assert count == 5
+        results = await provider.dense_search(
+            query_vector=QUERY_VECTOR, top_k=5, similarity_threshold=0.0
+        )
+        assert len(results) == 5
+        for r in results:
+            assert isinstance(r, VectorSearchResult)
+            assert r.score >= 0.0
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_replication_factor(self):
+        config = self._make_config(replication_factor=1)
+        provider = self._make_provider(config)
+        assert provider._config.replication_factor == 1
+        await provider.connect()
+        await provider.create_collection()
+        assert await provider.collection_exists()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        count = await provider.get_count()
+        assert count == 5
+        results = await provider.dense_search(
+            query_vector=QUERY_VECTOR, top_k=5, similarity_threshold=0.0
+        )
+        assert len(results) == 5
+        for r in results:
+            assert isinstance(r, VectorSearchResult)
+            assert r.score >= 0.0
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_quantization_config_scalar(self):
+        config = self._make_config(quantization_config={"type": "scalar"})
+        provider = self._make_provider(config)
+        assert provider._config.quantization_config == {"type": "scalar"}
+        await provider.connect()
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        results = await provider.dense_search(
+            query_vector=QUERY_VECTOR,
+            top_k=5,
+            similarity_threshold=0.0,
+        )
+        assert len(results) == 5
+        for r in results:
+            assert isinstance(r, VectorSearchResult)
+            assert r.score >= 0.0
+            assert "content" in r.payload
+        fetched = await provider.fetch([SAMPLE_IDS[0]])
+        assert len(fetched) == 1
+        assert fetched[0].payload["content"] == SAMPLE_CHUNKS[0]
+        assert fetched[0].payload["category"] == SAMPLE_PAYLOADS[0]["category"]
+        assert fetched[0].payload["author"] == SAMPLE_PAYLOADS[0]["author"]
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_quantization_config_none(self):
+        config = self._make_config(quantization_config=None)
+        provider = self._make_provider(config)
+        assert provider._config.quantization_config is None
+        await provider.connect()
+        await provider.create_collection()
+        assert await provider.collection_exists()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        count = await provider.get_count()
+        assert count == 5
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_recreate_if_exists_replaces_data(self):
+        import uuid
+        name = f"recreate_{uuid.uuid4().hex[:8]}"
+        config1 = self._make_config(collection_name=name, recreate_if_exists=False)
+        p1 = self._make_provider(config1)
+        await p1.connect()
+        await p1.create_collection()
+        await p1.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        count_before = await p1.get_count()
+        assert count_before == 5
+
+        config2 = self._make_config(collection_name=name, recreate_if_exists=True)
+        p2 = self._make_provider(config2)
+        await p2.connect()
+        await p2.create_collection()
+        count_after = await p2.get_count()
+        assert count_after == 0
+        await p2.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_hnsw_index_custom_params(self):
+        config = self._make_config(
+            index=HNSWIndexConfig(m=32, ef_construction=400, ef_search=256)
+        )
+        provider = self._make_provider(config)
+        assert provider._config.index.m == 32
+        assert provider._config.index.ef_construction == 400
+        assert provider._config.index.ef_search == 256
+        assert isinstance(provider._config.index, HNSWIndexConfig)
+        await provider.connect()
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        results = await provider.dense_search(
+            query_vector=QUERY_VECTOR,
+            top_k=5,
+            similarity_threshold=0.0,
+        )
+        assert len(results) == 5
+        scores = [r.score for r in results]
+        assert scores == sorted(scores, reverse=True), "Results must be sorted by score descending"
+        for r in results:
+            assert isinstance(r, VectorSearchResult)
+            assert "content" in r.payload
+            assert r.vector is not None
+            assert len(r.vector) == 5
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_hnsw_ef_search_used_in_dense_search(self):
+        config = self._make_config(
+            index=HNSWIndexConfig(m=16, ef_construction=200, ef_search=64)
+        )
+        provider = self._make_provider(config)
+        assert provider._config.index.ef_search == 64
+        await provider.connect()
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        results = await provider.dense_search(
+            query_vector=QUERY_VECTOR,
+            top_k=5,
+            similarity_threshold=0.0,
+        )
+        assert len(results) == 5
+        scores = [r.score for r in results]
+        assert scores == sorted(scores, reverse=True), "Results must be sorted by score descending"
+        for r in results:
+            assert isinstance(r, VectorSearchResult)
+            assert r.payload["content"] in SAMPLE_CHUNKS
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_flat_index(self):
+        config = self._make_config(index=FlatIndexConfig())
+        provider = self._make_provider(config)
+        assert isinstance(provider._config.index, FlatIndexConfig)
+        await provider.connect()
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        results = await provider.dense_search(
+            query_vector=QUERY_VECTOR,
+            top_k=5,
+            similarity_threshold=0.0,
+        )
+        assert len(results) == 5
+        scores = [r.score for r in results]
+        assert scores == sorted(scores, reverse=True), "Results must be sorted by score descending"
+        fetched_contents = {r.payload["content"] for r in results}
+        assert fetched_contents == set(SAMPLE_CHUNKS)
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_cosine_distance(self):
+        config = self._make_config(distance_metric=DistanceMetric.COSINE)
+        provider = self._make_provider(config)
+        assert provider._config.distance_metric == DistanceMetric.COSINE
+        await provider.connect()
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        results = await provider.dense_search(
+            query_vector=QUERY_VECTOR, top_k=5, similarity_threshold=0.0
+        )
+        assert len(results) == 5
+        for r in results:
+            assert isinstance(r, VectorSearchResult)
+            assert 0.0 <= r.score <= 1.0, f"Cosine score {r.score} out of [0,1] range"
+            assert "content" in r.payload
+        scores = [r.score for r in results]
+        assert scores == sorted(scores, reverse=True)
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_euclidean_distance(self):
+        config = self._make_config(distance_metric=DistanceMetric.EUCLIDEAN)
+        provider = self._make_provider(config)
+        assert provider._config.distance_metric == DistanceMetric.EUCLIDEAN
+        await provider.connect()
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        results = await provider.dense_search(
+            query_vector=QUERY_VECTOR, top_k=5, similarity_threshold=0.0
+        )
+        assert len(results) == 5
+        for r in results:
+            assert isinstance(r, VectorSearchResult)
+            assert r.score is not None
+            assert r.score >= 0.0, "Euclidean distance must be non-negative"
+            assert "content" in r.payload
+        scores = [r.score for r in results]
+        assert scores == sorted(scores), "Euclidean results sorted ascending (closest first)"
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_dot_product_distance(self):
+        config = self._make_config(distance_metric=DistanceMetric.DOT_PRODUCT)
+        provider = self._make_provider(config)
+        assert provider._config.distance_metric == DistanceMetric.DOT_PRODUCT
+        await provider.connect()
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        results = await provider.dense_search(
+            query_vector=QUERY_VECTOR, top_k=5, similarity_threshold=0.0
+        )
+        assert len(results) == 5
+        for r in results:
+            assert isinstance(r, VectorSearchResult)
+            assert r.score is not None
+            assert "content" in r.payload
+        scores = [r.score for r in results]
+        assert scores == sorted(scores, reverse=True)
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_dense_search_disabled_raises(self):
+        config = self._make_config(dense_search_enabled=False)
+        provider = self._make_provider(config)
+        await provider.connect()
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        with pytest.raises(ConfigurationError, match="Dense search is disabled"):
+            await provider.search(query_vector=QUERY_VECTOR, similarity_threshold=0.0)
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_full_text_search_disabled_raises(self):
+        config = self._make_config(full_text_search_enabled=False)
+        provider = self._make_provider(config)
+        await provider.connect()
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        with pytest.raises(ConfigurationError, match="Full-text search is disabled"):
+            await provider.search(query_text="physics", similarity_threshold=0.0)
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_hybrid_search_disabled_raises(self):
+        config = self._make_config(hybrid_search_enabled=False)
+        provider = self._make_provider(config)
+        await provider.connect()
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        with pytest.raises(ConfigurationError, match="Hybrid search is disabled"):
+            await provider.search(
+                query_vector=QUERY_VECTOR,
+                query_text="physics",
+                similarity_threshold=0.0,
+            )
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_dense_search_enabled(self):
+        config = self._make_config(dense_search_enabled=True)
+        provider = self._make_provider(config)
+        assert provider._config.dense_search_enabled is True
+        await provider.connect()
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        results = await provider.search(
+            query_vector=QUERY_VECTOR,
+            top_k=5,
+            similarity_threshold=0.0,
+        )
+        assert len(results) == 5
+        for r in results:
+            assert isinstance(r, VectorSearchResult)
+            assert r.score >= 0.0
+            assert "content" in r.payload
+            assert r.payload["content"] in SAMPLE_CHUNKS
+        scores = [r.score for r in results]
+        assert scores == sorted(scores, reverse=True)
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_get_supported_search_types_all_enabled(self):
+        config = self._make_config(
+            dense_search_enabled=True,
+            full_text_search_enabled=True,
+            hybrid_search_enabled=True,
+        )
+        provider = self._make_provider(config)
+        types = provider.get_supported_search_types()
+        assert "dense" in types
+        assert "full_text" in types
+        assert "hybrid" in types
+
+    @pytest.mark.asyncio
+    async def test_get_supported_search_types_partial(self):
+        config = self._make_config(
+            dense_search_enabled=True,
+            full_text_search_enabled=False,
+            hybrid_search_enabled=False,
+        )
+        provider = self._make_provider(config)
+        types = provider.get_supported_search_types()
+        assert types == ["dense"]
+
+    @pytest.mark.asyncio
+    async def test_get_supported_search_types_none(self):
+        config = self._make_config(
+            dense_search_enabled=False,
+            full_text_search_enabled=False,
+            hybrid_search_enabled=False,
+        )
+        provider = self._make_provider(config)
+        types = provider.get_supported_search_types()
+        assert types == []
+
+    @pytest.mark.asyncio
+    async def test_default_hybrid_alpha(self):
+        config = self._make_config(default_hybrid_alpha=0.8)
+        provider = self._make_provider(config)
+        assert provider._config.default_hybrid_alpha == 0.8
+        await provider.connect()
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        results = await provider.hybrid_search(
+            query_vector=QUERY_VECTOR,
+            query_text="physics",
+            top_k=5,
+            similarity_threshold=0.0,
+        )
+        assert len(results) > 0
+        for r in results:
+            assert isinstance(r, VectorSearchResult)
+            assert r.score is not None
+            assert "content" in r.payload
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_default_fusion_method_weighted(self):
+        config = self._make_config(default_fusion_method="weighted")
+        provider = self._make_provider(config)
+        assert provider._config.default_fusion_method == "weighted"
+        await provider.connect()
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        results = await provider.hybrid_search(
+            query_vector=QUERY_VECTOR,
+            query_text="physics",
+            top_k=5,
+            similarity_threshold=0.0,
+        )
+        assert len(results) > 0
+        for r in results:
+            assert isinstance(r, VectorSearchResult)
+            assert r.score is not None
+            assert "content" in r.payload
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_default_fusion_method_rrf(self):
+        config = self._make_config(default_fusion_method="rrf")
+        provider = self._make_provider(config)
+        assert provider._config.default_fusion_method == "rrf"
+        await provider.connect()
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        results = await provider.hybrid_search(
+            query_vector=QUERY_VECTOR,
+            query_text="physics",
+            top_k=5,
+            similarity_threshold=0.0,
+        )
+        assert len(results) > 0
+        for r in results:
+            assert isinstance(r, VectorSearchResult)
+            assert r.score is not None
+            assert "content" in r.payload
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_hybrid_alpha_override(self):
+        config = self._make_config(default_hybrid_alpha=0.9)
+        provider = self._make_provider(config)
+        await provider.connect()
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        results_default = await provider.hybrid_search(
+            query_vector=QUERY_VECTOR,
+            query_text="physics",
+            top_k=5,
+            similarity_threshold=0.0,
+        )
+        results_overridden = await provider.hybrid_search(
+            query_vector=QUERY_VECTOR,
+            query_text="physics",
+            top_k=5,
+            alpha=0.1,
+            similarity_threshold=0.0,
+        )
+        assert len(results_default) > 0
+        assert len(results_overridden) > 0
+        for r in results_default + results_overridden:
+            assert isinstance(r, VectorSearchResult)
+            assert r.score is not None
+            assert "content" in r.payload
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_fusion_method_override(self):
+        config = self._make_config(default_fusion_method="weighted")
+        provider = self._make_provider(config)
+        await provider.connect()
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        results_weighted = await provider.hybrid_search(
+            query_vector=QUERY_VECTOR,
+            query_text="physics",
+            top_k=5,
+            similarity_threshold=0.0,
+        )
+        results_rrf = await provider.hybrid_search(
+            query_vector=QUERY_VECTOR,
+            query_text="physics",
+            top_k=5,
+            fusion_method="rrf",
+            similarity_threshold=0.0,
+        )
+        assert len(results_weighted) > 0
+        assert len(results_rrf) > 0
+        for r in results_weighted + results_rrf:
+            assert isinstance(r, VectorSearchResult)
+            assert r.score is not None
+            assert "content" in r.payload
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_indexed_fields_creates_indexes(self):
+        config = self._make_config(
+            indexed_fields=["content", "document_name", "document_id", "content_id"]
+        )
+        provider = self._make_provider(config)
+        await provider.connect()
+        await provider.create_collection()
+        payloads_with_fields = [
+            {**p, "document_name": "doc_A", "document_id": "id_A"}
+            for p in SAMPLE_PAYLOADS
+        ]
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=payloads_with_fields,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        ft_results = await provider.full_text_search(
+            query_text="relativity", top_k=5, similarity_threshold=0.0
+        )
+        assert len(ft_results) > 0
+        for r in ft_results:
+            assert isinstance(r, VectorSearchResult)
+            assert "relativity" in r.payload["content"].lower()
+        fetched = await provider.fetch(SAMPLE_IDS)
+        assert len(fetched) == 5
+        for f in fetched:
+            assert f.payload["document_name"] == "doc_A"
+            assert f.payload["document_id"] == "id_A"
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_indexed_fields_with_metadata_prefix(self):
+        config = self._make_config(
+            indexed_fields=["content", "metadata.env"],
+            default_metadata={"env": "staging"},
+        )
+        provider = self._make_provider(config)
+        await provider.connect()
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        fetched = await provider.fetch(SAMPLE_IDS)
+        assert len(fetched) == 5
+        for f in fetched:
+            assert f.payload["metadata"]["env"] == "staging"
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_payload_field_configs_keyword(self):
+        config = self._make_config(
+            payload_field_configs=[
+                PayloadFieldConfig(field_name="document_name", field_type="keyword", indexed=True),
+            ]
+        )
+        provider = self._make_provider(config)
+        await provider.connect()
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=[SAMPLE_VECTORS[0]],
+            payloads=[{**SAMPLE_PAYLOADS[0], "document_name": "test_doc"}],
+            ids=[SAMPLE_IDS[0]],
+        )
+        results = await provider.fetch([SAMPLE_IDS[0]])
+        assert results[0].payload["document_name"] == "test_doc"
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_payload_field_configs_text(self):
+        config = self._make_config(
+            payload_field_configs=[
+                PayloadFieldConfig(field_name="content", field_type="text", indexed=True),
+            ]
+        )
+        provider = self._make_provider(config)
+        await provider.connect()
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        results = await provider.full_text_search(
+            query_text="relativity", top_k=5, similarity_threshold=0.0
+        )
+        assert len(results) > 0
+        for r in results:
+            assert isinstance(r, VectorSearchResult)
+            assert "relativity" in r.payload["content"].lower()
+        no_results = await provider.full_text_search(
+            query_text="xyznonexistent", top_k=5, similarity_threshold=0.0
+        )
+        assert len(no_results) == 0
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_payload_field_configs_integer(self):
+        config = self._make_config(
+            payload_field_configs=[
+                PayloadFieldConfig(field_name="year", field_type="integer", indexed=True),
+            ]
+        )
+        provider = self._make_provider(config)
+        await provider.connect()
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        results = await provider.dense_search(
+            query_vector=QUERY_VECTOR,
+            top_k=5,
+            similarity_threshold=0.0,
+            filter={"year": {"$gte": 1800}},
+        )
+        for r in results:
+            assert r.payload.get("year", 0) >= 1800
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_payload_field_configs_float(self):
+        config = self._make_config(
+            payload_field_configs=[
+                PayloadFieldConfig(field_name="score_val", field_type="float", indexed=True),
+            ]
+        )
+        provider = self._make_provider(config)
+        await provider.connect()
+        await provider.create_collection()
+        payloads = [{**p, "score_val": 0.5 + i * 0.1} for i, p in enumerate(SAMPLE_PAYLOADS)]
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=payloads,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        results = await provider.fetch([SAMPLE_IDS[0]])
+        assert results[0].payload["score_val"] == pytest.approx(0.5, abs=0.01)
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_payload_field_configs_boolean(self):
+        config = self._make_config(
+            payload_field_configs=[
+                PayloadFieldConfig(field_name="is_verified", field_type="boolean", indexed=True),
+            ]
+        )
+        provider = self._make_provider(config)
+        await provider.connect()
+        await provider.create_collection()
+        payloads = [{**p, "is_verified": i % 2 == 0} for i, p in enumerate(SAMPLE_PAYLOADS)]
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=payloads,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        results = await provider.fetch([SAMPLE_IDS[0]])
+        assert results[0].payload["is_verified"] is True
+        results2 = await provider.fetch([SAMPLE_IDS[1]])
+        assert results2[0].payload["is_verified"] is False
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_payload_field_configs_multiple_types(self):
+        config = self._make_config(
+            payload_field_configs=[
+                PayloadFieldConfig(field_name="content", field_type="text", indexed=True),
+                PayloadFieldConfig(field_name="document_name", field_type="keyword", indexed=True),
+                PayloadFieldConfig(field_name="year", field_type="integer", indexed=True),
+                PayloadFieldConfig(field_name="is_verified", field_type="boolean", indexed=True),
+            ]
+        )
+        provider = self._make_provider(config)
+        await provider.connect()
+        await provider.create_collection()
+        payloads = [
+            {**p, "document_name": f"doc_{i}", "is_verified": True}
+            for i, p in enumerate(SAMPLE_PAYLOADS)
+        ]
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=payloads,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        ft_results = await provider.full_text_search(
+            query_text="relativity", top_k=5, similarity_threshold=0.0
+        )
+        assert len(ft_results) > 0
+        for r in ft_results:
+            assert "relativity" in r.payload["content"].lower()
+
+        dense_results = await provider.dense_search(
+            query_vector=QUERY_VECTOR,
+            top_k=5,
+            similarity_threshold=0.0,
+        )
+        assert len(dense_results) == 5
+        for r in dense_results:
+            assert isinstance(r, VectorSearchResult)
+            assert r.payload["is_verified"] is True
+            assert r.payload["document_name"].startswith("doc_")
+
+        fetched = await provider.fetch(SAMPLE_IDS)
+        years_found = {f.payload.get("year") for f in fetched}
+        expected_years = {p.get("year") for p in SAMPLE_PAYLOADS}
+        assert years_found == expected_years
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_payload_field_configs_non_indexed_field(self):
+        config = self._make_config(
+            payload_field_configs=[
+                PayloadFieldConfig(field_name="content", field_type="text", indexed=True),
+                PayloadFieldConfig(field_name="internal_notes", field_type="keyword", indexed=False),
+            ]
+        )
+        provider = self._make_provider(config)
+        await provider.connect()
+        await provider.create_collection()
+        payloads = [{**p, "internal_notes": "skip_indexing"} for p in SAMPLE_PAYLOADS]
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=payloads,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        results = await provider.fetch([SAMPLE_IDS[0]])
+        assert results[0].payload["internal_notes"] == "skip_indexing"
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_payload_field_configs_with_custom_params(self):
+        from qdrant_client.http import models as qdrant_models
+        config = self._make_config(
+            payload_field_configs=[
+                PayloadFieldConfig(
+                    field_name="content",
+                    field_type="text",
+                    indexed=True,
+                    params={"tokenizer": qdrant_models.TokenizerType.WHITESPACE, "lowercase": False},
+                ),
+            ]
+        )
+        provider = self._make_provider(config)
+        await provider.connect()
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        results = await provider.full_text_search(
+            query_text="relativity", top_k=5, similarity_threshold=0.0
+        )
+        assert len(results) > 0
+        for r in results:
+            assert isinstance(r, VectorSearchResult)
+            assert "relativity" in r.payload["content"].lower()
+        fetched = await provider.fetch(SAMPLE_IDS)
+        assert len(fetched) == 5
+        fetched_contents = {f.payload["content"] for f in fetched}
+        assert fetched_contents == set(SAMPLE_CHUNKS)
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_auto_generate_content_id(self):
+        config = self._make_config(auto_generate_content_id=True)
+        provider = self._make_provider(config)
+        await provider.connect()
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=[SAMPLE_VECTORS[0]],
+            payloads=[{"content": "unique content for id gen"}],
+            ids=[SAMPLE_IDS[0]],
+        )
+        results = await provider.fetch([SAMPLE_IDS[0]])
+        assert "content_id" in results[0].payload
+        assert len(results[0].payload["content_id"]) == 32
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_in_memory_connection_mode(self):
+        config = self._make_config()
+        assert config.connection.mode == Mode.IN_MEMORY
+        provider = self._make_provider(config)
+        await provider.connect()
+        assert await provider.is_ready()
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_all_config_attributes_together(self):
+        config = self._make_config(
+            distance_metric=DistanceMetric.COSINE,
+            recreate_if_exists=False,
+            index=HNSWIndexConfig(m=32, ef_construction=256, ef_search=128),
+            on_disk_payload=True,
+            write_consistency_factor=1,
+            shard_number=1,
+            replication_factor=1,
+            quantization_config={"type": "scalar"},
+            default_top_k=3,
+            default_similarity_threshold=0.0,
+            dense_search_enabled=True,
+            full_text_search_enabled=True,
+            hybrid_search_enabled=True,
+            default_hybrid_alpha=0.6,
+            default_fusion_method="weighted",
+            default_metadata={"framework": "upsonic", "env": "test"},
+            indexed_fields=None,
+            payload_field_configs=[
+                PayloadFieldConfig(field_name="content", field_type="text", indexed=True),
+                PayloadFieldConfig(field_name="document_name", field_type="keyword", indexed=True),
+                PayloadFieldConfig(field_name="year", field_type="integer", indexed=True),
+            ],
+            provider_name="AllAttrsProvider",
+            provider_description="Full config test",
+            provider_id="all-attrs-001",
+        )
+        provider = self._make_provider(config)
+        assert provider.provider_name == "AllAttrsProvider"
+        assert provider.provider_description == "Full config test"
+        assert provider.provider_id == "all-attrs-001"
+        assert isinstance(provider._config.index, HNSWIndexConfig)
+        assert provider._config.index.m == 32
+        assert provider._config.distance_metric == DistanceMetric.COSINE
+        assert provider._config.default_top_k == 3
+        assert provider._config.on_disk_payload is True
+
+        await provider.connect()
+        await provider.create_collection()
+        payloads = [
+            {**p, "document_name": f"doc_{i}"}
+            for i, p in enumerate(SAMPLE_PAYLOADS)
+        ]
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=payloads,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        count = await provider.get_count()
+        assert count == 5
+
+        dense_results = await provider.dense_search(
+            query_vector=QUERY_VECTOR, top_k=3, similarity_threshold=0.0
+        )
+        assert len(dense_results) == 3
+        scores = [r.score for r in dense_results]
+        assert scores == sorted(scores, reverse=True)
+        for r in dense_results:
+            assert isinstance(r, VectorSearchResult)
+            assert 0.0 <= r.score <= 1.0
+            assert "content" in r.payload
+            assert r.vector is not None
+            assert len(r.vector) == 5
+
+        ft_results = await provider.full_text_search(
+            query_text="physics", top_k=3, similarity_threshold=0.0
+        )
+        assert len(ft_results) > 0
+        for r in ft_results:
+            assert "physics" in r.payload["content"].lower()
+
+        hybrid_results = await provider.hybrid_search(
+            query_vector=QUERY_VECTOR,
+            query_text="physics",
+            top_k=3,
+            similarity_threshold=0.0,
+        )
+        assert len(hybrid_results) > 0
+        for r in hybrid_results:
+            assert isinstance(r, VectorSearchResult)
+            assert r.score is not None
+
+        fetched = await provider.fetch(SAMPLE_IDS)
+        assert len(fetched) == 5
+        for f in fetched:
+            assert f.payload["metadata"]["framework"] == "upsonic"
+            assert f.payload["metadata"]["env"] == "test"
+        fetched_doc_names = {f.payload["document_name"] for f in fetched}
+        assert fetched_doc_names == {f"doc_{i}" for i in range(5)}
+
+        types = provider.get_supported_search_types()
+        assert set(types) == {"dense", "full_text", "hybrid"}
+
+        await provider.disconnect()
+
+
+class TestQdrantConfigAttributesCLOUD:
+    """Tests every config attribute of QdrantConfig against a real
+    Qdrant Cloud instance.  Skipped automatically when credentials
+    are not available."""
+
+    @staticmethod
+    def _get_cloud_creds() -> tuple:
+        api_key = os.getenv("QDRANT_CLOUD_API_KEY")
+        url = os.getenv("QDRANT_CLOUD_URL")
+        return api_key, url
+
+    def _make_config(self, **overrides) -> Optional[QdrantConfig]:
+        import uuid
+        api_key, url = self._get_cloud_creds()
+        if not api_key or not url:
+            return None
+        from pydantic import SecretStr
+        defaults = {
+            "vector_size": 5,
+            "collection_name": f"cfg_cloud_{uuid.uuid4().hex[:8]}",
+            "connection": ConnectionConfig(
+                mode=Mode.CLOUD,
+                url=url,
+                api_key=SecretStr(api_key),
+            ),
+            "distance_metric": DistanceMetric.COSINE,
+        }
+        defaults.update(overrides)
+        return QdrantConfig(**defaults)
+
+    def _skip_if_no_creds(self, config: Optional[QdrantConfig]):
+        if config is None:
+            pytest.skip("Qdrant Cloud credentials not available")
+
+    async def _connect(self, provider: QdrantProvider):
+        try:
+            await provider.connect()
+        except VectorDBConnectionError:
+            pytest.skip("Qdrant Cloud connection failed")
+
+    @pytest.mark.asyncio
+    async def test_provider_name_custom(self):
+        config = self._make_config(provider_name="CloudProvider")
+        self._skip_if_no_creds(config)
+        provider = QdrantProvider(config)
+        assert provider.provider_name == "CloudProvider"
+
+    @pytest.mark.asyncio
+    async def test_provider_id_auto_generated(self):
+        config = self._make_config()
+        self._skip_if_no_creds(config)
+        provider = QdrantProvider(config)
+        assert provider.provider_id is not None
+        assert len(provider.provider_id) == 16
+
+    @pytest.mark.asyncio
+    async def test_default_metadata_cloud(self):
+        config = self._make_config(
+            default_metadata={"cloud_source": "ci", "region": "eu"}
+        )
+        self._skip_if_no_creds(config)
+        provider = QdrantProvider(config)
+        await self._connect(provider)
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=[SAMPLE_VECTORS[0]],
+            payloads=[SAMPLE_PAYLOADS[0]],
+            ids=[SAMPLE_IDS[0]],
+            chunks=[SAMPLE_CHUNKS[0]],
+        )
+        results = await provider.fetch([SAMPLE_IDS[0]])
+        assert results[0].payload["metadata"]["cloud_source"] == "ci"
+        assert results[0].payload["metadata"]["region"] == "eu"
+        await provider.delete_collection()
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_payload_field_configs_text_cloud(self):
+        config = self._make_config(
+            payload_field_configs=[
+                PayloadFieldConfig(field_name="content", field_type="text", indexed=True),
+            ]
+        )
+        self._skip_if_no_creds(config)
+        provider = QdrantProvider(config)
+        await self._connect(provider)
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        results = await provider.full_text_search(
+            query_text="relativity", top_k=5, similarity_threshold=0.0
+        )
+        assert len(results) > 0
+        for r in results:
+            assert isinstance(r, VectorSearchResult)
+            assert "relativity" in r.payload["content"].lower()
+        no_match = await provider.full_text_search(
+            query_text="xyznonexistent", top_k=5, similarity_threshold=0.0
+        )
+        assert len(no_match) == 0
+        await provider.delete_collection()
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_payload_field_configs_keyword_cloud(self):
+        config = self._make_config(
+            payload_field_configs=[
+                PayloadFieldConfig(field_name="category", field_type="keyword", indexed=True),
+            ]
+        )
+        self._skip_if_no_creds(config)
+        provider = QdrantProvider(config)
+        await self._connect(provider)
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        results = await provider.dense_search(
+            query_vector=QUERY_VECTOR,
+            top_k=5,
+            similarity_threshold=0.0,
+            filter={"category": "science"},
+        )
+        assert len(results) > 0
+        for r in results:
+            assert r.payload["category"] == "science"
+        await provider.delete_collection()
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_payload_field_configs_integer_cloud(self):
+        config = self._make_config(
+            payload_field_configs=[
+                PayloadFieldConfig(field_name="year", field_type="integer", indexed=True),
+            ]
+        )
+        self._skip_if_no_creds(config)
+        provider = QdrantProvider(config)
+        await self._connect(provider)
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        results = await provider.dense_search(
+            query_vector=QUERY_VECTOR,
+            top_k=5,
+            similarity_threshold=0.0,
+            filter={"year": {"$gte": 1800}},
+        )
+        for r in results:
+            assert r.payload.get("year", 0) >= 1800
+        await provider.delete_collection()
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_payload_field_configs_multiple_cloud(self):
+        config = self._make_config(
+            payload_field_configs=[
+                PayloadFieldConfig(field_name="content", field_type="text", indexed=True),
+                PayloadFieldConfig(field_name="category", field_type="keyword", indexed=True),
+                PayloadFieldConfig(field_name="year", field_type="integer", indexed=True),
+                PayloadFieldConfig(field_name="document_name", field_type="keyword", indexed=True),
+            ]
+        )
+        self._skip_if_no_creds(config)
+        provider = QdrantProvider(config)
+        await self._connect(provider)
+        await provider.create_collection()
+        payloads = [
+            {**p, "document_name": f"doc_{i}"}
+            for i, p in enumerate(SAMPLE_PAYLOADS)
+        ]
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=payloads,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        ft_results = await provider.full_text_search(
+            query_text="physics", top_k=5, similarity_threshold=0.0
+        )
+        assert len(ft_results) > 0
+        for r in ft_results:
+            assert isinstance(r, VectorSearchResult)
+            assert "physics" in r.payload["content"].lower()
+
+        filtered = await provider.dense_search(
+            query_vector=QUERY_VECTOR,
+            top_k=5,
+            similarity_threshold=0.0,
+            filter={"category": "science"},
+        )
+        assert len(filtered) == 2
+        for r in filtered:
+            assert isinstance(r, VectorSearchResult)
+            assert r.payload["category"] == "science"
+            assert r.payload["author"] in ("Einstein", "Newton")
+
+        fetched = await provider.fetch(SAMPLE_IDS)
+        assert len(fetched) == 5
+        fetched_doc_names = {f.payload["document_name"] for f in fetched}
+        assert fetched_doc_names == {f"doc_{i}" for i in range(5)}
+        await provider.delete_collection()
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_indexed_fields_cloud(self):
+        config = self._make_config(
+            indexed_fields=["content", "document_name", "document_id"]
+        )
+        self._skip_if_no_creds(config)
+        provider = QdrantProvider(config)
+        await self._connect(provider)
+        await provider.create_collection()
+        payloads = [
+            {**p, "document_name": "cloud_doc", "document_id": "cid_1"}
+            for p in SAMPLE_PAYLOADS
+        ]
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=payloads,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        ft_results = await provider.full_text_search(
+            query_text="physics", top_k=5, similarity_threshold=0.0
+        )
+        assert len(ft_results) > 0
+        for r in ft_results:
+            assert isinstance(r, VectorSearchResult)
+            assert "physics" in r.payload["content"].lower()
+        fetched = await provider.fetch(SAMPLE_IDS)
+        assert len(fetched) == 5
+        for f in fetched:
+            assert f.payload["document_name"] == "cloud_doc"
+            assert f.payload["document_id"] == "cid_1"
+        await provider.delete_collection()
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_dense_search_disabled_cloud(self):
+        config = self._make_config(dense_search_enabled=False)
+        self._skip_if_no_creds(config)
+        provider = QdrantProvider(config)
+        await self._connect(provider)
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        with pytest.raises(ConfigurationError):
+            await provider.search(query_vector=QUERY_VECTOR, similarity_threshold=0.0)
+        await provider.delete_collection()
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_full_text_search_disabled_cloud(self):
+        config = self._make_config(full_text_search_enabled=False)
+        self._skip_if_no_creds(config)
+        provider = QdrantProvider(config)
+        await self._connect(provider)
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        with pytest.raises(ConfigurationError):
+            await provider.search(query_text="physics", similarity_threshold=0.0)
+        await provider.delete_collection()
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_default_top_k_cloud(self):
+        config = self._make_config(default_top_k=2)
+        self._skip_if_no_creds(config)
+        provider = QdrantProvider(config)
+        assert provider._config.default_top_k == 2
+        await self._connect(provider)
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        results = await provider.search(
+            query_vector=QUERY_VECTOR, similarity_threshold=0.0
+        )
+        assert len(results) == 2
+        for r in results:
+            assert isinstance(r, VectorSearchResult)
+            assert r.score >= 0.0
+            assert "content" in r.payload
+        override_results = await provider.search(
+            query_vector=QUERY_VECTOR, top_k=5, similarity_threshold=0.0
+        )
+        assert len(override_results) == 5
+        assert len(override_results) > len(results)
+        await provider.delete_collection()
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_default_similarity_threshold_cloud(self):
+        config = self._make_config(default_similarity_threshold=0.99)
+        self._skip_if_no_creds(config)
+        provider = QdrantProvider(config)
+        assert provider._config.default_similarity_threshold == 0.99
+        await self._connect(provider)
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        strict_results = await provider.dense_search(
+            query_vector=QUERY_VECTOR, top_k=10
+        )
+        for r in strict_results:
+            assert r.score >= 0.99
+        loose_results = await provider.dense_search(
+            query_vector=QUERY_VECTOR, top_k=10, similarity_threshold=0.0
+        )
+        assert len(loose_results) == 5
+        assert len(loose_results) >= len(strict_results)
+        for r in loose_results:
+            assert isinstance(r, VectorSearchResult)
+            assert r.score is not None
+        await provider.delete_collection()
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_quantization_config_cloud(self):
+        config = self._make_config(quantization_config={"type": "scalar"})
+        self._skip_if_no_creds(config)
+        provider = QdrantProvider(config)
+        assert provider._config.quantization_config == {"type": "scalar"}
+        await self._connect(provider)
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        results = await provider.dense_search(
+            query_vector=QUERY_VECTOR, top_k=5, similarity_threshold=0.0
+        )
+        assert len(results) == 5
+        for r in results:
+            assert isinstance(r, VectorSearchResult)
+            assert r.score >= 0.0
+            assert "content" in r.payload
+            assert r.payload["content"] in SAMPLE_CHUNKS
+        scores = [r.score for r in results]
+        assert scores == sorted(scores, reverse=True)
+        await provider.delete_collection()
+        await provider.disconnect()
+
+
+    @pytest.mark.asyncio
+    async def test_hybrid_alpha_and_fusion_cloud(self):
+        config = self._make_config(
+            default_hybrid_alpha=0.7,
+            default_fusion_method="weighted",
+            payload_field_configs=[
+                PayloadFieldConfig(field_name="content", field_type="text", indexed=True),
+            ],
+        )
+        self._skip_if_no_creds(config)
+        provider = QdrantProvider(config)
+        assert provider._config.default_hybrid_alpha == 0.7
+        assert provider._config.default_fusion_method == "weighted"
+        await self._connect(provider)
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        results = await provider.hybrid_search(
+            query_vector=QUERY_VECTOR,
+            query_text="physics",
+            top_k=5,
+            similarity_threshold=0.0,
+        )
+        assert len(results) > 0
+        for r in results:
+            assert isinstance(r, VectorSearchResult)
+            assert r.score is not None
+            assert "content" in r.payload
+        await provider.delete_collection()
+        await provider.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_hybrid_rrf_cloud(self):
+        config = self._make_config(
+            default_fusion_method="rrf",
+            payload_field_configs=[
+                PayloadFieldConfig(field_name="content", field_type="text", indexed=True),
+            ],
+        )
+        self._skip_if_no_creds(config)
+        provider = QdrantProvider(config)
+        assert provider._config.default_fusion_method == "rrf"
+        await self._connect(provider)
+        await provider.create_collection()
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=SAMPLE_PAYLOADS,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        results = await provider.hybrid_search(
+            query_vector=QUERY_VECTOR,
+            query_text="physics",
+            top_k=5,
+            similarity_threshold=0.0,
+        )
+        assert len(results) > 0
+        for r in results:
+            assert isinstance(r, VectorSearchResult)
+            assert r.score is not None
+            assert "content" in r.payload
+        await provider.delete_collection()
+        await provider.disconnect()
+
+
+    @pytest.mark.asyncio
+    async def test_all_config_attributes_cloud(self):
+        config = self._make_config(
+            distance_metric=DistanceMetric.COSINE,
+            recreate_if_exists=False,
+            index=HNSWIndexConfig(m=16, ef_construction=200, ef_search=128),
+            on_disk_payload=True,
+            write_consistency_factor=1,
+            shard_number=1,
+            replication_factor=1,
+            quantization_config={"type": "scalar"},
+            default_top_k=3,
+            default_similarity_threshold=0.0,
+            dense_search_enabled=True,
+            full_text_search_enabled=True,
+            hybrid_search_enabled=True,
+            default_hybrid_alpha=0.6,
+            default_fusion_method="weighted",
+            default_metadata={"cloud_env": "ci"},
+            payload_field_configs=[
+                PayloadFieldConfig(field_name="content", field_type="text", indexed=True),
+                PayloadFieldConfig(field_name="document_name", field_type="keyword", indexed=True),
+                PayloadFieldConfig(field_name="year", field_type="integer", indexed=True),
+                PayloadFieldConfig(field_name="category", field_type="keyword", indexed=True),
+            ],
+            provider_name="AllAttrsCloudProvider",
+            provider_description="Full config cloud test",
+            provider_id="all-attrs-cloud-001",
+        )
+        self._skip_if_no_creds(config)
+        provider = QdrantProvider(config)
+        assert provider.provider_name == "AllAttrsCloudProvider"
+        assert provider.provider_description == "Full config cloud test"
+        assert provider.provider_id == "all-attrs-cloud-001"
+        assert isinstance(provider._config.index, HNSWIndexConfig)
+        assert provider._config.index.m == 16
+        assert provider._config.distance_metric == DistanceMetric.COSINE
+        assert provider._config.default_top_k == 3
+        assert provider._config.on_disk_payload is True
+
+        await self._connect(provider)
+        await provider.create_collection()
+        payloads = [
+            {**p, "document_name": f"cloud_doc_{i}"}
+            for i, p in enumerate(SAMPLE_PAYLOADS)
+        ]
+        await provider.upsert(
+            vectors=SAMPLE_VECTORS,
+            payloads=payloads,
+            ids=SAMPLE_IDS,
+            chunks=SAMPLE_CHUNKS,
+        )
+        count = await provider.get_count()
+        assert count == 5
+
+        dense_results = await provider.dense_search(
+            query_vector=QUERY_VECTOR, top_k=3, similarity_threshold=0.0
+        )
+        assert len(dense_results) == 3
+        scores = [r.score for r in dense_results]
+        assert scores == sorted(scores, reverse=True)
+        for r in dense_results:
+            assert isinstance(r, VectorSearchResult)
+            assert 0.0 <= r.score <= 1.0
+            assert "content" in r.payload
+            assert r.vector is not None
+            assert len(r.vector) == 5
+
+        ft_results = await provider.full_text_search(
+            query_text="physics", top_k=5, similarity_threshold=0.0
+        )
+        assert len(ft_results) > 0
+        for r in ft_results:
+            assert isinstance(r, VectorSearchResult)
+            assert "physics" in r.payload["content"].lower()
+
+        hybrid_results = await provider.hybrid_search(
+            query_vector=QUERY_VECTOR,
+            query_text="physics",
+            top_k=3,
+            similarity_threshold=0.0,
+        )
+        assert len(hybrid_results) > 0
+        for r in hybrid_results:
+            assert isinstance(r, VectorSearchResult)
+            assert r.score is not None
+
+        fetched = await provider.fetch(SAMPLE_IDS)
+        assert len(fetched) == 5
+        for f in fetched:
+            assert f.payload["metadata"]["cloud_env"] == "ci"
+        fetched_doc_names = {f.payload["document_name"] for f in fetched}
+        assert fetched_doc_names == {f"cloud_doc_{i}" for i in range(5)}
+
+        science_filtered = await provider.dense_search(
+            query_vector=QUERY_VECTOR,
+            top_k=5,
+            similarity_threshold=0.0,
+            filter={"category": "science"},
+        )
+        assert len(science_filtered) == 2
+        for r in science_filtered:
+            assert r.payload["category"] == "science"
+
+        types = provider.get_supported_search_types()
+        assert set(types) == {"dense", "full_text", "hybrid"}
+
+        await provider.delete_collection()
+        await provider.disconnect()

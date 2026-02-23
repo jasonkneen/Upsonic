@@ -103,9 +103,7 @@ class QdrantProvider(BaseVectorDBProvider):
         self.provider_description = config.provider_description
         self.provider_id = config.provider_id or self._generate_provider_id()
     
-    # ============================================================================
-    # Provider Metadata
-    # ============================================================================
+
     
     def _generate_provider_id(self) -> str:
         """Generates a unique provider ID based on connection details and collection."""
@@ -120,9 +118,7 @@ class QdrantProvider(BaseVectorDBProvider):
         import hashlib
         return hashlib.md5(identifier.encode()).hexdigest()[:16]
     
-    # ============================================================================
-    # ID Normalization
-    # ============================================================================
+
     
     def _normalize_id(self, id_value: Union[str, int]) -> Union[str, int]:
         """
@@ -158,9 +154,7 @@ class QdrantProvider(BaseVectorDBProvider):
         cleaned_content = content.replace("\x00", "\ufffd")
         return hashlib.md5(cleaned_content.encode()).hexdigest()
     
-    # ============================================================================
-    # Connection Management
-    # ============================================================================
+
     
     async def connect(self) -> None:
         """
@@ -304,9 +298,7 @@ class QdrantProvider(BaseVectorDBProvider):
         """
         return self._run_async_from_sync(self.is_ready())
     
-    # ============================================================================
-    # Collection Management
-    # ============================================================================
+
     
     async def create_collection(self) -> None:
         """
@@ -446,8 +438,10 @@ class QdrantProvider(BaseVectorDBProvider):
             if e.status_code == 404:
                 return False
             raise VectorDBError(f"API error while checking for collection '{collection_name}': {e}") from e
-        except Exception:
-            return False
+        except Exception as e:
+            if "not found" in str(e).lower() or "doesn't exist" in str(e).lower():
+                return False
+            raise VectorDBError(f"Error checking collection '{collection_name}': {e}") from e
     
     def collection_exists_sync(self) -> bool:
         """
@@ -455,9 +449,7 @@ class QdrantProvider(BaseVectorDBProvider):
         """
         return self._run_async_from_sync(self.collection_exists())
     
-    # ============================================================================
-    # Payload & Index Management
-    # ============================================================================
+
     
     def _build_payload(
         self,
@@ -532,15 +524,15 @@ class QdrantProvider(BaseVectorDBProvider):
         if self._config.payload_field_configs:
             debug_log(f"Creating indexes from payload_field_configs: {len(self._config.payload_field_configs)} fields", context="QdrantVectorDB")
             
+            failed_fields: List[tuple[str, Exception]] = []
             for field_config in self._config.payload_field_configs:
                 if not field_config.indexed:
-                    continue  # Skip fields that are not marked for indexing
+                    continue
                 
+                field_schema = self._get_qdrant_schema(field_config.field_type, field_config.params)
+                
+                debug_log(f"Creating index for field '{field_config.field_name}' (type: {field_config.field_type})...", context="QdrantVectorDB")
                 try:
-                    # Map field_type to Qdrant schema
-                    field_schema = self._get_qdrant_schema(field_config.field_type, field_config.params)
-                    
-                    debug_log(f"Creating index for field '{field_config.field_name}' (type: {field_config.field_type})...", context="QdrantVectorDB")
                     await self._client.create_payload_index(
                         collection_name=collection_name,
                         field_name=field_config.field_name,
@@ -548,7 +540,11 @@ class QdrantProvider(BaseVectorDBProvider):
                         wait=True
                     )
                 except Exception as e:
-                    warning_log(f"Failed to create index for field '{field_config.field_name}': {e}", context="QdrantVectorDB")
+                    failed_fields.append((field_config.field_name, e))
+            
+            if failed_fields:
+                error_details = "; ".join(f"'{name}': {err}" for name, err in failed_fields)
+                raise VectorDBError(f"Failed to create indexes for {len(failed_fields)} field(s): {error_details}")
             
             info_log("Field indexes created successfully from payload_field_configs.", context="QdrantVectorDB")
             return
@@ -557,27 +553,24 @@ class QdrantProvider(BaseVectorDBProvider):
         if self._config.indexed_fields:
             debug_log(f"Creating indexes for fields: {self._config.indexed_fields}", context="QdrantVectorDB")
             
-            # Default field type mapping
             field_type_map = {
-                'content': models.TextIndexParams(type='text'),
+                'content': models.TextIndexParams(type='text', tokenizer=models.TokenizerType.WORD, min_token_len=2, max_token_len=20, lowercase=True),
                 'document_name': models.KeywordIndexParams(type='keyword'),
                 'document_id': models.KeywordIndexParams(type='keyword'),
                 'content_id': models.KeywordIndexParams(type='keyword'),
             }
             
+            failed_fields: List[tuple[str, Exception]] = []
             for field_name in self._config.indexed_fields:
+                if field_name in field_type_map:
+                    field_schema = field_type_map[field_name]
+                elif field_name.startswith('metadata.'):
+                    field_schema = models.KeywordIndexParams(type='keyword')
+                else:
+                    field_schema = models.KeywordIndexParams(type='keyword')
+                
+                debug_log(f"Creating index for field '{field_name}'...", context="QdrantVectorDB")
                 try:
-                    # Determine schema type
-                    if field_name in field_type_map:
-                        field_schema = field_type_map[field_name]
-                    elif field_name.startswith('metadata.'):
-                        # Default to keyword for metadata fields
-                        field_schema = models.KeywordIndexParams(type='keyword')
-                    else:
-                        # Default to keyword for unknown fields
-                        field_schema = models.KeywordIndexParams(type='keyword')
-                    
-                    debug_log(f"Creating index for field '{field_name}'...", context="QdrantVectorDB")
                     await self._client.create_payload_index(
                         collection_name=collection_name,
                         field_name=field_name,
@@ -585,12 +578,15 @@ class QdrantProvider(BaseVectorDBProvider):
                         wait=True
                     )
                 except Exception as e:
-                    warning_log(f"Failed to create index for field '{field_name}': {e}", context="QdrantVectorDB")
+                    failed_fields.append((field_name, e))
+            
+            if failed_fields:
+                error_details = "; ".join(f"'{name}': {err}" for name, err in failed_fields)
+                raise VectorDBError(f"Failed to create indexes for {len(failed_fields)} field(s): {error_details}")
             
             info_log("Field indexes created successfully from indexed_fields.", context="QdrantVectorDB")
             return
         
-        # No indexing configured
         debug_log("No indexed_fields or payload_field_configs specified, skipping index creation.", context="QdrantVectorDB")
     
     def _get_qdrant_schema(self, field_type: str, params: Optional[Dict[str, Any]] = None):
@@ -605,7 +601,10 @@ class QdrantProvider(BaseVectorDBProvider):
             Qdrant schema object
         """
         if field_type == 'text':
-            return models.TextIndexParams(type='text', **params) if params else models.TextIndexParams(type='text')
+            default_text_params: Dict[str, Any] = {"tokenizer": models.TokenizerType.WORD, "min_token_len": 2, "max_token_len": 20, "lowercase": True}
+            if params:
+                default_text_params.update(params)
+            return models.TextIndexParams(type='text', **default_text_params)
         elif field_type == 'keyword':
             return models.KeywordIndexParams(type='keyword', **params) if params else models.KeywordIndexParams(type='keyword')
         elif field_type == 'integer':
@@ -620,9 +619,6 @@ class QdrantProvider(BaseVectorDBProvider):
             # Default to keyword
             return models.KeywordIndexParams(type='keyword')
     
-    # ============================================================================
-    # Data Operations
-    # ============================================================================
     
     async def upsert(
         self,
@@ -808,9 +804,7 @@ class QdrantProvider(BaseVectorDBProvider):
         """
         return self._run_async_from_sync(self.fetch(ids, **kwargs))
     
-    # ============================================================================
-    # Utility & Management Methods
-    # ============================================================================
+
     
     async def get_count(self) -> int:
         """
@@ -1368,10 +1362,6 @@ class QdrantProvider(BaseVectorDBProvider):
         """
         return self.get_supported_search_types()
     
-    # ============================================================================
-    # Search Operations
-    # ============================================================================
-    
     async def search(
         self,
         top_k: Optional[int] = None,
@@ -1610,16 +1600,12 @@ class QdrantProvider(BaseVectorDBProvider):
     ) -> List[VectorSearchResult]:
         """Server-side full-text search implementation."""
         try:
-            # Create text index if needed
-            try:
-                await self._client.create_payload_index(
-                    collection_name=self._config.collection_name,
-                    field_name=target_text_field,
-                    field_schema=models.TextIndexParams(type="text"),
-                    wait=True
-                )
-            except Exception:
-                pass  # Index might already exist
+            await self._client.create_payload_index(
+                collection_name=self._config.collection_name,
+                field_name=target_text_field,
+                field_schema=models.TextIndexParams(type="text", tokenizer=models.TokenizerType.WORD, min_token_len=2, max_token_len=20, lowercase=True),
+                wait=True
+            )
 
             text_condition = models.FieldCondition(
                 key=target_text_field, 
@@ -1900,10 +1886,7 @@ class QdrantProvider(BaseVectorDBProvider):
         except Exception as e:
             warning_log(f"Reranking failed: {e}. Returning original results.", context="QdrantVectorDB")
             return results
-    
-    # ============================================================================
-    # Helper Methods
-    # ============================================================================
+
     
     def _check_similarity_threshold(self, score: float, threshold: float) -> bool:
         """Check if score meets similarity threshold based on distance metric."""
