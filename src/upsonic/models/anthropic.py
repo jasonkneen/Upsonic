@@ -713,6 +713,17 @@ class AnthropicModel(Model):
         last_param['cache_control'] = BetaCacheControlEphemeralParam(type='ephemeral')
 
     @staticmethod
+    def _is_text_like_media_type(media_type: str) -> bool:
+        return (
+            media_type.startswith('text/')
+            or media_type == 'application/json'
+            or media_type.endswith('+json')
+            or media_type == 'application/xml'
+            or media_type.endswith('+xml')
+            or media_type in ('application/x-yaml', 'application/yaml')
+        )
+
+    @staticmethod
     async def _map_user_prompt(
         part: UserPromptPart,
     ) -> AsyncGenerator[BetaContentBlockParam | CachePoint]:
@@ -741,14 +752,21 @@ class AnthropicModel(Model):
                             ),
                             type='document',
                         )
+                    elif AnthropicModel._is_text_like_media_type(item.media_type):
+                        text_content = item.data.decode('utf-8')
+                        if text_content:
+                            yield BetaTextBlockParam(text=text_content, type='text')
                     else:
-                        raise RuntimeError('Only images and PDFs are supported for binary content')
+                        raise RuntimeError(
+                            'Only images, PDFs, and text-like content (e.g. text/plain, application/json) '
+                            'are supported for binary content'
+                        )
                 elif isinstance(item, ImageUrl):
                     yield BetaImageBlockParam(source={'type': 'url', 'url': item.url}, type='image')
                 elif isinstance(item, DocumentUrl):
                     if item.media_type == 'application/pdf':
                         yield BetaBase64PDFBlockParam(source={'url': item.url, 'type': 'url'}, type='document')
-                    elif item.media_type == 'text/plain':
+                    elif AnthropicModel._is_text_like_media_type(item.media_type):
                         downloaded_item = await download_item(item, data_format='text')
                         yield BetaBase64PDFBlockParam(
                             source=BetaPlainTextSourceParam(

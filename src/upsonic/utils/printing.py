@@ -1371,7 +1371,7 @@ def print_agent_metrics(agent: "Agent", print_output: bool = True) -> Optional[D
     
     table.add_row("[bold]Agent:[/bold]", f"[cyan]{agent_name_display}[/cyan]")
     table.add_row("")
-    table.add_row("[bold]Total Requests/Tasks:[/bold]", f"[cyan]{usage.requests:,}[/cyan]")
+    table.add_row("[bold]Total Requests:[/bold]", f"[cyan]{usage.requests:,}[/cyan]")
     table.add_row("[bold]Total Input Tokens:[/bold]", f"[cyan]{usage.input_tokens:,}[/cyan]")
     table.add_row("[bold]Total Output Tokens:[/bold]", f"[cyan]{usage.output_tokens:,}[/cyan]")
     table.add_row("[bold]Total Tool Calls:[/bold]", f"[cyan]{usage.tool_calls:,}[/cyan]")

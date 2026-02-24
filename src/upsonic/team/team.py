@@ -8,6 +8,8 @@ if TYPE_CHECKING:
     from upsonic.storage import Memory
     from fastmcp import FastMCP
 
+from upsonic.utils.logging_config import get_env_bool_optional
+
 from .coordinator_setup import CoordinatorSetup
 from .delegation_manager import DelegationManager
 from .context_sharing import ContextSharing
@@ -39,6 +41,7 @@ class Team:
                  debug: bool = False,
                  debug_level: int = 1,
                  agents: Optional[List[Union[Agent, "Team"]]] = None,
+                 print: Optional[bool] = None,
                  ):
         """
         Initialize the Team with entities (Agents and/or nested Teams) and optionally tasks.
@@ -59,6 +62,7 @@ class Team:
             debug: Enable debug logging.
             debug_level: Debug level (1 = standard, 2 = detailed). Only used when debug=True
             agents: Backward-compatible alias for entities.
+            print: Enable printing for do() (and allow print_do() when not False). If None, do() does not print unless UPSONIC_AGENT_PRINT=true. If False, print_do() also does not print. UPSONIC_AGENT_PRINT=false overrides everything.
         """
         resolved_entities: List[Union[Agent, Team]] = entities if entities is not None else (agents if agents is not None else [])
         if not resolved_entities:
@@ -77,6 +81,10 @@ class Team:
         self.memory: Optional[Memory] = memory
         self.debug: bool = debug
         self.debug_level: int = debug_level if debug else 1
+
+        self._print_env: Optional[bool] = get_env_bool_optional("UPSONIC_AGENT_PRINT")
+        self._print_param: Optional[bool] = print
+        self.print: bool = self._print_env if self._print_env is not None else (print if print is not None else False)
 
         self.leader_agent: Optional[Agent] = None
 
@@ -113,6 +121,14 @@ class Team:
         if self.name:
             return self.name
         return f"Team_{id(self)}"
+
+    def _resolve_print_flag(self, method_default: bool) -> bool:
+        """Resolve print flag: ENV (UPSONIC_AGENT_PRINT) > constructor print > method default (print_do=True, do=False)."""
+        if self._print_env is not None:
+            return self._print_env
+        if self._print_param is not None:
+            return self._print_param
+        return method_default
 
     def _find_first_model(self) -> Optional[Any]:
         """Traverse entities to find the first available model from an Agent."""
@@ -160,13 +176,14 @@ class Team:
     def print_complete(self, tasks: Optional[Union[List[Task], Task]] = None) -> Any:
         return self.print_do(tasks)
 
-    def do(self, tasks: Optional[Union[List[Task], Task]] = None, _print_method_default: bool = False) -> Any:
+    def do(self, tasks: Optional[Union[List[Task], Task]] = None, _print_method_default: Optional[bool] = None) -> Any:
         """
         Execute multi-agent operations with the predefined entities and tasks.
+        Whether output is printed follows the same hierarchy as Agent: UPSONIC_AGENT_PRINT env > Team(print=...) > method (do=False).
         
         Args:
             tasks: Optional list of tasks or single task to execute. If not provided, uses tasks from initialization.
-            _print_method_default: Internal - default print value based on method (do=False, print_do=True)
+            _print_method_default: Internal - when None, uses resolved print from env/constructor (False for do()).
         
         Returns:
             The response from the multi-agent operation
@@ -174,8 +191,8 @@ class Team:
         tasks_to_execute = tasks if tasks is not None else self.tasks
         if not isinstance(tasks_to_execute, list):
             tasks_to_execute = [tasks_to_execute]
-        
-        return self._run_sync(self.multi_agent_async(self.entities, tasks_to_execute, _print_method_default=_print_method_default))
+        resolved_print: bool = self._resolve_print_flag(False) if _print_method_default is None else _print_method_default
+        return self._run_sync(self.multi_agent_async(self.entities, tasks_to_execute, _print_method_default=resolved_print))
     
     def _run_sync(self, coro: Any) -> Any:
         """Run an async coroutine synchronously, handling existing event loops."""
@@ -194,17 +211,15 @@ class Team:
         self,
         task: Union[str, Task],
         *,
-        _print_method_default: bool = False,
+        _print_method_default: Optional[bool] = None,
     ) -> Any:
         """
         Execute the team workflow asynchronously for a single task or string.
-
-        Compatible with Agent's do_async interface so a Team can be used
-        as an entity inside another Team.
+        When _print_method_default is None, uses resolved print from env/constructor (same as Agent).
 
         Args:
             task: A Task object or string description to execute.
-            _print_method_default: Internal - default print value based on method.
+            _print_method_default: Internal - when None, uses resolved print (False for do_async).
 
         Returns:
             The response from the multi-agent operation.
@@ -213,18 +228,24 @@ class Team:
         if isinstance(task, str):
             task = TaskClass(description=task)
         tasks_to_execute: List[Task] = [task]
+        resolved_print: bool = self._resolve_print_flag(False) if _print_method_default is None else _print_method_default
         result = await self.multi_agent_async(
-            self.entities, tasks_to_execute, _print_method_default=_print_method_default
+            self.entities, tasks_to_execute, _print_method_default=resolved_print
         )
         if isinstance(task, TaskClass) and task.response is None and result is not None:
             task._response = str(result) if not isinstance(result, str) else result
         return result
 
+    async def print_do_async(self, task: Union[str, Task]) -> Any:
+        """Execute the team workflow asynchronously with print output. Respects UPSONIC_AGENT_PRINT and Team(print=...)."""
+        resolved_print: bool = self._resolve_print_flag(True)
+        return await self.do_async(task, _print_method_default=resolved_print)
+
     async def ado(
         self,
         task: Union[str, Task],
         *,
-        _print_method_default: bool = False,
+        _print_method_default: Optional[bool] = None,
     ) -> Any:
         """Async alias for do_async."""
         return await self.do_async(task, _print_method_default=_print_method_default)
@@ -422,14 +443,13 @@ class Team:
     def print_do(self, tasks: Optional[Union[List[Task], Task]] = None) -> Any:
         """
         Execute the multi-agent operation and print the result.
-        
-        This enables printing during agent execution (streaming output).
+        Respects UPSONIC_AGENT_PRINT and Team(print=...) (e.g. Team(print=False).print_do() does not print).
         
         Returns:
             The response from the multi-agent operation
         """
-        result = self.do(tasks, _print_method_default=True)
-        return result
+        resolved_print: bool = self._resolve_print_flag(True)
+        return self.do(tasks, _print_method_default=resolved_print)
 
     async def astream(
         self,
