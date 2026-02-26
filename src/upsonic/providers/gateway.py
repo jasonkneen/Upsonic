@@ -1,4 +1,4 @@
-"""This module implements the Pydantic AI Gateway provider."""
+"""This module implements the Gateway provider."""
 
 from __future__ import annotations as _annotations
 

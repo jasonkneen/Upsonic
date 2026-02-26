@@ -10,16 +10,14 @@ Covers:
 - Aggregated cost on root span
 - Zero-overhead no-op path when instrumentation is disabled
 - TracerProvider setup: sampling, headers, shutdown
-- Stale pydantic-ai reference cleanup
 
 Run with: uv run pytest tests/unit_tests/agent/test_otel_instrumentation.py -v -s
 """
 
-import pytest
 from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock
 
-from upsonic import Agent, Task
+from upsonic import Agent
 from upsonic.models.instrumented import (
     InstrumentationSettings,
     InstrumentedModel,
@@ -30,10 +28,6 @@ from upsonic.agent.pipeline.manager import PipelineManager
 from upsonic.agent.pipeline.step import StepResult, StepStatus
 from upsonic.usage import RunUsage, RequestUsage
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 class RecordingSpan:
     """Mock OTel span that records all interactions for assertion."""
@@ -87,11 +81,6 @@ def _make_otel(instrument: bool = True) -> AgentOTelManager:
     if instrument:
         return AgentOTelManager(InstrumentationSettings())
     return AgentOTelManager(None)
-
-
-# ===========================================================================
-# 1. Activation Modes
-# ===========================================================================
 
 
 class TestActivationModes:
@@ -160,11 +149,6 @@ class TestActivationModes:
         assert double is wrapped
 
 
-# ===========================================================================
-# 2. Model Override Preservation
-# ===========================================================================
-
-
 class TestModelOverridePreservation:
 
     def test_override_returns_original(self) -> None:
@@ -230,11 +214,6 @@ class TestModelOverridePreservation:
         assert "self.model = original_model" in source
 
 
-# ===========================================================================
-# 3. OTel Span Context Managers (No-Op Path)
-# ===========================================================================
-
-
 class TestSpanContextManagers:
 
     def test_agent_run_span_noop(self) -> None:
@@ -275,11 +254,6 @@ class TestSpanContextManagers:
     def test_pipeline_manager_resolves_noop_otel(self) -> None:
         pm = PipelineManager(agent=Agent("openai/gpt-4o"))
         assert not pm._otel.enabled
-
-
-# ===========================================================================
-# 4. Error Recording
-# ===========================================================================
 
 
 class TestErrorRecording:
@@ -370,11 +344,6 @@ class TestErrorRecording:
         AgentOTelManager.record_error(None, RuntimeError("test"))
 
 
-# ===========================================================================
-# 5. Aggregated Usage Attributes
-# ===========================================================================
-
-
 class TestUsageAttributes:
 
     def test_standard_usage_keys(self) -> None:
@@ -428,11 +397,6 @@ class TestUsageAttributes:
         assert len(span.attrs) == 0
 
 
-# ===========================================================================
-# 6. Aggregated Cost on Root Span
-# ===========================================================================
-
-
 class TestAggregatedCost:
 
     def test_cost_set_on_span(self) -> None:
@@ -464,11 +428,6 @@ class TestAggregatedCost:
         assert cost is None
 
 
-# ===========================================================================
-# 7. InstrumentationSettings Flags
-# ===========================================================================
-
-
 class TestInstrumentationSettings:
 
     def test_default_settings(self) -> None:
@@ -495,18 +454,6 @@ class TestInstrumentationSettings:
         settings = InstrumentationSettings()
         assert settings.tracer is not None
 
-    def test_no_pydantic_ai_references(self) -> None:
-        import inspect
-        settings_src = inspect.getsource(InstrumentationSettings)
-        model_src = inspect.getsource(InstrumentedModel)
-        assert "pydantic_ai" not in settings_src
-        assert "ai.pydantic.dev" not in settings_src
-        assert "ai.pydantic.dev" not in model_src
-
-
-# ===========================================================================
-# 8. setup_opentelemetry Configuration
-# ===========================================================================
 
 
 class TestSetupOpentelemetry:
@@ -548,11 +495,6 @@ class TestSetupOpentelemetry:
         assert "UPSONIC_OTEL_SAMPLE_RATE" in doc
 
 
-# ===========================================================================
-# 9. _parse_otel_headers
-# ===========================================================================
-
-
 class TestParseOtelHeaders:
 
     def test_standard_parsing(self) -> None:
@@ -586,11 +528,6 @@ class TestParseOtelHeaders:
         from upsonic.integrations.tracing import DefaultTracingProvider
         result = DefaultTracingProvider._parse_headers("token=abc=def=ghi")
         assert result == {"token": "abc=def=ghi"}
-
-
-# ===========================================================================
-# 10. OTel Span Hierarchy (Structural Verification)
-# ===========================================================================
 
 
 class TestSpanHierarchy:
@@ -631,11 +568,6 @@ class TestSpanHierarchy:
         assert "self._otel.set_tool_result" in source
 
 
-# ===========================================================================
-# 11. InstrumentedModel Wrapping Behavior
-# ===========================================================================
-
-
 class TestInstrumentedModelWrapping:
 
     def test_wrapped_model_name_propagates(self) -> None:
@@ -650,11 +582,6 @@ class TestInstrumentedModelWrapping:
         settings = InstrumentationSettings()
         agent = Agent("openai/gpt-4o", instrument=settings)
         assert agent.model.instrumentation_settings is settings
-
-
-# ===========================================================================
-# 12. End-to-End OTel Attribute Verification
-# ===========================================================================
 
 
 class TestEndToEndAttributes:
@@ -737,11 +664,6 @@ class TestEndToEndAttributes:
         assert len(span.exceptions) == 1
 
 
-# ===========================================================================
-# 13. Sampling Rate Validation
-# ===========================================================================
-
-
 class TestSamplingRateValidation:
 
     def test_sample_rate_clamped_in_tracing_provider(self) -> None:
@@ -755,11 +677,6 @@ class TestSamplingRateValidation:
         from upsonic.integrations.tracing import DefaultTracingProvider
         source = inspect.getsource(DefaultTracingProvider.__init__)
         assert "except (ValueError, TypeError)" in source
-
-
-# ===========================================================================
-# 14. AgentOTelManager - finalize_agent_run
-# ===========================================================================
 
 
 class TestFinalizeAgentRun:
@@ -802,11 +719,6 @@ class TestFinalizeAgentRun:
         )
         assert span.attrs["upsonic.user_id"] == "fallback-user"
         assert span.attrs["upsonic.session_id"] == "fallback-session"
-
-
-# ===========================================================================
-# 15. Attribute Constants
-# ===========================================================================
 
 
 class TestAttributeConstants:

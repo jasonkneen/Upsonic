@@ -115,7 +115,6 @@ class OpenAIModelProfile(ModelProfile):
     """Whether the Responses API requires the `status` field on function tool calls to be `None`.
 
     This is required by vLLM Responses API versions before https://github.com/vllm-project/vllm/pull/26706.
-    See https://github.com/pydantic/pydantic-ai/issues/3245 for more details.
     """
 
     def __post_init__(self):  # pragma: no cover
@@ -150,7 +149,6 @@ def openai_model_profile(model_name: str) -> ModelProfile:
     supports_reasoning = thinking_always_enabled or is_gpt_5_1_plus
 
     # The o1-mini model doesn't support the `system` role, so we default to `user`.
-    # See https://github.com/pydantic/pydantic-ai/issues/974 for more details.
     openai_system_prompt_role = 'user' if model_name.startswith('o1-mini') else None
 
     # Check if the model supports web search (only specific search-preview models)
