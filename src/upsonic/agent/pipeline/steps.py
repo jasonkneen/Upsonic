@@ -1802,10 +1802,6 @@ class MemorySaveStep(Step):
         try:
             if agent and hasattr(agent, 'run_id') and agent.run_id:
                 raise_if_cancelled(agent.run_id)
-
-            
-            context.tool_call_count = getattr(agent, 'tool_call_count', 0)
-            context.tool_limit_reached = getattr(agent, 'tool_limit_reached', False)
             
             # Finalize run messages BEFORE marking completed
             # This extracts new messages from chat_history (using _run_boundaries)

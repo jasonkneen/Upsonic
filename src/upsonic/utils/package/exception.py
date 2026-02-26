@@ -233,3 +233,13 @@ class ModelHTTPError(AgentRunError):
         self.body = body
         message = f'status_code: {status_code}, model_name: {model_name}, body: {body}'
         super().__init__(message)
+
+class ModelAPIError(AgentRunError):
+    """Raised when a model provider API request fails."""
+
+    model_name: str
+    """The name of the model associated with the error."""
+
+    def __init__(self, model_name: str, message: str):
+        self.model_name = model_name
+        super().__init__(message)

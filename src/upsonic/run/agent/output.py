@@ -167,9 +167,6 @@ class AgentRunOutput:
     created_at: int = field(default_factory=lambda: int(current_time()))
     updated_at: Optional[int] = None
     
-    # ========================================================================
-    # Properties
-    # ========================================================================
     
     @property
     def is_paused(self) -> bool:

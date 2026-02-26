@@ -492,6 +492,52 @@ def memory_debug_log(memory_debug: bool, msg: str, data: Any = None) -> None:
                 print(f"      {data_str}")
 
 
+_OTEL_CONFIGURED: bool = False
+
+
+def setup_opentelemetry() -> None:
+    """Configure OpenTelemetry tracing for Upsonic.
+
+    Delegates all OTel bootstrapping to :class:`DefaultTracingProvider` which
+    reads ``UPSONIC_OTEL_*`` environment variables (endpoint, service name,
+    headers, sample rate).
+
+    When ``UPSONIC_OTEL_ENABLED=True`` is set, automatically calls
+    ``Agent.instrument_all()`` so every Agent instance is instrumented.
+
+    This function is safe to call multiple times; subsequent calls are no-ops.
+    """
+    global _OTEL_CONFIGURED  # noqa: PLW0603
+
+    if _OTEL_CONFIGURED:
+        return
+
+    try:
+        from upsonic.integrations.tracing import DefaultTracingProvider
+
+        provider: DefaultTracingProvider = DefaultTracingProvider()
+        _OTEL_CONFIGURED = True
+
+        logger = logging.getLogger(__name__)
+        logger.debug(
+            "OpenTelemetry configured via DefaultTracingProvider: endpoint=%s, service=%s",
+            provider._endpoint,
+            provider._service_name,
+        )
+        from upsonic.agent.agent import Agent
+        Agent.instrument_all(instrument=provider)
+
+    except ImportError:
+        logger = logging.getLogger(__name__)
+        logger.warning(
+            "OpenTelemetry SDK packages not installed. "
+            "Install with: pip install opentelemetry-sdk opentelemetry-exporter-otlp"
+        )
+    except Exception as exc:
+        logger = logging.getLogger(__name__)
+        logger.warning("Failed to configure OpenTelemetry: %s", exc)
+
+
 # Library import edildiğinde otomatik konfigüre et
 # Sentry her zaman initialize edilir (DSN kontrolü setup_sentry içinde)
 setup_sentry()
@@ -502,3 +548,7 @@ if os.getenv("UPSONIC_LOG_LEVEL") or os.getenv("UPSONIC_LOG_FILE"):
 else:
     # Env var yoksa sadece NullHandler ekle (library best practice)
     logging.getLogger("upsonic").addHandler(logging.NullHandler())
+
+# Auto-configure OpenTelemetry if env vars are set
+if os.getenv("UPSONIC_OTEL_ENABLED"):
+    setup_opentelemetry()

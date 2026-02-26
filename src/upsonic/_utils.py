@@ -116,6 +116,20 @@ def is_set(t_or_unset: T | Unset) -> TypeGuard[T]:
     return t_or_unset is not UNSET
 
 
+async def _cleanup_temporal_group(
+    task: asyncio.Task[Any] | None,
+    aiterator: AsyncIterator[Any],
+) -> None:
+    """Clean up pending task and async iterator after group_by_temporal exits."""
+    if task:
+        task.cancel('Cancelling group_by_temporal pending task')
+        with suppress(asyncio.CancelledError, StopAsyncIteration):
+            await task
+    aclose = getattr(aiterator, 'aclose', None)
+    if aclose is not None:  # pragma: no branch
+        await aclose()
+
+
 @asynccontextmanager
 async def group_by_temporal(
     aiterable: AsyncIterable[T], soft_max_interval: float | None

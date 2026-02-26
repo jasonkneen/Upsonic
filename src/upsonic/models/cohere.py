@@ -6,11 +6,10 @@ from typing import Literal, cast
 
 from typing_extensions import assert_never
 
-from upsonic.utils.package.exception import UserError
+from upsonic.utils.package.exception import ModelAPIError
 
 from upsonic.utils.package.exception import ModelHTTPError
 from upsonic import usage
-from . import Model, ModelRequestParameters, check_allow_model_requests
 from upsonic._utils import generate_tool_call_id as _generate_tool_call_id, guard_tool_call_id as _guard_tool_call_id
 from upsonic.messages import (
     BuiltinToolCallPart,
@@ -33,17 +32,17 @@ from upsonic.profiles import ModelProfileSpec
 from upsonic.providers import Provider, infer_provider
 from upsonic.models.settings import ModelSettings
 from upsonic.tools import ToolDefinition
+from upsonic.models import Model, ModelRequestParameters, check_allow_model_requests
 
 try:
     from cohere import (
         AssistantChatMessageV2,
-        AssistantMessageV2ContentItem,
         AsyncClientV2,
         ChatFinishReason,
         ChatMessageV2,
         SystemChatMessageV2,
-        TextAssistantMessageV2ContentItem,
-        ThinkingAssistantMessageV2ContentItem,
+        TextAssistantMessageV2ContentOneItem,
+        ThinkingAssistantMessageV2ContentOneItem,
         ToolCallV2,
         ToolCallV2Function,
         ToolChatMessageV2,
@@ -178,9 +177,6 @@ class CohereModel(Model):
     ) -> V2ChatResponse:
         tools = self._get_tools(model_request_parameters)
 
-        if model_request_parameters.builtin_tools:
-            raise UserError('Cohere does not support built-in tools')
-
         cohere_messages = self._map_messages(messages, model_request_parameters)
         try:
             return await self.client.chat(
@@ -198,7 +194,7 @@ class CohereModel(Model):
         except ApiError as e:
             if (status_code := e.status_code) and status_code >= 400:
                 raise ModelHTTPError(status_code=status_code, model_name=self.model_name, body=e.body) from e
-            raise  # pragma: lax no cover
+            raise ModelAPIError(model_name=self.model_name, message=str(e)) from e
 
     def _process_response(self, response: V2ChatResponse) -> ModelResponse:
         """Process a non-streamed response, and prepare a message to return."""
@@ -228,6 +224,7 @@ class CohereModel(Model):
             usage=_map_usage(response),
             model_name=self._model_name,
             provider_name=self._provider.name,
+            provider_url=self.base_url,
             finish_reason=finish_reason,
             provider_details=provider_details,
         )
@@ -235,7 +232,6 @@ class CohereModel(Model):
     def _map_messages(
         self, messages: list[ModelMessage], model_request_parameters: ModelRequestParameters
     ) -> list[ChatMessageV2]:
-        """Just maps a `upsonic.Message` to a `cohere.ChatMessageV2`."""
         cohere_messages: list[ChatMessageV2] = []
         for message in messages:
             if isinstance(message, ModelRequest):
@@ -262,11 +258,11 @@ class CohereModel(Model):
 
                 message_param = AssistantChatMessageV2(role='assistant')
                 if texts or thinking:
-                    contents: list[AssistantMessageV2ContentItem] = []
+                    contents: list[TextAssistantMessageV2ContentOneItem | ThinkingAssistantMessageV2ContentOneItem] = []
                     if thinking:
-                        contents.append(ThinkingAssistantMessageV2ContentItem(thinking='\n\n'.join(thinking)))
+                        contents.append(ThinkingAssistantMessageV2ContentOneItem(thinking='\n\n'.join(thinking)))
                     if texts:  # pragma: no branch
-                        contents.append(TextAssistantMessageV2ContentItem(text='\n\n'.join(texts)))
+                        contents.append(TextAssistantMessageV2ContentOneItem(text='\n\n'.join(texts)))
                     message_param.content = contents
                 if tool_calls:
                     message_param.tool_calls = tool_calls
@@ -274,7 +270,8 @@ class CohereModel(Model):
             else:
                 assert_never(message)
         if instructions := self._get_instructions(messages, model_request_parameters):
-            cohere_messages.insert(0, SystemChatMessageV2(role='system', content=instructions))
+            system_prompt_count = sum(1 for m in cohere_messages if isinstance(m, SystemChatMessageV2))
+            cohere_messages.insert(system_prompt_count, SystemChatMessageV2(role='system', content=instructions))
         return cohere_messages
 
     def _get_tools(self, model_request_parameters: ModelRequestParameters) -> list[ToolV2]:

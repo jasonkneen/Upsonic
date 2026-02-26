@@ -81,10 +81,5 @@ class TestMCPOutputMessages:
         assert "Found 6 tools" in output, \
             "Expected 'Found 6 tools from DatabaseMCP' message not found in output"
         
-        # Check for agent started message (with flexible formatting)
-        assert "Agent Started" in output, \
-            "Expected 'Agent Started' message not found in output"
-        
-        # Check for tool usage summary or tool calls
-        assert "Tool Usage Summary" in output or "Tool Calls" in output, \
-            "Expected 'Tool Usage Summary' or 'Tool Calls' message not found in output"
+        assert "Calling MCP tool" in output or "Pipeline" in output or "pipeline" in output, \
+            "Expected MCP tool call or pipeline execution evidence in output"

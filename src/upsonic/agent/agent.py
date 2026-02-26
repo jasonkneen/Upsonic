@@ -93,6 +93,9 @@ if TYPE_CHECKING:
     from upsonic.culture.manager import CultureManager
     from upsonic.run.requirements import RunRequirement
     from upsonic.session.agent import RunData
+    from upsonic.models.instrumented import InstrumentationSettings
+    from upsonic.integrations.tracing import TracingProvider
+    from upsonic.agent.otel_manager import AgentOTelManager
     from fastmcp import FastMCP
 else:
     Model = "Model"
@@ -114,6 +117,8 @@ else:
     State = "State"
     ModelRecommendation = "ModelRecommendation"
     DatabaseBase = "DatabaseBase"
+    InstrumentationSettings = "InstrumentationSettings"
+    TracingProvider = "TracingProvider"
     RunData = "RunData"
 
 
@@ -137,6 +142,7 @@ class Agent(BaseAgent):
     - Reliability layers
     - Canvas integration
     - External tool execution support
+    - OpenTelemetry instrumentation for full observability
     
     Usage:
         Basic usage:
@@ -159,8 +165,46 @@ class Agent(BaseAgent):
         )
         result = agent.stream(task)
         ```
+        
+        With OpenTelemetry:
+        ```python
+        agent = Agent("openai/gpt-4o", instrument=True)
+        result = agent.do("What is 2 + 2?")
+        
+        # Or instrument all agents globally:
+        Agent.instrument_all()
+        ```
     """
-    
+
+    _global_tracing_provider: Optional["TracingProvider"] = None
+
+    @classmethod
+    def instrument_all(
+        cls,
+        instrument: Union[bool, "TracingProvider", "InstrumentationSettings"] = True,
+    ) -> None:
+        """Enable OpenTelemetry instrumentation globally for all Agent instances.
+
+        Args:
+            instrument: If True, creates a DefaultTracingProvider from env vars.
+                If a TracingProvider subclass, uses it directly.
+                If an InstrumentationSettings instance, wraps it.
+                If False, disables global instrumentation.
+        """
+        if instrument is False:
+            cls._global_tracing_provider = None
+            return
+
+        from upsonic.integrations.tracing import TracingProvider as _TP
+
+        if instrument is True:
+            from upsonic.integrations.tracing import DefaultTracingProvider
+            cls._global_tracing_provider = DefaultTracingProvider()
+        elif isinstance(instrument, _TP):
+            cls._global_tracing_provider = instrument
+        else:
+            cls._global_tracing_provider = instrument  # type: ignore[assignment]
+
     def __init__(
         self,
         model: Union[str, "Model"] = "openai/gpt-4o",
@@ -224,6 +268,8 @@ class Agent(BaseAgent):
         metadata: Optional[Dict[str, Any]] = None,
         # Workspace settings
         workspace: Optional[str] = None,
+        # OpenTelemetry instrumentation
+        instrument: Union[bool, "TracingProvider", "InstrumentationSettings", None] = None,
     ):
         """
         Initialize the Agent with comprehensive configuration options.
@@ -293,10 +339,21 @@ class Agent(BaseAgent):
             workspace: Path to workspace folder containing AGENTS.md file with agent configuration.
                 When set, the AGENTS.md content is included in system prompt and a greeting 
                 message is generated before the first task/chat, integrated into message history.
+            instrument: OpenTelemetry instrumentation configuration.
+                If True, creates a DefaultTracingProvider from env vars.
+                If a TracingProvider subclass (Langfuse, DefaultTracingProvider, …),
+                    uses its InstrumentationSettings.
+                If an InstrumentationSettings instance, uses it directly.
+                If None/False, no instrumentation (default).
+                When enabled, all LLM calls, pipeline steps, and tool executions
+                are traced with OpenTelemetry spans following GenAI semantic conventions.
         """
         from upsonic.models import infer_model
         self.model = infer_model(model)
         self.model_name=model
+
+        self._tracing_provider, self._instrument_settings, self._otel = self._resolve_instrumentation(instrument)
+
         self.name = name
         self.agent_id_ = agent_id_
         
@@ -1047,16 +1104,60 @@ class Agent(BaseAgent):
             updated_at=None
         )
     
-    def _apply_model_override(self, model: Optional[Union[str, "Model"]]) -> None:
+    def _resolve_instrumentation(
+        self,
+        instrument: Union[bool, "TracingProvider", "InstrumentationSettings", None],
+    ) -> tuple[Optional["TracingProvider"], Optional["InstrumentationSettings"], "AgentOTelManager"]:
+        """Resolve the ``instrument`` parameter into a TracingProvider, InstrumentationSettings, and AgentOTelManager.
+
+        Handles all supported input types (bool, TracingProvider, InstrumentationSettings, None)
+        and wraps ``self.model`` with ``InstrumentedModel`` when instrumentation is active.
         """
-        Apply model override if provided.
+        from upsonic.integrations.tracing import TracingProvider as _TP
+        from upsonic.agent.otel_manager import AgentOTelManager
+
+        resolved: Any = instrument if instrument is not None else self._global_tracing_provider
+        tracing_provider: Optional["TracingProvider"] = None
+        settings: Optional["InstrumentationSettings"] = None
+
+        if resolved is True:
+            from upsonic.integrations.tracing import DefaultTracingProvider
+            tracing_provider = DefaultTracingProvider()
+            settings = tracing_provider.settings
+        elif isinstance(resolved, _TP):
+            tracing_provider = resolved
+            settings = resolved.settings
+        elif resolved and resolved is not False:
+            settings = resolved
         
+        if settings is not None:
+            from upsonic.models.instrumented import instrument_model
+            self.model = instrument_model(self.model, settings)
+
+        return tracing_provider, settings, AgentOTelManager(settings, tracing_provider)
+
+    def _apply_model_override(self, model: Optional[Union[str, "Model"]]) -> Optional["Model"]:
+        """Apply a per-call model override and return the original model for restoration.
+
+        Re-wraps the new model with InstrumentedModel if instrumentation is active,
+        so OTel LLM-level spans are preserved even when the model is overridden per-call.
+
         Args:
             model: Optional model override (string or Model instance)
+
+        Returns:
+            The original model instance if an override was applied (caller must restore
+            it after the run), or None if no override was needed.
         """
         if model:
+            original_model: "Model" = self.model
             from upsonic.models import infer_model
             self.model = infer_model(model)
+            if self._instrument_settings is not None:
+                from upsonic.models.instrumented import instrument_model
+                self.model = instrument_model(self.model, self._instrument_settings)
+            return original_model
+        return None
     
     
     def get_run_id(self) -> Optional[str]:
@@ -1787,93 +1888,99 @@ class Agent(BaseAgent):
                     ))
                     continue  # Skip execution
             
-            try:
-                import time
-                tool_start_time = time.time()
-                target_manager = self._resolve_tool_manager(tool_call.tool_name)
-                result = await target_manager.execute_tool(
-                    tool_name=tool_call.tool_name,
-                    args=tool_call.args_as_dict(),
-                    metrics=self._tool_metrics,
-                    tool_call_id=tool_call.tool_call_id
-                )
-                tool_execution_time = time.time() - tool_start_time
-                
-                self._tool_call_count += 1
-                if hasattr(self, '_tool_metrics') and self._tool_metrics:
-                    self._tool_metrics.tool_call_count = self._tool_call_count
-                
-                tool_return = ToolReturnPart(
-                    tool_name=result.tool_name,
-                    content=result.content,
-                    tool_call_id=result.tool_call_id,
-                    timestamp=now_utc()
-                )
-                results.append(tool_return)
-                
-                if hasattr(self, '_agent_run_output') and self._agent_run_output:
-                    from upsonic.run.tools.tools import ToolExecution
-                    tool_exec = ToolExecution(
-                        tool_call_id=tool_call.tool_call_id,
+            import time
+            tool_start_time = time.time()
+            with self._otel.tool_span(tool_call.tool_name, tool_call.tool_call_id) as otel_tool_span:
+                try:
+                    target_manager = self._resolve_tool_manager(tool_call.tool_name)
+                    result = await target_manager.execute_tool(
                         tool_name=tool_call.tool_name,
-                        tool_args=tool_call.args_as_dict(),
-                        result=str(result.content) if result.content else None,
-                    )
-                    if self._agent_run_output.tools is None:
-                        self._agent_run_output.tools = []
-                    self._agent_run_output.tools.append(tool_exec)
-                
-                if hasattr(self, '_agent_run_output') and self._agent_run_output:
-                    self._drain_agent_tool_usage(tool_call.tool_name)
-                
-                # Level 2: Detailed tool execution logging
-                if self.debug and self.debug_level >= 2:
-                    from upsonic.utils.printing import debug_log_level2
-                    tool_def = tool_defs.get(tool_call.tool_name)
-                    debug_log_level2(
-                        f"Tool executed: {tool_call.tool_name}",
-                        "Agent",
-                        debug=self.debug,
-                        debug_level=self.debug_level,
-                        tool_name=tool_call.tool_name,
-                        tool_description=tool_def.description if tool_def else "Unknown",
-                        tool_parameters=tool_call.args_as_dict(),
-                        tool_result=str(result.content)[:1000] if result.content else None,  # Truncate very long results
-                        tool_execution_time=tool_execution_time,
-                        tool_call_id=tool_call.tool_call_id,
-                        total_tool_calls=self._tool_call_count,
-                        tool_call_limit=self.tool_call_limit,
-                        tool_sequential=tool_def.sequential if tool_def else False
-                    )
-                
-            except ExternalExecutionPause as e:
-                raise e
-            except Exception as e:
-                error_return = ToolReturnPart(
-                    tool_name=tool_call.tool_name,
-                    content=f"Error executing tool: {str(e)}",
-                    tool_call_id=tool_call.tool_call_id,
-                    timestamp=now_utc()
-                )
-                results.append(error_return)
-                
-                # Level 2: Tool execution error details
-                if self.debug and self.debug_level >= 2:
-                    from upsonic.utils.printing import debug_log_level2
-                    import traceback
-                    error_traceback = ''.join(traceback.format_exception(type(e), e, e.__traceback__))
-                    debug_log_level2(
-                        f"Tool execution error: {tool_call.tool_name}",
-                        "Agent",
-                        debug=self.debug,
-                        debug_level=self.debug_level,
-                        tool_name=tool_call.tool_name,
-                        tool_parameters=tool_call.args_as_dict(),
-                        error_type=type(e).__name__,
-                        error_message=str(e),
-                        error_traceback=error_traceback[-1500:],  # Last 1500 chars
+                        args=tool_call.args_as_dict(),
+                        metrics=self._tool_metrics,
                         tool_call_id=tool_call.tool_call_id
                     )
+                    tool_execution_time = time.time() - tool_start_time
+                    
+                    self._tool_call_count += 1
+                    if hasattr(self, '_tool_metrics') and self._tool_metrics:
+                        self._tool_metrics.tool_call_count = self._tool_call_count
+                    if hasattr(self, '_agent_run_output') and self._agent_run_output is not None:
+                        self._agent_run_output.tool_call_count = self._tool_call_count
+                    
+                    tool_return = ToolReturnPart(
+                        tool_name=result.tool_name,
+                        content=result.content,
+                        tool_call_id=result.tool_call_id,
+                        timestamp=now_utc()
+                    )
+                    results.append(tool_return)
+                    
+                    self._otel.set_tool_result(otel_tool_span, tool_execution_time, success=True)
+                    
+                    if hasattr(self, '_agent_run_output') and self._agent_run_output:
+                        from upsonic.run.tools.tools import ToolExecution
+                        tool_exec = ToolExecution(
+                            tool_call_id=tool_call.tool_call_id,
+                            tool_name=tool_call.tool_name,
+                            tool_args=tool_call.args_as_dict(),
+                            result=str(result.content) if result.content else None,
+                        )
+                        if self._agent_run_output.tools is None:
+                            self._agent_run_output.tools = []
+                        self._agent_run_output.tools.append(tool_exec)
+                    
+                    if hasattr(self, '_agent_run_output') and self._agent_run_output:
+                        self._drain_agent_tool_usage(tool_call.tool_name)
+                    
+                    if self.debug and self.debug_level >= 2:
+                        from upsonic.utils.printing import debug_log_level2
+                        tool_def = tool_defs.get(tool_call.tool_name)
+                        debug_log_level2(
+                            f"Tool executed: {tool_call.tool_name}",
+                            "Agent",
+                            debug=self.debug,
+                            debug_level=self.debug_level,
+                            tool_name=tool_call.tool_name,
+                            tool_description=tool_def.description if tool_def else "Unknown",
+                            tool_parameters=tool_call.args_as_dict(),
+                            tool_result=str(result.content)[:1000] if result.content else None,
+                            tool_execution_time=tool_execution_time,
+                            tool_call_id=tool_call.tool_call_id,
+                            total_tool_calls=self._tool_call_count,
+                            tool_call_limit=self.tool_call_limit,
+                            tool_sequential=tool_def.sequential if tool_def else False
+                        )
+                    
+                except ExternalExecutionPause as e:
+                    raise e
+                except Exception as e:
+                    tool_execution_time = time.time() - tool_start_time
+                    self._otel.set_tool_result(otel_tool_span, tool_execution_time, success=False, error=e)
+                    
+                    error_return = ToolReturnPart(
+                        tool_name=tool_call.tool_name,
+                        content=f"Error executing tool: {str(e)}",
+                        tool_call_id=tool_call.tool_call_id,
+                        timestamp=now_utc()
+                    )
+                    results.append(error_return)
+                    
+                    if self.debug and self.debug_level >= 2:
+                        from upsonic.utils.printing import debug_log_level2
+                        import traceback
+                        error_traceback = ''.join(traceback.format_exception(type(e), e, e.__traceback__))
+                        debug_log_level2(
+                            f"Tool execution error: {tool_call.tool_name}",
+                            "Agent",
+                            debug=self.debug,
+                            debug_level=self.debug_level,
+                            tool_name=tool_call.tool_name,
+                            tool_parameters=tool_call.args_as_dict(),
+                            error_type=type(e).__name__,
+                            error_message=str(e),
+                            error_traceback=error_traceback[-1500:],
+                            tool_call_id=tool_call.tool_call_id
+                        )
         
         if parallel_calls:
             async def execute_single_tool(tool_call: "ToolCallPart") -> "ToolReturnPart":
@@ -1917,46 +2024,54 @@ class Agent(BaseAgent):
                             timestamp=now_utc()
                         )
                 
-                try:
-                    target_manager = self._resolve_tool_manager(tool_call.tool_name)
-                    result = await target_manager.execute_tool(
-                        tool_name=tool_call.tool_name,
-                        args=tool_call.args_as_dict(),
-                        metrics=self._tool_metrics,
-                        tool_call_id=tool_call.tool_call_id
-                    )
-                    
-                    if hasattr(self, '_agent_run_output') and self._agent_run_output:
-                        from upsonic.run.tools.tools import ToolExecution
-                        tool_exec = ToolExecution(
-                            tool_call_id=tool_call.tool_call_id,
+                import time as _time
+                _tool_start = _time.time()
+                with self._otel.tool_span(tool_call.tool_name, tool_call.tool_call_id) as otel_tool_span:
+                    try:
+                        target_manager = self._resolve_tool_manager(tool_call.tool_name)
+                        result = await target_manager.execute_tool(
                             tool_name=tool_call.tool_name,
-                            tool_args=tool_call.args_as_dict(),
-                            result=str(result.content) if result.content else None,
+                            args=tool_call.args_as_dict(),
+                            metrics=self._tool_metrics,
+                            tool_call_id=tool_call.tool_call_id
                         )
-                        if self._agent_run_output.tools is None:
-                            self._agent_run_output.tools = []
-                        self._agent_run_output.tools.append(tool_exec)
+                        _tool_elapsed = _time.time() - _tool_start
+                        
+                        if hasattr(self, '_agent_run_output') and self._agent_run_output:
+                            from upsonic.run.tools.tools import ToolExecution
+                            tool_exec = ToolExecution(
+                                tool_call_id=tool_call.tool_call_id,
+                                tool_name=tool_call.tool_name,
+                                tool_args=tool_call.args_as_dict(),
+                                result=str(result.content) if result.content else None,
+                            )
+                            if self._agent_run_output.tools is None:
+                                self._agent_run_output.tools = []
+                            self._agent_run_output.tools.append(tool_exec)
+                        
+                        if hasattr(self, '_agent_run_output') and self._agent_run_output:
+                            self._drain_agent_tool_usage(tool_call.tool_name)
+                        
+                        self._otel.set_tool_result(otel_tool_span, _tool_elapsed, success=True)
+                        
+                        return ToolReturnPart(
+                            tool_name=result.tool_name,
+                            content=result.content,
+                            tool_call_id=result.tool_call_id,
+                            timestamp=now_utc()
+                        )
                     
-                    if hasattr(self, '_agent_run_output') and self._agent_run_output:
-                        self._drain_agent_tool_usage(tool_call.tool_name)
-                    
-                    return ToolReturnPart(
-                        tool_name=result.tool_name,
-                        content=result.content,
-                        tool_call_id=result.tool_call_id,
-                        timestamp=now_utc()
-                    )
-                    
-                except ExternalExecutionPause:
-                    raise
-                except Exception as e:
-                    return ToolReturnPart(
-                        tool_name=tool_call.tool_name,
-                        content=f"Error executing tool: {str(e)}",
-                        tool_call_id=tool_call.tool_call_id,
-                        timestamp=now_utc()
-                    )
+                    except ExternalExecutionPause:
+                        raise
+                    except Exception as e:
+                        _tool_elapsed = _time.time() - _tool_start
+                        self._otel.set_tool_result(otel_tool_span, _tool_elapsed, success=False, error=e)
+                        return ToolReturnPart(
+                            tool_name=tool_call.tool_name,
+                            content=f"Error executing tool: {str(e)}",
+                            tool_call_id=tool_call.tool_call_id,
+                            timestamp=now_utc()
+                        )
             
             # Execute all tools in parallel, capturing exceptions
             parallel_results = await asyncio.gather(
@@ -1999,6 +2114,8 @@ class Agent(BaseAgent):
             self._tool_call_count += len(parallel_calls)
             if hasattr(self, '_tool_metrics') and self._tool_metrics:
                 self._tool_metrics.tool_call_count = self._tool_call_count
+            if hasattr(self, '_agent_run_output') and self._agent_run_output is not None:
+                self._agent_run_output.tool_call_count = self._tool_call_count
             
             results.extend(successful_results)
         
@@ -2947,10 +3064,6 @@ class Agent(BaseAgent):
         if timeout is not None and timeout <= 0:
             raise ValueError("timeout must be a positive number")
 
-        from upsonic.agent.pipeline import PipelineManager
-
-        # Resolve print flag based on hierarchy (ENV > param > method default)
-        # Store locally - don't mutate self.print to ensure thread-safety
         resolved_print_flag = self._resolve_print_flag(_print_method_default)
 
         # Convert string to Task if needed
@@ -2991,6 +3104,7 @@ class Agent(BaseAgent):
             self.run_id = run_id
             register_run(run_id)
 
+        original_model: Optional["Model"] = None
         try:
             if not is_resuming:
                 run_input = self._create_agent_run_input(task)
@@ -3004,122 +3118,185 @@ class Agent(BaseAgent):
                 if task is not None:
                     task.run_id = run_id
 
-            self._apply_model_override(model)
+            original_model = self._apply_model_override(model)
 
-            if partial_on_timeout and timeout is not None:
-                # Case A: Use streaming pipeline internally to capture partial text on timeout.
-                # Only streaming gives progressive text accumulation.
-                self._agent_run_output.is_streaming = True
-
-                pipeline = PipelineManager(
-                    steps=self._create_streaming_pipeline_steps(),
-                    task=self._agent_run_output.task,
-                    agent=self,
-                    model=self.model,
-                    debug=debug or self.debug
-                )
-
-                async def _consume_stream():
-                    """Consume streaming pipeline events, accumulating text silently."""
-                    async for pipeline_event in pipeline.execute_stream(
-                        context=self._agent_run_output, start_step_index=start_step_index
-                    ):
-                        text_content = self._extract_text_from_stream_event(pipeline_event)
-                        if text_content:
-                            self._agent_run_output.accumulated_text += text_content
-
+            task_desc: str = str(task.description) if task is not None and hasattr(task, "description") else ""
+            with self._otel.agent_run_span(
+                run_id,
+                name=self.name or "",
+                model=str(self.model_name) if self.model_name else "",
+                task_description=task_desc,
+                user_id=self.user_id,
+                session_id=self.session_id,
+            ) as otel_span:
                 try:
-                    await asyncio.wait_for(_consume_stream(), timeout=timeout)
-                except (asyncio.TimeoutError, asyncio.CancelledError):
-                    # Timeout fired - return whatever text was accumulated
-                    cancel_run_func(run_id)
+                    result = await self._do_async_pipeline(
+                        task=task,
+                        run_id=run_id,
+                        debug=debug,
+                        return_output=return_output,
+                        timeout=timeout,
+                        partial_on_timeout=partial_on_timeout,
+                        start_step_index=start_step_index,
+                    )
+                    self._otel.finalize_agent_run(
+                        otel_span,
+                        getattr(self, "_agent_run_output", None),
+                        agent_user_id=self.user_id,
+                        agent_session_id=self.session_id,
+                        total_cost=self._calculate_aggregated_cost(),
+                    )
+                    return result
+                except Exception as exc:
+                    self._otel.record_error(otel_span, exc)
+                    raise
+        finally:
+            if original_model is not None:
+                self.model = original_model
+            self._finalize_agent_usage(resolved_print_flag)
+            self.run_id = None
+    
+    def _calculate_aggregated_cost(self) -> Optional[float]:
+        """Calculate the aggregated monetary cost across the agent run.
 
-                    partial_text = self._agent_run_output.accumulated_text or None
+        Attempts to derive cost from the current task's pricing data first,
+        then falls back to computing it from RunUsage and model.
+        """
+        task = getattr(self, "current_task", None)
+        if task is not None:
+            task_cost = getattr(task, "total_cost", None)
+            if task_cost is not None:
+                return float(task_cost)
 
-                    self._agent_run_output.mark_cancelled()
-                    if self._agent_run_output.metadata is None:
-                        self._agent_run_output.metadata = {}
-                    self._agent_run_output.metadata["timeout"] = True
-                    self._agent_run_output.metadata["partial_result"] = bool(partial_text)
-                    self._agent_run_output.metadata["timeout_seconds"] = timeout
+        output = getattr(self, "_agent_run_output", None)
+        run_usage = getattr(output, "usage", None) if output else None
+        if run_usage is None:
+            return None
 
-                    self._agent_run_output.output = partial_text
-                    if task is not None:
-                        task._response = partial_text
+        try:
+            from upsonic.utils.usage import calculate_cost_from_usage
+            model = getattr(self, "model", None) or getattr(self, "model_name", None)
+            if model is not None:
+                return calculate_cost_from_usage(run_usage, model)
+        except Exception:
+            pass
+        return None
 
-                    # Record usage so task.total_input_token / total_output_token work
-                    await self._run_call_management_step(task, debug)
+    async def _do_async_pipeline(
+        self,
+        task: "Task",
+        run_id: str,
+        debug: bool,
+        return_output: bool,
+        timeout: Optional[float],
+        partial_on_timeout: bool,
+        start_step_index: int,
+    ) -> Union[Any, "AgentRunOutput"]:
+        """Core pipeline execution logic extracted from do_async for OTel span wrapping."""
+        from upsonic.agent.pipeline import PipelineManager
 
-                    cleanup_run(run_id)
-                    sentry_sdk.flush()
+        if partial_on_timeout and timeout is not None:
+            self._agent_run_output.is_streaming = True
 
-                    if return_output:
-                        return self._agent_run_output
-                    return self._agent_run_output.output
+            pipeline = PipelineManager(
+                steps=self._create_streaming_pipeline_steps(),
+                task=self._agent_run_output.task,
+                agent=self,
+                model=self.model,
+                debug=debug or self.debug
+            )
 
-                # Normal completion - restore is_streaming for return consistency
-                self._agent_run_output.is_streaming = False
+            async def _consume_stream():
+                async for pipeline_event in pipeline.execute_stream(
+                    context=self._agent_run_output, start_step_index=start_step_index
+                ):
+                    text_content = self._extract_text_from_stream_event(pipeline_event)
+                    if text_content:
+                        self._agent_run_output.accumulated_text += text_content
 
-                # Record usage — streaming pipeline lacks CallManagementStep
+            try:
+                await asyncio.wait_for(_consume_stream(), timeout=timeout)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                cancel_run_func(run_id)
+
+                partial_text = self._agent_run_output.accumulated_text or None
+
+                self._agent_run_output.mark_cancelled()
+                if self._agent_run_output.metadata is None:
+                    self._agent_run_output.metadata = {}
+                self._agent_run_output.metadata["timeout"] = True
+                self._agent_run_output.metadata["partial_result"] = bool(partial_text)
+                self._agent_run_output.metadata["timeout_seconds"] = timeout
+
+                self._agent_run_output.output = partial_text
+                if task is not None:
+                    task._response = partial_text
+
                 await self._run_call_management_step(task, debug)
 
                 cleanup_run(run_id)
                 sentry_sdk.flush()
+
                 if return_output:
                     return self._agent_run_output
                 return self._agent_run_output.output
 
-            elif timeout is not None:
-                # Case B: Normal pipeline with timeout - raises on expiry
-                from upsonic.exceptions import ExecutionTimeoutError
+            self._agent_run_output.is_streaming = False
 
-                pipeline = PipelineManager(
-                    steps=self._create_direct_pipeline_steps(),
-                    task=self._agent_run_output.task,
-                    agent=self,
-                    model=self.model,
-                    debug=debug or self.debug
+            await self._run_call_management_step(task, debug)
+
+            cleanup_run(run_id)
+            sentry_sdk.flush()
+            if return_output:
+                return self._agent_run_output
+            return self._agent_run_output.output
+
+        elif timeout is not None:
+            from upsonic.exceptions import ExecutionTimeoutError
+
+            pipeline = PipelineManager(
+                steps=self._create_direct_pipeline_steps(),
+                task=self._agent_run_output.task,
+                agent=self,
+                model=self.model,
+                debug=debug or self.debug
+            )
+
+            try:
+                await asyncio.wait_for(
+                    pipeline.execute(self._agent_run_output, start_step_index=start_step_index),
+                    timeout=timeout
+                )
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                cancel_run_func(run_id)
+                cleanup_run(run_id)
+                raise ExecutionTimeoutError(
+                    f"Agent execution timed out after {timeout} seconds",
+                    timeout=timeout
                 )
 
-                try:
-                    await asyncio.wait_for(
-                        pipeline.execute(self._agent_run_output, start_step_index=start_step_index),
-                        timeout=timeout
-                    )
-                except (asyncio.TimeoutError, asyncio.CancelledError):
-                    cancel_run_func(run_id)
-                    cleanup_run(run_id)
-                    raise ExecutionTimeoutError(
-                        f"Agent execution timed out after {timeout} seconds",
-                        timeout=timeout
-                    )
+            cleanup_run(run_id)
+            sentry_sdk.flush()
+            if return_output:
+                return self._agent_run_output
+            return self._agent_run_output.output
 
-                cleanup_run(run_id)
-                sentry_sdk.flush()
-                if return_output:
-                    return self._agent_run_output
-                return self._agent_run_output.output
+        else:
+            pipeline = PipelineManager(
+                steps=self._create_direct_pipeline_steps(),
+                task=self._agent_run_output.task,
+                agent=self,
+                model=self.model,
+                debug=debug or self.debug
+            )
 
-            else:
-                # Case C: No timeout - original behavior
-                pipeline = PipelineManager(
-                    steps=self._create_direct_pipeline_steps(),
-                    task=self._agent_run_output.task,
-                    agent=self,
-                    model=self.model,
-                    debug=debug or self.debug
-                )
+            await pipeline.execute(self._agent_run_output, start_step_index=start_step_index)
+            cleanup_run(run_id)
+            sentry_sdk.flush()
+            if return_output:
+                return self._agent_run_output
+            return self._agent_run_output.output
 
-                await pipeline.execute(self._agent_run_output, start_step_index=start_step_index)
-                cleanup_run(run_id)
-                sentry_sdk.flush()
-                if return_output:
-                    return self._agent_run_output
-                return self._agent_run_output.output
-        finally:
-            self._finalize_agent_usage(resolved_print_flag)
-            self.run_id = None
-    
     async def _run_call_management_step(self, task: "Task", debug: bool = False) -> None:
         """Run CallManagementStep to record usage for streaming-based execution.
 
@@ -3544,11 +3721,10 @@ class Agent(BaseAgent):
         self.run_id = run_id
         register_run(run_id)
         
+        original_model: Optional["Model"] = None
         try:
-            # 1. Create AgentRunInput
             run_input = self._create_agent_run_input(task)
             
-            # 2. Create AgentRunOutput using centralized factory method
             self._agent_run_output = self._create_agent_run_output(
                 run_id=run_id,
                 task=task,
@@ -3556,18 +3732,13 @@ class Agent(BaseAgent):
                 is_streaming=True
             )
             
-            # Set resolved print flag on output for thread-safe access
-            # Streaming defaults to False since user handles output themselves
             self._agent_run_output.print_flag = self._resolve_print_flag(False)
             
-            # Set run_id on task for cross-process continuation support
             if task is not None:
                 task.run_id = run_id
             
-            # Apply model override if provided
-            self._apply_model_override(model)
+            original_model = self._apply_model_override(model)
             
-            # 3. Create pipeline with streaming steps
             pipeline = PipelineManager(
                 steps=self._create_streaming_pipeline_steps(),
                 task=self._agent_run_output.task,
@@ -3576,21 +3747,39 @@ class Agent(BaseAgent):
                 debug=debug or self.debug
             )
             
-            # 4. Stream events from pipeline and filter based on events parameter
-            try:
-                async for pipeline_event in pipeline.execute_stream(context=self._agent_run_output, start_step_index=0):
-                    if events:
-                        yield pipeline_event
-                    else:
-                        text_content = self._extract_text_from_stream_event(pipeline_event)
-                        if text_content:
-                            self._agent_run_output.accumulated_text += text_content
-                            yield text_content
-            except Exception as stream_error:
-                raise stream_error
-            
+            stream_task_desc: str = str(task.description) if task is not None and hasattr(task, "description") else ""
+            with self._otel.agent_run_span(
+                run_id,
+                name=self.name or "",
+                model=str(self.model_name) if self.model_name else "",
+                task_description=stream_task_desc,
+                user_id=self.user_id,
+                session_id=self.session_id,
+            ) as otel_span:
+                try:
+                    async for pipeline_event in pipeline.execute_stream(context=self._agent_run_output, start_step_index=0):
+                        if events:
+                            yield pipeline_event
+                        else:
+                            text_content = self._extract_text_from_stream_event(pipeline_event)
+                            if text_content:
+                                self._agent_run_output.accumulated_text += text_content
+                                yield text_content
+                except Exception as stream_error:
+                    self._otel.record_error(otel_span, stream_error)
+                    raise stream_error
+                finally:
+                    self._otel.finalize_agent_run(
+                        otel_span,
+                        getattr(self, "_agent_run_output", None),
+                        agent_user_id=self.user_id,
+                        agent_session_id=self.session_id,
+                        total_cost=self._calculate_aggregated_cost(),
+                    )
             
         finally:
+            if original_model is not None:
+                self.model = original_model
             stream_print_flag = self._resolve_print_flag(False)
             self._finalize_agent_usage(stream_print_flag)
             cleanup_run(run_id)

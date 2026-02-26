@@ -33,20 +33,14 @@ async def test_show_tool_calls_enabled():
         tools=[calculate_sum]
     )
     
-    # Capture stdout to check logs
     output_buffer = StringIO()
     with redirect_stdout(output_buffer):
-        result = await agent.do_async(task)
+        result = await agent.print_do_async(task)
     
     output = output_buffer.getvalue()
     
-    # Verify result exists
     assert result is not None, "Result should not be None"
     
-    # Verify tool usage information appears in output
-    # show_tool_calls controls whether tool_usage() is called in call_end()
-    # tool_usage() should add tool call information to the output
-    # Check for tool-related output (tool name, tool usage summary, etc.)
     tool_indicators = [
         "calculate_sum",
         "Tool Usage",

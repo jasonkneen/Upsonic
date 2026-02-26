@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from typing import TYPE_CHECKING, Any, List, Literal, Optional, Union
+from upsonic.messages.messages import ModelMessage
 
 from pydantic import BaseModel, Field
 
@@ -92,18 +93,30 @@ SUMMARY_SYSTEM_PROMPT: str = """\
 You are a conversation summarizer. You will receive a structured conversation \
 and must return a CONDENSED version of it as valid JSON matching the schema below.
 
-RULES:
-1. Preserve the request/response alternation order.
-2. Merge multiple user messages into fewer user messages when possible.
-3. Merge multiple assistant text responses into fewer responses when possible.
-4. For tool calls and their results: keep only the MOST IMPORTANT ones. \
-   Summarize or drop tool calls that are redundant or whose results were not used.
-5. Condense long text content into concise summaries while preserving key facts, \
-   decisions, and outcomes.
-6. Keep system prompts intact — do NOT summarize them.
-7. Every tool-return MUST have a matching tool-call with the same tool_call_id \
+CRITICAL RULES — STRUCTURE PRESERVATION:
+1. You MUST output the EXACT same number of messages as the input. \
+   Do NOT merge, drop, or reorder any messages.
+2. You MUST output the EXACT same number and types of parts within each message \
+   in the same order. Do NOT merge, drop, or reorder parts.
+3. Preserve the request/response alternation order exactly as given.
+
+CONTENT RULES — WHAT TO CONDENSE:
+4. For user-prompt text: condense into a concise summary preserving key intent, \
+   facts, and constraints. Make it shorter, not different.
+5. For assistant text parts: condense into a concise summary preserving key facts, \
+   decisions, outcomes, and data. Make it shorter, not different.
+6. Keep system prompts COMPLETELY intact — do NOT modify them at all.
+
+TOOL RULES — WHAT TO PRESERVE EXACTLY:
+7. Keep every tool-call part EXACTLY as-is: copy tool_name, tool_call_id, \
+   and args unchanged. Do NOT modify or omit any tool-call.
+8. Keep every tool-return part: copy tool_name and tool_call_id EXACTLY as-is. \
+   You may lightly condense the content text but preserve all key data and values.
+9. Every tool-return MUST have a matching tool-call with the same tool_call_id \
    in a preceding response.
-8. Return ONLY the JSON object. No markdown fences, no extra text.
+
+OUTPUT:
+10. Return ONLY the JSON object. No markdown fences, no extra text.
 
 JSON SCHEMA:
 {schema}
@@ -141,8 +154,10 @@ class ContextManagementMiddleware:
         """
         Args:
             model: The Model instance, used for token counting and context window lookup.
-            keep_recent_count: Number of recent tool-call events / messages
-                to preserve when pruning or summarizing (default 5).
+            keep_recent_count: Number of recent conversation pairs
+                (ModelRequest + ModelResponse) or tool interaction rounds
+                (ToolCallPart + ToolReturnPart) to preserve when pruning
+                or summarizing (default 5).
             safety_margin_ratio: Use this fraction of the max context window as
                 the effective limit (default 0.90 = 90%).
             context_compression_model: Optional separate Model instance with a
@@ -246,34 +261,164 @@ class ContextManagementMiddleware:
                     return True
         return False
 
+    def _group_into_conversation_pairs(
+        self,
+        messages: List["ModelMessage"],
+    ) -> List[tuple["ModelMessage", ...]]:
+        """Group messages into conversation turn pairs.
+
+        A pair is ``(ModelRequest, ModelResponse)`` when they appear
+        consecutively in the list.  Any lone / unpaired message becomes
+        a single-element tuple so the caller can always iterate uniformly.
+        """
+        from upsonic.messages import ModelRequest, ModelResponse
+
+        pairs: List[tuple["ModelMessage", ...]] = []
+        i: int = 0
+        while i < len(messages):
+            if (
+                i + 1 < len(messages)
+                and isinstance(messages[i], ModelRequest)
+                and isinstance(messages[i + 1], ModelResponse)
+            ):
+                pairs.append((messages[i], messages[i + 1]))
+                i += 2
+            else:
+                pairs.append((messages[i],))
+                i += 1
+        return pairs
+
+    def _identify_tool_rounds(
+        self,
+        messages: List["ModelMessage"],
+    ) -> List[tuple[int, int]]:
+        """Identify tool interaction rounds as pairs of message indices.
+
+        A tool round is a consecutive pair of:
+        - ``messages[resp_idx]``: a ``ModelResponse`` containing ``ToolCallPart``(s)
+        - ``messages[req_idx]``:  the immediately following ``ModelRequest``
+          containing matching ``ToolReturnPart``(s) or ``RetryPromptPart``(s).
+
+        Returns:
+            Ordered list of ``(response_idx, request_idx)`` tuples.
+        """
+        from upsonic.messages import (
+            ModelRequest,
+            ModelResponse,
+            RetryPromptPart,
+            ToolCallPart,
+            ToolReturnPart,
+        )
+
+        rounds: List[tuple[int, int]] = []
+
+        for i in range(len(messages) - 1):
+            msg: "ModelMessage" = messages[i]
+            next_msg: "ModelMessage" = messages[i + 1]
+
+            if not isinstance(msg, ModelResponse) or not isinstance(next_msg, ModelRequest):
+                continue
+
+            tool_call_ids: set[str] = {
+                part.tool_call_id
+                for part in msg.parts
+                if isinstance(part, ToolCallPart)
+            }
+
+            if not tool_call_ids:
+                continue
+
+            has_matching_return: bool = any(
+                isinstance(part, (ToolReturnPart, RetryPromptPart))
+                and getattr(part, 'tool_call_id', None) in tool_call_ids
+                for part in next_msg.parts
+            )
+
+            if has_matching_return:
+                rounds.append((i, i + 1))
+
+        return rounds
+
     def _prune_tool_call_history(
         self,
         messages: List["ModelMessage"],
     ) -> List["ModelMessage"]:
-        """Remove old tool call/return pairs, keeping only the most recent ones.
+        """Remove old tool interaction rounds, keeping the most recent ones.
 
-        Args:
-            messages: The full message list.
+        A tool round is a paired ``(ModelResponse`` with ``ToolCallPart``\\s,
+        ``ModelRequest`` with matching ``ToolReturnPart``\\s /
+        ``RetryPromptPart``\\s).
 
-        Returns:
-            A new list of messages with old tool call history pruned.
+        ``keep_recent_count`` determines how many recent *rounds* to
+        preserve.  Old rounds have their tool-related parts removed; if
+        a message has no remaining parts after removal it is dropped
+        entirely.
         """
-        from upsonic.messages import ToolCallPart, ToolReturnPart
+        from dataclasses import replace
 
-        tool_related_indices: List[int] = []
-        for i, msg in enumerate(messages):
-            if not hasattr(msg, 'parts'):
-                continue
-            for part in msg.parts:
-                if isinstance(part, (ToolCallPart, ToolReturnPart)):
-                    tool_related_indices.append(i)
-                    break
+        from upsonic.messages import (
+            ModelRequest,
+            ModelResponse,
+            RetryPromptPart,
+            ToolCallPart,
+            ToolReturnPart,
+        )
 
-        if len(tool_related_indices) <= self.keep_recent_count:
+        rounds: List[tuple[int, int]] = self._identify_tool_rounds(messages)
+
+        print(f"\n  [PRUNE] Identified {len(rounds)} tool round(s), keep_recent_count={self.keep_recent_count}")
+
+        if len(rounds) <= self.keep_recent_count:
+            print(f"  [PRUNE] No pruning needed ({len(rounds)} <= {self.keep_recent_count})")
             return list(messages)
 
-        indices_to_remove: set[int] = set(tool_related_indices[:-self.keep_recent_count])
-        return [msg for i, msg in enumerate(messages) if i not in indices_to_remove]
+        old_rounds: List[tuple[int, int]] = (
+            rounds if self.keep_recent_count == 0
+            else rounds[:-self.keep_recent_count]
+        )
+        print(f"  [PRUNE] Will remove {len(old_rounds)} old round(s), keep {self.keep_recent_count} recent")
+
+        stale_ids_by_msg: dict[int, set[str]] = {}
+        for resp_idx, req_idx in old_rounds:
+            resp_msg: "ModelMessage" = messages[resp_idx]
+            tool_ids: set[str] = {
+                part.tool_call_id
+                for part in resp_msg.parts  # type: ignore[union-attr]
+                if isinstance(part, ToolCallPart)
+            }
+            stale_ids_by_msg.setdefault(resp_idx, set()).update(tool_ids)
+            stale_ids_by_msg.setdefault(req_idx, set()).update(tool_ids)
+
+        result: List["ModelMessage"] = []
+        for i, msg in enumerate(messages):
+            if i not in stale_ids_by_msg:
+                result.append(msg)
+                continue
+
+            stale_ids: set[str] = stale_ids_by_msg[i]
+
+            if isinstance(msg, ModelResponse):
+                remaining_parts = [
+                    p for p in msg.parts
+                    if not (isinstance(p, ToolCallPart) and p.tool_call_id in stale_ids)
+                ]
+            elif isinstance(msg, ModelRequest):
+                remaining_parts = [
+                    p for p in msg.parts
+                    if not (
+                        isinstance(p, (ToolReturnPart, RetryPromptPart))
+                        and getattr(p, 'tool_call_id', None) in stale_ids
+                    )
+                ]
+            else:
+                result.append(msg)
+                continue
+
+            if remaining_parts:
+                result.append(replace(msg, parts=remaining_parts))
+
+        print(f"  [PRUNE] Before: {len(messages)} messages → After: {len(result)} messages (removed {len(messages) - len(result)})")
+        return result
 
 
     def _serialize_messages_for_prompt(
@@ -366,7 +511,7 @@ class ContextManagementMiddleware:
                             tool_call_id=p.tool_call_id or "",
                         ))
                 if parts:
-                    reconstructed.append(ModelRequest(parts=parts))
+                    reconstructed.append(ModelRequest(parts=parts, timestamp=now_utc()))
 
             elif msg.kind == "response":
                 parts_resp: List[Any] = []
@@ -380,13 +525,45 @@ class ContextManagementMiddleware:
                             tool_call_id=p.tool_call_id or "",
                         ))
                 if parts_resp:
+                    has_tool_calls: bool = any(
+                        isinstance(p, ToolCallPart) for p in parts_resp
+                    )
                     reconstructed.append(ModelResponse(
                         parts=parts_resp,
                         model_name=self.model.model_name,
                         timestamp=now_utc(),
+                        finish_reason='tool_call' if has_tool_calls else 'stop',
                     ))
 
         return reconstructed
+
+    def _merge_system_parts_into_result(
+        self,
+        system_parts: List[Any],
+        messages: List["ModelMessage"],
+    ) -> List["ModelMessage"]:
+        """Re-merge extracted SystemPromptParts into the first ModelRequest.
+
+        When the first message of a conversation contains both
+        SystemPromptPart and UserPromptPart, we split them for proper
+        pair-based summarization.  This method puts the SystemPromptParts
+        back at the front of the first ModelRequest so the output
+        structure matches what the model providers expect.
+        """
+        from dataclasses import replace
+        from upsonic.messages import ModelRequest
+
+        if not system_parts:
+            return list(messages)
+
+        result: List["ModelMessage"] = list(messages)
+        if result and isinstance(result[0], ModelRequest):
+            merged_parts: List[Any] = system_parts + list(result[0].parts)
+            result[0] = replace(result[0], parts=merged_parts)
+        else:
+            result.insert(0, ModelRequest(parts=system_parts))
+
+        return result
 
     async def _summarize_old_messages(
         self,
@@ -394,7 +571,7 @@ class ContextManagementMiddleware:
     ) -> List["ModelMessage"]:
         """Summarize old messages via the LLM into structured ModelRequest /
         ModelResponse objects, keeping the last ``self.keep_recent_count``
-        messages verbatim.
+        *conversation pairs* (``ModelRequest`` + ``ModelResponse``) verbatim.
 
         Uses the ``context_compression_model`` if set, otherwise falls
         back to the primary agent model.
@@ -415,26 +592,48 @@ class ContextManagementMiddleware:
         if len(messages) <= self.keep_recent_count:
             return list(messages)
 
-        system_messages: List["ModelMessage"] = []
+        system_parts: List[Any] = []
         non_system_messages: List["ModelMessage"] = []
 
         for i, msg in enumerate(messages):
             if i == 0 and isinstance(msg, ModelRequest):
-                if any(isinstance(p, SystemPromptPart) for p in msg.parts):
-                    system_messages.append(msg)
+                sys_p: List[Any] = [
+                    p for p in msg.parts if isinstance(p, SystemPromptPart)
+                ]
+                non_sys_p: List[Any] = [
+                    p for p in msg.parts if not isinstance(p, SystemPromptPart)
+                ]
+                if sys_p:
+                    system_parts = sys_p
+                    if non_sys_p:
+                        non_system_messages.append(ModelRequest(parts=non_sys_p))
                     continue
             non_system_messages.append(msg)
 
-        if len(non_system_messages) <= self.keep_recent_count:
+        conversation_pairs: List[tuple["ModelMessage", ...]] = (
+            self._group_into_conversation_pairs(non_system_messages)
+        )
+
+        if len(conversation_pairs) <= self.keep_recent_count:
             return list(messages)
 
-        old_messages: List["ModelMessage"] = non_system_messages[:-self.keep_recent_count]
-        recent_messages: List["ModelMessage"] = non_system_messages[-self.keep_recent_count:]
+        old_pairs: List[tuple["ModelMessage", ...]] = conversation_pairs[:-self.keep_recent_count]
+        recent_pairs: List[tuple["ModelMessage", ...]] = conversation_pairs[-self.keep_recent_count:]
+
+        old_messages: List["ModelMessage"] = [msg for pair in old_pairs for msg in pair]
+        recent_messages: List["ModelMessage"] = [msg for pair in recent_pairs for msg in pair]
+
+        print(f"\n  [SUMMARIZE] Conversation pairs: {len(conversation_pairs)} total")
+        print(f"  [SUMMARIZE] Old pairs to summarize: {len(old_pairs)} ({len(old_messages)} messages)")
+        print(f"  [SUMMARIZE] Recent pairs kept verbatim: {len(recent_pairs)} ({len(recent_messages)} messages)")
+        print(f"  [SUMMARIZE] System parts preserved: {len(system_parts)}")
 
         serialized_conversation: str = self._serialize_messages_for_prompt(old_messages)
 
         if not serialized_conversation.strip():
-            return system_messages + recent_messages
+            return self._merge_system_parts_into_result(
+                system_parts, recent_messages
+            )
 
         schema_json: str = json.dumps(
             ConversationSummary.model_json_schema(), indent=2
@@ -516,7 +715,9 @@ class ContextManagementMiddleware:
                 "Summarization produced no messages; falling back to recent messages only",
                 context=_LOG_CONTEXT,
             )
-            return system_messages + recent_messages
+            return self._merge_system_parts_into_result(
+                system_parts, recent_messages
+            )
 
         info_log(
             f"Summarization complete: {len(old_messages)} old messages → "
@@ -524,7 +725,12 @@ class ContextManagementMiddleware:
             context=_LOG_CONTEXT,
         )
 
-        return system_messages + summarized_messages + recent_messages
+        combined: List["ModelMessage"] = summarized_messages + recent_messages
+        result: List["ModelMessage"] = self._merge_system_parts_into_result(
+            system_parts, combined
+        )
+        print(f"  [SUMMARIZE] Result: {len(system_parts)} system parts merged + {len(summarized_messages)} summarized + {len(recent_messages)} recent = {len(result)} total")
+        return result
 
 
 
@@ -565,10 +771,25 @@ class ContextManagementMiddleware:
         from upsonic.utils.printing import info_log
 
         if not self._is_context_exceeded(messages):
+            print("\n" + "=" * 80)
+            print(f"[CTX] Context NOT exceeded - no action needed ({len(messages)} messages)")
+            print("=" * 80)
             return list(messages), False
 
         estimated_tokens: int = self._estimate_message_tokens(messages)
         max_window: Optional[int] = self._get_max_context_window()
+        effective_limit: int = int(max_window * self.safety_margin_ratio)
+
+        print("\n" + "=" * 80)
+        print("[CTX] CONTEXT WINDOW EXCEEDED")
+        print(f"[CTX]   Messages: {len(messages)}")
+        print(f"[CTX]   Estimated tokens: {estimated_tokens:,}")
+        print(f"[CTX]   Model window: {max_window:,}")
+        print(f"[CTX]   Safety margin: {self.safety_margin_ratio}")
+        print(f"[CTX]   Effective limit: {effective_limit:,}")
+        print(f"[CTX]   Over by: {estimated_tokens - effective_limit:,} tokens")
+        print("=" * 80)
+
         info_log(
             f"Context window exceeded: ~{estimated_tokens:,} tokens estimated, "
             f"limit {int(max_window * self.safety_margin_ratio):,} "
@@ -586,13 +807,17 @@ class ContextManagementMiddleware:
             pruned_count: int = len(current_messages) - len(pruned)
             if pruned_count > 0:
                 info_log(
-                    f"Step 1 — Tool pruning: removed {pruned_count} old tool-related "
-                    f"messages (kept {self.keep_recent_count} recent)",
+                    f"Step 1 — Tool pruning: removed {pruned_count} messages from old tool "
+                    f"interaction rounds (kept {self.keep_recent_count} recent rounds)",
                     context=_LOG_CONTEXT,
                 )
                 current_messages = pruned
 
                 if not self._is_context_exceeded(current_messages):
+                    remaining: int = self._estimate_message_tokens(current_messages)
+                    print("\n[CTX] RESOLVED by Step 1 (tool pruning)")
+                    print(f"[CTX]   Tokens after pruning: {remaining:,} (limit: {effective_limit:,})")
+                    print("=" * 80 + "\n")
                     info_log(
                         "Context within limits after tool pruning. No further action needed.",
                         context=_LOG_CONTEXT,
@@ -600,8 +825,8 @@ class ContextManagementMiddleware:
                     return current_messages, False
             else:
                 info_log(
-                    f"Step 1 — Tool pruning: no old tool messages to remove "
-                    f"(all {len(current_messages)} messages within keep_recent_count={self.keep_recent_count})",
+                    f"Step 1 — Tool pruning: no old tool rounds to remove "
+                    f"(tool rounds within keep_recent_count={self.keep_recent_count})",
                     context=_LOG_CONTEXT,
                 )
         else:
@@ -618,6 +843,11 @@ class ContextManagementMiddleware:
         summarized: List["ModelMessage"] = await self._summarize_old_messages(current_messages)
 
         if not self._is_context_exceeded(summarized):
+            remaining_after_summary: int = self._estimate_message_tokens(summarized)
+            print("\n[CTX] RESOLVED by Step 2 (summarization)")
+            print(f"[CTX]   Tokens after summarization: {remaining_after_summary:,} (limit: {effective_limit:,})")
+            print(f"[CTX]   Messages: {len(summarized)}")
+            print("=" * 80 + "\n")
             info_log(
                 "Context within limits after summarization. Compression successful.",
                 context=_LOG_CONTEXT,
@@ -626,6 +856,11 @@ class ContextManagementMiddleware:
 
         # Step 3: Context is still full — signal to caller
         remaining_tokens: int = self._estimate_message_tokens(summarized)
+        print("\n[CTX] Step 3 — CONTEXT FULL (all strategies exhausted)")
+        print(f"[CTX]   Tokens remaining: {remaining_tokens:,} (limit: {effective_limit:,})")
+        print(f"[CTX]   Still over by: {remaining_tokens - effective_limit:,} tokens")
+        print(f"[CTX]   Messages: {len(summarized)}")
+        print("=" * 80 + "\n")
         info_log(
             f"Step 3 — Context still exceeded after all strategies: "
             f"~{remaining_tokens:,} tokens remaining vs limit "

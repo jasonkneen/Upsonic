@@ -362,7 +362,7 @@ class PolicyManager:
                 violation_reason=result.violation_reason or "Policy violation detected",
                 policy_type=self.policy_type,
                 action_type=action_taken,
-                language="en"  # TODO: Could be made configurable
+                language="en"  # TODO: Make this configurable
             )
             
             result.feedback_message = feedback

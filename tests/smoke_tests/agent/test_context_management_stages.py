@@ -34,9 +34,6 @@ from upsonic.usage import RequestUsage
 pytestmark = pytest.mark.timeout(180)
 
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
 
 LONG_PARAGRAPH: str = (
     "The rapid advancement of artificial intelligence has transformed industries "
@@ -65,9 +62,7 @@ TOOL_RESULT_TEXT: str = (
 )
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+
 
 def _get_real_model() -> Any:
     return infer_model("anthropic/claude-sonnet-4-5")
@@ -233,14 +228,11 @@ def _build_mixed_conversation(
     return msgs
 
 
-# ===========================================================================
-# Stage 1: Tool-call pruning
-# ===========================================================================
 
 class TestStage1ToolPruning:
     """Test that tool-call pruning works independently."""
 
-    def test_prune_removes_old_tool_messages(self) -> None:
+    def test_prune_removes_old_tool_rounds(self) -> None:
         model = _get_real_model()
         mw = ContextManagementMiddleware(model=model, keep_recent_count=2)
         msgs = _build_long_tool_conversation(n_tool_pairs=10, text_multiplier=1)
@@ -254,7 +246,8 @@ class TestStage1ToolPruning:
                 if isinstance(part, (ToolCallPart, ToolReturnPart)):
                     tool_msg_count += 1
                     break
-        assert tool_msg_count == 2
+        # 2 rounds kept × 2 messages per round (ToolCallPart resp + ToolReturnPart req)
+        assert tool_msg_count == 4
 
     def test_prune_preserves_non_tool_messages(self) -> None:
         model = _get_real_model()
@@ -300,9 +293,7 @@ class TestStage1ToolPruning:
         assert mw._has_tool_related_messages(msgs) is False
 
 
-# ===========================================================================
-# Stage 2a: Summarization with text-only conversation (no tool calls)
-# ===========================================================================
+
 
 class TestStage2TextOnlySummarization:
     """Verify that summarization works for conversations with NO tool calls.
@@ -368,10 +359,6 @@ class TestStage2TextOnlySummarization:
             assert len(msg.parts) > 0
 
 
-# ===========================================================================
-# Stage 2b: Summarization with tool-call conversation
-# ===========================================================================
-
 class TestStage2ToolCallSummarization:
     """Verify that summarization works for conversations WITH tool calls."""
 
@@ -403,10 +390,6 @@ class TestStage2ToolCallSummarization:
         assert any(isinstance(p, SystemPromptPart) for p in first_msg.parts)
 
 
-# ===========================================================================
-# Stage 2c: Summarization with mixed conversation
-# ===========================================================================
-
 class TestStage2MixedSummarization:
     """Verify summarization with both text-only and tool-call messages."""
 
@@ -426,10 +409,6 @@ class TestStage2MixedSummarization:
         result_chars: int = _total_content_chars(result)
         assert result_chars <= original_chars
 
-
-# ===========================================================================
-# Stage 3: Full apply() pipeline — text-only (skip tool pruning, go to summarization)
-# ===========================================================================
 
 class TestApplyTextOnlyPipeline:
     """Test the full apply() flow when there are NO tool calls.
@@ -476,10 +455,6 @@ class TestApplyTextOnlyPipeline:
         assert len(result) == len(msgs)
 
 
-# ===========================================================================
-# Stage 4: Full apply() pipeline — with tool calls (prune first, then summarize)
-# ===========================================================================
-
 class TestApplyWithToolsPipeline:
     """Test the full apply() flow when tool calls exist."""
 
@@ -508,10 +483,6 @@ class TestApplyWithToolsPipeline:
         for msg in result:
             assert isinstance(msg, (ModelRequest, ModelResponse))
 
-
-# ===========================================================================
-# Stage 5: Context-full signal
-# ===========================================================================
 
 class TestContextFullSignal:
     """Test that context_full=True is returned when all strategies fail."""
@@ -558,10 +529,6 @@ class TestContextFullSignal:
         assert resp.finish_reason == "length"
         assert resp.model_name == "anthropic/claude-sonnet-4-5"
 
-
-# ===========================================================================
-# Stage 6: Custom context_compression_model
-# ===========================================================================
 
 class TestCustomCompressionModel:
     """Test that a separate model can be used for summarization."""
@@ -610,10 +577,6 @@ class TestCustomCompressionModel:
         result_chars: int = _total_content_chars(result)
         assert result_chars < original_chars
 
-
-# ===========================================================================
-# Stage 7: Logging verification
-# ===========================================================================
 
 class TestLogging:
     """Verify that the middleware produces log output during operations.
@@ -671,10 +634,6 @@ class TestLogging:
         for msg in result:
             assert isinstance(msg, (ModelRequest, ModelResponse))
 
-
-# ===========================================================================
-# Stage 8: Edge cases
-# ===========================================================================
 
 class TestEdgeCases:
     def test_empty_messages(self) -> None:

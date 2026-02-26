@@ -16,6 +16,7 @@ from upsonic.profiles.qwen import qwen_model_profile
 
 try:
     from huggingface_hub import AsyncInferenceClient
+    from huggingface_hub.constants import INFERENCE_PROXY_TEMPLATE
 except ImportError:  # pragma: no cover
     from upsonic.utils.printing import import_error
     import_error(
@@ -24,7 +25,7 @@ except ImportError:  # pragma: no cover
         feature_name="HuggingFace provider"
     )
 
-from upsonic.providers import Provider
+from . import Provider
 
 
 class HuggingFaceProvider(Provider[AsyncInferenceClient]):
@@ -36,7 +37,14 @@ class HuggingFaceProvider(Provider[AsyncInferenceClient]):
 
     @property
     def base_url(self) -> str:
-        return self.client.model  # type: ignore
+        if self._client.model is not None:
+            return self._client.model
+        if self._client.provider is not None:
+            return INFERENCE_PROXY_TEMPLATE.format(provider=self._client.provider)
+        raise UserError(
+            'Unable to determine base URL for HuggingFace provider. '
+            'Please provide `base_url`, `provider_name`, or a pre-configured `hf_client`.'
+        )
 
     @property
     def client(self) -> AsyncInferenceClient:
@@ -90,10 +98,10 @@ class HuggingFaceProvider(Provider[AsyncInferenceClient]):
             api_key: The API key to use for authentication, if not provided, the `HF_TOKEN` environment variable
                 will be used if available.
             hf_client: An existing
-                [`AsyncInferenceClient`](https://huggingface.co/docs/huggingface_hub/v0.29.3/en/package_reference/inference_client#huggingface_hub.AsyncInferenceClient)
+                [`AsyncInferenceClient`](https://huggingface.co/docs/huggingface_hub/en/package_reference/inference_client#huggingface_hub.AsyncInferenceClient)
                 client to use. If not provided, a new instance will be created.
             http_client: (currently ignored) An existing `httpx.AsyncClient` to use for making HTTP requests.
-            provider_name : Name of the provider to use for inference. available providers can be found in the [HF Inference Providers documentation](https://huggingface.co/docs/inference-providers/index#partners).
+            provider_name: Name of the provider to use for inference. available providers can be found in the [HF Inference Providers documentation](https://huggingface.co/docs/inference-providers/index#partners).
                 defaults to "auto", which will select the first available provider for the model, the first of the providers available for the model, sorted by the user's order in https://hf.co/settings/inference-providers.
                 If `base_url` is passed, then `provider_name` is not used.
         """

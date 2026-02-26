@@ -136,7 +136,12 @@ class TestResponseFormat:
         output = captured.out
 
         assert result is not None
-        assert "Task Result" in output or "Result:" in output or "[SUCCESS]" in output or "Task completed" in output
+        assert (
+            "Structured Output" in output
+            or "AnalysisResult" in output
+            or "Agent Started" in output
+            or "Task Result" in output
+        )
 
 
 class TestContextChain:
