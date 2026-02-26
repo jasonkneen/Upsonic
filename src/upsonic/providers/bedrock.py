@@ -208,7 +208,7 @@ class BedrockProvider(Provider[BaseClient]):
             aws_session_token: The AWS session token. If not set, the `AWS_SESSION_TOKEN` environment variable will be used if available.
             api_key: The API key for Bedrock client. Can be used instead of `aws_access_key_id`, `aws_secret_access_key`, and `aws_session_token`. If not set, the `AWS_BEARER_TOKEN_BEDROCK` environment variable will be used if available.
             base_url: The base URL for the Bedrock client.
-            region_name: The AWS region name. If not set, the `AWS_DEFAULT_REGION` environment variable will be used if available.
+            region_name: The AWS region name. If not set, `AWS_REGION` or `AWS_DEFAULT_REGION` environment variable will be used if available.
             profile_name: The AWS profile name.
             aws_read_timeout: The read timeout for Bedrock client.
             aws_connect_timeout: The connect timeout for Bedrock client.
@@ -216,6 +216,11 @@ class BedrockProvider(Provider[BaseClient]):
         if bedrock_client is not None:
             self._client = bedrock_client
         else:
+            resolved_region: str | None = region_name or os.getenv('AWS_REGION') or os.getenv('AWS_DEFAULT_REGION')
+            if not resolved_region:
+                raise UserError(
+                    'You must provide a `region_name` or set AWS_REGION or AWS_DEFAULT_REGION for Bedrock Runtime.'
+                )
             read_timeout = aws_read_timeout or float(os.getenv('AWS_READ_TIMEOUT', 300))
             connect_timeout = aws_connect_timeout or float(os.getenv('AWS_CONNECT_TIMEOUT', 60))
             config: dict[str, Any] = {
@@ -227,7 +232,7 @@ class BedrockProvider(Provider[BaseClient]):
                 if api_key is not None:
                     session = boto3.Session(
                         botocore_session=_BearerTokenSession(api_key),
-                        region_name=region_name,
+                        region_name=resolved_region,
                         profile_name=profile_name,
                     )
                     config['signature_version'] = 'bearer'
@@ -236,7 +241,7 @@ class BedrockProvider(Provider[BaseClient]):
                         aws_access_key_id=aws_access_key_id,
                         aws_secret_access_key=aws_secret_access_key,
                         aws_session_token=aws_session_token,
-                        region_name=region_name,
+                        region_name=resolved_region,
                         profile_name=profile_name,
                     )
                 self._client = session.client(  # type: ignore[reportUnknownMemberType]
