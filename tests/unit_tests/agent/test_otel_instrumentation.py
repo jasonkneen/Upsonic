@@ -15,7 +15,9 @@ Run with: uv run pytest tests/unit_tests/agent/test_otel_instrumentation.py -v -
 """
 
 from typing import Any, Dict, List, Optional
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from upsonic import Agent
 from upsonic.models.instrumented import (
@@ -27,6 +29,32 @@ from upsonic.agent.otel_manager import AgentOTelManager
 from upsonic.agent.pipeline.manager import PipelineManager
 from upsonic.agent.pipeline.step import StepResult, StepStatus
 from upsonic.usage import RunUsage, RequestUsage
+
+
+def _make_mock_model(model: Any = "openai/gpt-4o", **_kwargs: Any) -> MagicMock:
+    """Create a mock Model that satisfies Agent requirements without API keys.
+
+    If *model* is already a mock (i.e. WrapperModel re-calling infer_model on
+    an already-resolved object), return it unchanged.
+    """
+    if isinstance(model, MagicMock):
+        return model
+
+    name: str = model if isinstance(model, str) else "mock"
+    mock = MagicMock()
+    mock.model_name = name.split("/")[-1] if "/" in name else name
+    mock.system = ""
+    mock.base_url = None
+    mock.name.return_value = name
+    return mock
+
+
+@pytest.fixture(autouse=True)
+def _patch_infer_model():
+    """Prevent all tests in this module from hitting real LLM providers."""
+    with patch("upsonic.models.infer_model", side_effect=_make_mock_model), \
+         patch("upsonic.models.wrapper.infer_model", side_effect=_make_mock_model):
+        yield
 
 
 class RecordingSpan:
