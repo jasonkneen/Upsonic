@@ -85,3 +85,13 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     except Exception:
         pass
 
+    # Force-kill any lingering non-daemon threads spawned by crawlee / asyncio
+    _main_thread = threading.main_thread()
+    for t in threading.enumerate():
+        if t is _main_thread or t.daemon:
+            continue
+        try:
+            t.join(timeout=2)
+        except Exception:
+            pass
+

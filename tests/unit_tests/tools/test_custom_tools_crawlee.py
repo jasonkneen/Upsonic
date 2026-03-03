@@ -1,5 +1,5 @@
 """
-Unit tests for CrawleeTools — real HTTP requests, no mocking.
+Integration tests for CrawleeTools — real HTTP requests, no mocking.
 
 Covers: init, tool registration/filtering, sync/async tool methods,
 output structure, JSON serialization, ToolProcessor integration,
@@ -13,21 +13,34 @@ Run:
 
 import importlib.util
 import json
+import os
 from typing import Any, Dict, List
 
 import pytest
 
 from upsonic.tools.custom_tools.crawlee import CrawleeTools
 
-_CRAWLEE_BS_AVAILABLE: bool = importlib.util.find_spec("crawlee.crawlers") is not None
-_CRAWLEE_PW_AVAILABLE: bool = (
-    _CRAWLEE_BS_AVAILABLE and importlib.util.find_spec("playwright") is not None
-)
+try:
+    _CRAWLEE_BS_AVAILABLE: bool = importlib.util.find_spec("crawlee.crawlers") is not None
+except (ModuleNotFoundError, ValueError):
+    _CRAWLEE_BS_AVAILABLE = False
+
+try:
+    _CRAWLEE_PW_AVAILABLE: bool = (
+        _CRAWLEE_BS_AVAILABLE and importlib.util.find_spec("playwright") is not None
+    )
+except (ModuleNotFoundError, ValueError):
+    _CRAWLEE_PW_AVAILABLE = False
+_IN_CI: bool = os.environ.get("CI", "").lower() in ("true", "1", "yes")
 
 pytestmark = [
     pytest.mark.skipif(
         not _CRAWLEE_BS_AVAILABLE,
         reason="crawlee[beautifulsoup] not installed; skipping Crawlee unit tests",
+    ),
+    pytest.mark.skipif(
+        _IN_CI,
+        reason="Crawlee tests make real HTTP requests and hang in CI; run locally only",
     ),
 ]
 
