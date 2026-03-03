@@ -15,6 +15,7 @@ from upsonic.providers.openai import OpenAIProvider
 from upsonic.providers.anthropic import AnthropicProvider
 from upsonic.providers.google import GoogleProvider
 
+
 class TestModelSpecification(unittest.TestCase):
     @patch('upsonic.providers.openai.AsyncOpenAI')
     def test_string_based_specifications(self, mock_openai):

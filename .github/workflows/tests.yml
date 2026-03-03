@@ -30,4 +30,4 @@ jobs:
 
     - name: Run unit tests
       run: |
-        uv run pytest tests/unit_tests -q --tb=short
+        uv run pytest tests/unit_tests -q --tb=short --continue-on-collection-errors
