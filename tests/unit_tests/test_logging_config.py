@@ -94,16 +94,13 @@ class TestLoggingConfig(unittest.TestCase):
         """Test setup_sentry when telemetry is disabled."""
         os.environ["UPSONIC_TELEMETRY"] = "false"
 
-        # Force reconfiguration
         from upsonic.utils import logging_config
         logging_config._SENTRY_CONFIGURED = False
 
         setup_sentry()
 
-        # Sentry should be initialized with empty DSN
-        mock_sentry.init.assert_called_once()
-        call_kwargs = mock_sentry.init.call_args[1]
-        self.assertEqual(call_kwargs['dsn'], "")
+        # Sentry should NOT be initialized when DSN is "false"
+        mock_sentry.init.assert_not_called()
 
     @patch('upsonic.utils.logging_config.sentry_sdk')
     @patch('upsonic.utils.logging_config.atexit.register')
@@ -268,18 +265,23 @@ class TestLoggingConfig(unittest.TestCase):
 class TestSentryIntegration(unittest.TestCase):
     """Test cases for Sentry integration."""
 
-    def setUp(self):
-        """Set up test fixtures."""
-        self.original_env = os.environ.copy()
+    _TEST_DSN: str = "https://test@sentry.io/999"
 
-    def tearDown(self):
-        """Clean up after tests."""
+    def setUp(self) -> None:
+        self.original_env = os.environ.copy()
+        # Remove conftest's forced disable so Sentry tests can exercise init()
+        for key in list(os.environ.keys()):
+            if key.startswith("UPSONIC_"):
+                del os.environ[key]
+
+    def tearDown(self) -> None:
         os.environ.clear()
         os.environ.update(self.original_env)
 
     @patch('upsonic.utils.logging_config.sentry_sdk')
-    def test_sentry_environment_config(self, mock_sentry):
+    def test_sentry_environment_config(self, mock_sentry: MagicMock) -> None:
         """Test Sentry environment configuration."""
+        os.environ["UPSONIC_TELEMETRY"] = self._TEST_DSN
         os.environ["UPSONIC_ENVIRONMENT"] = "development"
         os.environ["UPSONIC_SENTRY_SAMPLE_RATE"] = "0.5"
 
@@ -288,14 +290,17 @@ class TestSentryIntegration(unittest.TestCase):
 
         setup_sentry()
 
+        mock_sentry.init.assert_called_once()
         call_kwargs = mock_sentry.init.call_args[1]
+        self.assertEqual(call_kwargs['dsn'], self._TEST_DSN)
         self.assertEqual(call_kwargs['environment'], "development")
         self.assertEqual(call_kwargs['traces_sample_rate'], 0.5)
 
     @patch('upsonic.utils.logging_config.sentry_sdk')
     @patch('upsonic.utils.package.system_id.get_system_id')
-    def test_sentry_user_id_tracking(self, mock_get_system_id, mock_sentry):
+    def test_sentry_user_id_tracking(self, mock_get_system_id: MagicMock, mock_sentry: MagicMock) -> None:
         """Test Sentry user ID tracking."""
+        os.environ["UPSONIC_TELEMETRY"] = self._TEST_DSN
         mock_get_system_id.return_value = "test-system-id-123"
 
         from upsonic.utils import logging_config
@@ -303,22 +308,20 @@ class TestSentryIntegration(unittest.TestCase):
 
         setup_sentry()
 
-        # Should set user ID
         mock_sentry.set_user.assert_called_once_with({"id": "test-system-id-123"})
 
     @patch('upsonic.utils.logging_config.sentry_sdk')
     @patch('upsonic.utils.package.system_id.get_system_id')
-    def test_sentry_user_id_failure_graceful(self, mock_get_system_id, mock_sentry):
+    def test_sentry_user_id_failure_graceful(self, mock_get_system_id: MagicMock, mock_sentry: MagicMock) -> None:
         """Test Sentry handles system ID failure gracefully."""
+        os.environ["UPSONIC_TELEMETRY"] = self._TEST_DSN
         mock_get_system_id.side_effect = Exception("System ID error")
 
         from upsonic.utils import logging_config
         logging_config._SENTRY_CONFIGURED = False
 
-        # Should not raise exception
         setup_sentry()
 
-        # Sentry should still be initialized
         mock_sentry.init.assert_called_once()
 
 

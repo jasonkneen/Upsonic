@@ -525,6 +525,7 @@ def WebSearch(query: str, max_results: int = 10) -> str:
             install_command='pip install "upsonic[tools]"',
             feature_name="DuckDuckGo search tool"
         )
+        return ""
 
     with DDGS() as ddgs:
         try:
@@ -558,6 +559,7 @@ def WebRead(url: str) -> str:
             install_command='pip install "upsonic[loaders]"',
             feature_name="WebRead tool"
         )
+        return ""
 
     if not _BEAUTIFULSOUP_AVAILABLE:
         from upsonic.utils.printing import import_error
@@ -566,6 +568,7 @@ def WebRead(url: str) -> str:
             install_command='pip install "upsonic[loaders]"',
             feature_name="WebRead tool"
         )
+        return ""
 
     session = requests.Session()
     try:

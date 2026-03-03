@@ -1,6 +1,10 @@
 """Pytest configuration to handle DisallowedOperation exceptions gracefully."""
 import os
-os.environ.setdefault("UPSONIC_TELEMETRY", "false")
+
+# Force-disable telemetry/tracing BEFORE any upsonic module is imported.
+# os.environ.__setitem__ (not setdefault) so a subsequent load_dotenv(override=False) cannot win.
+os.environ["UPSONIC_TELEMETRY"] = "false"
+os.environ["UPSONIC_OTEL_ENABLED"] = ""
 
 import pytest
 import sys
@@ -15,7 +19,7 @@ try:
     from dotenv import load_dotenv
     env_path = _root / ".env"
     if env_path.exists():
-        load_dotenv(env_path)
+        load_dotenv(env_path, override=False)
         print(f"✓ Loaded environment variables from: {env_path}")
     else:
         print(f"⚠️  .env file not found at: {env_path}")
@@ -31,26 +35,53 @@ def pytest_runtest_makereport(item, call):
     outcome = yield
     report = outcome.get_result()
     
-    # Check if the test failed due to DisallowedOperation
     if call.excinfo is not None and call.when == "call":
         exc_type = call.excinfo.type
         exc_value = call.excinfo.value
         
-        # Check if it's a DisallowedOperation (check both direct type and name)
         is_disallowed = (
             exc_type is DisallowedOperation or 
             (exc_type is not None and exc_type.__name__ == "DisallowedOperation")
         )
         
         if is_disallowed:
-            # Print the error message
             print(f"\n⚠️  DisallowedOperation caught in {item.name}: {exc_value}", file=sys.stderr)
             print("   Handling gracefully - test will not fail\n", file=sys.stderr)
             
-            # Modify the report to mark as passed while preserving structure
             report.outcome = "passed"
-            # Clear exception-related attributes to avoid AttributeError
             if hasattr(report, 'longrepr'):
                 report.longrepr = None
-            # Don't modify wasxfail - let pytest handle it naturally
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Clean up background threads so the process can exit immediately."""
+    import threading
+
+    # Stop the upsonic background event loop
+    try:
+        from upsonic.agent import agent as _agent_mod
+        loop = getattr(_agent_mod, "_bg_loop", None)
+        if loop is not None and not loop.is_closed():
+            loop.call_soon_threadsafe(loop.stop)
+    except Exception:
+        pass
+
+    # Shut down Sentry (flushes and stops worker threads)
+    try:
+        import sentry_sdk
+        client = sentry_sdk.get_client()
+        if client and client.is_active():
+            sentry_sdk.flush(timeout=2)
+            client.close(timeout=2)
+    except Exception:
+        pass
+
+    # Shut down any OpenTelemetry providers
+    try:
+        from opentelemetry import trace as _otel_trace
+        provider = _otel_trace.get_tracer_provider()
+        if hasattr(provider, "shutdown"):
+            provider.shutdown()
+    except Exception:
+        pass
 
