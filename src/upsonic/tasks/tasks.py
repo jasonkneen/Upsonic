@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from upsonic.agent.deepagent.tools.planning_toolkit import TodoList
     from upsonic.tools import ToolManager
     from upsonic.tools.base import ToolDefinition
-    from upsonic.usage import RequestUsage
+    from upsonic.usage import TaskUsage
 
 
 CacheMethod = Literal["vector_search", "llm_call"]
@@ -62,7 +62,7 @@ class Task(BaseModel):
     # Stores mappings: {idx: {"original": "...", "anonymous": "...", "pii_type": "..."}}
     # Used to de-anonymize LLM responses before returning to user
     _anonymization_map: Optional[Dict[int, Dict[str, str]]] = None
-    _usage: Optional[RequestUsage] = None
+    _usage: Optional[TaskUsage] = None
     registered_task_tools: Dict[str, Any] = {}
     task_builtin_tools: List[Any] = []
     _tool_manager: Optional[Any] = None
@@ -381,7 +381,7 @@ class Task(BaseModel):
         self.validate_tools()
 
     @property
-    def usage(self) -> Optional["RequestUsage"]:
+    def usage(self) -> Optional["TaskUsage"]:
         return self._usage
 
     @property
@@ -819,8 +819,8 @@ class Task(BaseModel):
 
     def task_start(self, agent: Any) -> None:
         self.start_time = time.time()
-        from upsonic.usage import RequestUsage
-        self._usage = RequestUsage()
+        from upsonic.usage import TaskUsage
+        self._usage = TaskUsage()
         self._usage.start_timer()
         if agent.canvas:
             self.add_canvas(agent.canvas)
@@ -1258,8 +1258,8 @@ class Task(BaseModel):
         
         usage_data: Optional[Dict[str, Any]] = data.get("_usage")
         if usage_data is not None:
-            from upsonic.usage import RequestUsage
-            task._usage = RequestUsage.from_dict(usage_data)
+            from upsonic.usage import TaskUsage
+            task._usage = TaskUsage.from_dict(usage_data)
         
         # Restore agent, cache_embedding_provider, _cache_manager if present
         if data.get("agent") is not None:

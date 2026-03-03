@@ -82,6 +82,17 @@ def get_estimated_cost(input_tokens: int, output_tokens: int, model: Union["Mode
         return "~$0.0000"
 
 
+def _format_cost_for_display(cost: Optional[float]) -> str:
+    """Format cost for Task/Agent Metrics so very small values are visible (not $0.0000)."""
+    if cost is None:
+        return "$0.0000"
+    if cost <= 0:
+        return "$0.0000"
+    if cost < 0.0001:
+        return f"${cost:.6f}"
+    return f"${cost:.4f}"
+
+
 def _get_model_name(model: Union["Model", str]) -> str:
     """Extract model name from model provider."""
     from upsonic.utils.usage import get_model_name
@@ -1283,11 +1294,11 @@ def print_price_id_summary(
     Get the summary of usage and costs for a specific price ID and print it in a formatted panel.
 
     All timing data (duration, model_execution_time, upsonic_execution_time) is read
-    from task.usage (RequestUsage) — the single source of truth for task-level metrics.
-    
+    from task.usage (TaskUsage) — the single source of truth for task-level metrics.
+
     Args:
         price_id: The price ID to look up
-        task: The task object whose .usage (RequestUsage) carries timing
+        task: The task object whose .usage (TaskUsage) carries timing
         print_output: Whether to print the output (default: True)
         
     Returns:
@@ -1296,7 +1307,8 @@ def print_price_id_summary(
     if not print_output:
         if price_id in price_id_summary:
             summary = price_id_summary[price_id].copy()
-            summary['estimated_cost'] = f"${summary['estimated_cost']:.4f}"
+            raw = summary.get('estimated_cost')
+            summary['estimated_cost'] = _format_cost_for_display(float(raw) if raw is not None else None)
             return summary
         return None
     
@@ -1307,7 +1319,9 @@ def print_price_id_summary(
         return None
     
     summary = price_id_summary[price_id].copy()
-    summary['estimated_cost'] = f"${summary['estimated_cost']:.4f}"
+    raw_cost: Union[float, Decimal] = summary['estimated_cost']
+    cost_val: float = float(raw_cost) if raw_cost is not None else 0.0
+    summary['estimated_cost'] = _format_cost_for_display(cost_val)
 
     table = Table(show_header=False, expand=True, box=None)
     table.width = 60
@@ -1359,9 +1373,9 @@ def print_agent_metrics(agent: "Agent", print_output: bool = True) -> Optional[D
     Returns:
         Dictionary containing the accumulated usage summary, or None if no usage data.
     """
-    from upsonic.usage import RunUsage
+    from upsonic.usage import AgentUsage
     
-    usage: Optional[RunUsage] = agent.usage
+    usage: Optional[AgentUsage] = agent.usage
     if usage is None:
         return None
     
@@ -1393,7 +1407,7 @@ def print_agent_metrics(agent: "Agent", print_output: bool = True) -> Optional[D
     table.add_row("[bold]Total Tool Calls:[/bold]", f"[cyan]{usage.tool_calls:,}[/cyan]")
     
     if usage.cost is not None:
-        table.add_row("[bold]Total Estimated Cost:[/bold]", f"[cyan]${usage.cost:.4f}[/cyan]")
+        table.add_row("[bold]Total Estimated Cost:[/bold]", f"[cyan]{_format_cost_for_display(usage.cost)}[/cyan]")
     
     if usage.duration is not None:
         time_str: str = f"{usage.duration:.2f} seconds"

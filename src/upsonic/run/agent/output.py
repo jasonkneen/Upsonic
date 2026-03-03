@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from upsonic.run.events.events import AgentEvent
     from upsonic.run.requirements import RunRequirement
     from upsonic.run.tools.tools import ToolExecution
-    from upsonic.usage import RunUsage, RequestUsage
+    from upsonic.usage import TaskUsage
     from upsonic.profiles import ModelProfile
     from upsonic.agent.pipeline.step import StepResult
     from upsonic.run.pipeline.stats import PipelineExecutionStats
@@ -109,7 +109,7 @@ class AgentRunOutput:
     messages: Optional[List["ModelMessage"]] = None
     # response: Current ModelResponse
     response: Optional["ModelResponse"] = None
-    usage: Optional["RunUsage"] = None
+    usage: Optional["TaskUsage"] = None
     additional_input_message: Optional[List["ModelRequest"]] = None
     
     # Memory tracking
@@ -494,19 +494,18 @@ class AgentRunOutput:
     # Usage Tracking Methods
     # ========================================================================
     
-    def _ensure_usage(self) -> "RunUsage":
+    def _ensure_usage(self) -> "TaskUsage":
         """Ensure usage object exists and return it.
-        
-        Handles conversion from dict (from storage deserialization) to RunUsage.
+
+        Handles conversion from dict (from storage deserialization) to TaskUsage.
         """
-        from upsonic.usage import RunUsage
-        
+        from upsonic.usage import TaskUsage
+
         if self.usage is None:
-            self.usage = RunUsage()
+            self.usage = TaskUsage()
         elif isinstance(self.usage, dict):
-            # Convert dict to RunUsage (can happen when loaded from storage improperly)
-            self.usage = RunUsage.from_dict(self.usage)
-        
+            self.usage = TaskUsage.from_dict(self.usage)
+
         return self.usage
     
     def start_usage_timer(self) -> None:
@@ -535,36 +534,6 @@ class AgentRunOutput:
         """
         if self.usage is not None:
             self.usage.set_time_to_first_token()
-    
-    def update_usage_from_response(self, request_usage: Union["RequestUsage", Dict[str, Any]]) -> None:
-        """Update usage from a model response's RequestUsage.
-        
-        This increments the run's usage with token counts from a model response.
-        Handles both RequestUsage objects and dicts (when loaded from storage).
-        
-        Args:
-            request_usage: The RequestUsage from a model response, or a dict if loaded from storage.
-        """
-        from upsonic.usage import RequestUsage as RequestUsageClass
-        
-        usage = self._ensure_usage()
-        
-        # Handle dict (from storage deserialization) or RequestUsage object
-        if isinstance(request_usage, dict):
-            # Convert dict to RequestUsage
-            request_usage_obj = RequestUsageClass(
-                input_tokens=request_usage.get("input_tokens", 0) or 0,
-                output_tokens=request_usage.get("output_tokens", 0) or 0,
-                cache_write_tokens=request_usage.get("cache_write_tokens", 0) or 0,
-                cache_read_tokens=request_usage.get("cache_read_tokens", 0) or 0,
-                input_audio_tokens=request_usage.get("input_audio_tokens", 0) or 0,
-                cache_audio_read_tokens=request_usage.get("cache_audio_read_tokens", 0) or 0,
-                output_audio_tokens=request_usage.get("output_audio_tokens", 0) or 0,
-                details=request_usage.get("details", {}),
-            )
-            usage.update_from_request_usage(request_usage_obj)
-        else:
-            usage.update_from_request_usage(request_usage)
     
     def increment_tool_calls(self, count: int = 1) -> None:
         """Increment the tool call count in usage.
@@ -845,7 +814,7 @@ class AgentRunOutput:
         from upsonic.agent.pipeline.step import StepResult
         from upsonic.tasks.tasks import Task
         from upsonic.profiles import ModelProfile
-        from upsonic.usage import RunUsage
+        from upsonic.usage import TaskUsage
         from upsonic.schemas.kb_filter import KBFilterExpr
 
         # Handle task (dict or Task object) - with deserialize_flag
@@ -932,10 +901,9 @@ class AgentRunOutput:
         else:
             response = response_data
         
-        # Handle usage: RunUsage.from_dict()
         usage_data = data.get("usage")
         if usage_data and isinstance(usage_data, dict):
-            usage = RunUsage.from_dict(usage_data)
+            usage = TaskUsage.from_dict(usage_data)
         else:
             usage = usage_data
         

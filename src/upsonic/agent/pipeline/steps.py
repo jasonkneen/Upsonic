@@ -1168,15 +1168,8 @@ class ModelExecutionStep(Step):
                 ):
                     context.events.append(event)
             
-            agent_tool_calls = getattr(agent, '_tool_call_count', 0)
-            prev_tool_calls = context.tool_call_count
-            context.tool_call_count = agent_tool_calls
+            context.tool_call_count = getattr(agent, '_tool_call_count', 0)
             context.tool_limit_reached = getattr(agent, '_tool_limit_reached', False)
-            
-            # Update usage with new tool calls made in this model execution
-            new_tool_calls = agent_tool_calls - prev_tool_calls
-            if new_tool_calls > 0:
-                context.increment_tool_calls(new_tool_calls)
             
             step_result = StepResult(
                 name=self.name,
@@ -1221,7 +1214,7 @@ class ModelExecutionStep(Step):
             # This ensures usage is tracked for durable execution recovery
             if response is not None and hasattr(response, 'usage') and response.usage:
                 try:
-                    context.update_usage_from_response(response.usage)
+                    context._ensure_usage().incr(response.usage)
                     if task._usage is not None:
                         task._usage.incr(response.usage)
                     
@@ -2279,7 +2272,7 @@ class AgentPolicyStep(Step):
             task._usage.add_model_execution_time(_policy_model_elapsed)
         
         if hasattr(response, 'usage') and response.usage:
-            context.update_usage_from_response(response.usage)
+            context._ensure_usage().incr(response.usage)
             if task._usage is not None:
                 task._usage.incr(response.usage)
             try:
@@ -2687,7 +2680,7 @@ class StreamModelExecutionStep(Step):
         context.chat_history.append(final_response)
         
         if hasattr(final_response, 'usage') and final_response.usage:
-            context.update_usage_from_response(final_response.usage)
+            context._ensure_usage().incr(final_response.usage)
             if task._usage is not None:
                 task._usage.incr(final_response.usage)
             

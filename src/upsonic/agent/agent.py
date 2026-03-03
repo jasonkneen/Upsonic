@@ -82,7 +82,7 @@ if TYPE_CHECKING:
     from upsonic.reflection import ReflectionConfig
     from upsonic.safety_engine.base import Policy
     from upsonic.tools import ToolDefinition, ToolManager
-    from upsonic.usage import RequestUsage, RunUsage
+    from upsonic.usage import RequestUsage, TaskUsage, AgentUsage
     from upsonic.agent.context_managers import (
         MemoryManager
     )
@@ -395,27 +395,17 @@ class Agent(BaseAgent):
         self.debug = debug
         self.debug_level = debug_level if debug else 1
         self.reflection = reflection
-        
-        # Handle print flag with hierarchy:
-        # 1. ENV variable (highest priority - overrides everything)
-        # 2. Agent constructor print parameter
-        # 3. Method name (print_do=True, do=False) - lowest priority (resolved per-method call)
         self._print_env: Optional[bool] = get_env_bool_optional("UPSONIC_AGENT_PRINT")
         self._print_param: Optional[bool] = print
-        # Resolved default for introspection: ENV > param > False (do() does not print by default)
-        # Per-method resolution uses _resolve_print_flag()
         self.print: bool = self._print_env if self._print_env is not None else (print if print is not None else False)
 
-        # Set db attribute
         self.db = db
         
-        # Set memory attribute - override with db.memory if db is provided
         if db is not None:
             self.memory = db.memory
         else:
             self.memory = memory
         
-        # Model selection attributes
         self.model_selection_criteria = model_selection_criteria
         self.use_llm_for_selection = use_llm_for_selection
         self._model_recommendation: Optional[Any] = None  # Store last recommendation
@@ -454,7 +444,6 @@ class Agent(BaseAgent):
         self.enable_thinking_tool = enable_thinking_tool
         self.enable_reasoning_tool = enable_reasoning_tool
         
-        # Initialize agent-level tools
         self.tools = tools if tools is not None else []
             
         if self.memory and feed_tool_call_results is not None:
@@ -465,7 +454,6 @@ class Agent(BaseAgent):
         # Agent metadata (injected into prompts)
         self.metadata = metadata or {}
         
-        # Store culture and create CultureManager if needed
         self._culture_input = culture
         self._culture_manager: Optional["CultureManager"] = None
         if culture is not None:
@@ -554,8 +542,8 @@ class Agent(BaseAgent):
         self._tool_call_count = 0
         self._tool_limit_reached = False
         
-        # Agent-level accumulated usage across all runs
-        self.usage: Optional["RunUsage"] = None
+        # Agent-level accumulated usage across all tasks
+        self.usage: Optional["AgentUsage"] = None
         
         # Run cancellation tracking
         self.run_id: Optional[str] = None
@@ -809,64 +797,57 @@ class Agent(BaseAgent):
         """
         return getattr(self, '_agent_run_output', None)
     
-    def get_session_usage(self) -> "RunUsage":
+    def get_session_usage(self) -> "TaskUsage":
         """
         Get the aggregated usage for the current session.
-        
+
         Returns the session-level usage from the AgentSession stored in storage.
-        If no memory is configured, returns an empty RunUsage.
-        
+        If no memory is configured, returns an empty TaskUsage.
+
         Usage:
             ```python
             agent = Agent("openai/gpt-4o", memory=memory)
             result = agent.do(task1)
             result = agent.do(task2)
-            
-            # Get aggregated usage for all runs in this session
+
             session_usage = agent.get_session_usage()
             print(session_usage.to_dict())
             ```
-        
+
         Returns:
-            RunUsage: Aggregated usage metrics for the session.
+            TaskUsage: Aggregated usage metrics for the session.
         """
-        from upsonic.usage import RunUsage
-        
-        # Check if we have memory
+        from upsonic.usage import TaskUsage as TaskUsageCls
+
         if not self.memory:
-            return RunUsage()
-        
-        # Get session from storage
+            return TaskUsageCls()
+
         session = self.memory.get_session()
         if session and hasattr(session, 'get_session_usage'):
             return session.get_session_usage()
-        
-        # Return empty usage if no session
-        return RunUsage()
-    
-    async def aget_session_usage(self) -> "RunUsage":
+
+        return TaskUsageCls()
+
+    async def aget_session_usage(self) -> "TaskUsage":
         """
         Get the aggregated usage for the current session (async version).
-        
+
         Returns the session-level usage from the AgentSession stored in storage.
-        If no memory is configured, returns an empty RunUsage.
-        
+        If no memory is configured, returns an empty TaskUsage.
+
         Returns:
-            RunUsage: Aggregated usage metrics for the session.
+            TaskUsage: Aggregated usage metrics for the session.
         """
-        from upsonic.usage import RunUsage
-        
-        # Check if we have memory
+        from upsonic.usage import TaskUsage as TaskUsageCls
+
         if not self.memory:
-            return RunUsage()
-        
-        # Get session from storage asynchronously
+            return TaskUsageCls()
+
         session = await self.memory.get_session_async()
         if session and hasattr(session, 'get_session_usage'):
             return session.get_session_usage()
-        
-        # Return empty usage if no session
-        return RunUsage()
+
+        return TaskUsageCls()
     
     def _create_agent_run_input(self, task: "Task") -> AgentRunInput:
         """
@@ -2033,6 +2014,7 @@ class Agent(BaseAgent):
                         self._tool_metrics.tool_call_count = self._tool_call_count
                     if hasattr(self, '_agent_run_output') and self._agent_run_output is not None:
                         self._agent_run_output.tool_call_count = self._tool_call_count
+                        self._agent_run_output.increment_tool_calls(1)
                     
                     tool_return = ToolReturnPart(
                         tool_name=result.tool_name,
@@ -2243,6 +2225,7 @@ class Agent(BaseAgent):
                 self._tool_metrics.tool_call_count = self._tool_call_count
             if hasattr(self, '_agent_run_output') and self._agent_run_output is not None:
                 self._agent_run_output.tool_call_count = self._tool_call_count
+                self._agent_run_output.increment_tool_calls(len(parallel_calls))
             
             results.extend(successful_results)
         
@@ -2363,7 +2346,7 @@ class Agent(BaseAgent):
             if hasattr(self, '_agent_run_output') and self._agent_run_output:
                 self._agent_run_output.add_model_execution_time(_retry_model_elapsed)
                 if hasattr(retry_response, 'usage') and retry_response.usage:
-                    self._agent_run_output.update_usage_from_response(retry_response.usage)
+                    self._agent_run_output._ensure_usage().incr(retry_response.usage)
                     try:
                         from upsonic.utils.usage import calculate_cost_from_usage
                         cost_value: float = calculate_cost_from_usage(retry_response.usage, self.model)
@@ -2419,7 +2402,7 @@ class Agent(BaseAgent):
                 if hasattr(self, '_agent_run_output') and self._agent_run_output:
                     self._agent_run_output.add_model_execution_time(_limit_model_elapsed)
                     if hasattr(final_response, 'usage') and final_response.usage:
-                        self._agent_run_output.update_usage_from_response(final_response.usage)
+                        self._agent_run_output._ensure_usage().incr(final_response.usage)
                         try:
                             from upsonic.utils.usage import calculate_cost_from_usage
                             cost_value: float = calculate_cost_from_usage(final_response.usage, self.model)
@@ -2498,7 +2481,7 @@ class Agent(BaseAgent):
             if hasattr(self, '_agent_run_output') and self._agent_run_output:
                 self._agent_run_output.add_model_execution_time(_followup_model_elapsed)
                 if hasattr(follow_up_response, 'usage') and follow_up_response.usage:
-                    self._agent_run_output.update_usage_from_response(follow_up_response.usage)
+                    self._agent_run_output._ensure_usage().incr(follow_up_response.usage)
                     try:
                         from upsonic.utils.usage import calculate_cost_from_usage
                         cost_value: float = calculate_cost_from_usage(follow_up_response.usage, self.model)
@@ -2520,7 +2503,7 @@ class Agent(BaseAgent):
             return
         summarization_usage = getattr(self._context_management_middleware, '_last_summarization_usage', None)
         if summarization_usage is not None:
-            self._agent_run_output.update_usage_from_response(summarization_usage)
+            self._agent_run_output._ensure_usage().incr(summarization_usage)
             try:
                 from upsonic.utils.usage import calculate_cost_from_usage
                 summarization_model: "Model" = self._context_management_middleware._get_summarization_model()
@@ -2805,7 +2788,7 @@ class Agent(BaseAgent):
             if hasattr(self, '_agent_run_output') and self._agent_run_output:
                 self._agent_run_output.add_model_execution_time(_guardrail_model_elapsed)
                 if hasattr(response, 'usage') and response.usage:
-                    self._agent_run_output.update_usage_from_response(response.usage)
+                    self._agent_run_output._ensure_usage().incr(response.usage)
                     try:
                         from upsonic.utils.usage import calculate_cost_from_usage
                         cost_value: float = calculate_cost_from_usage(response.usage, self.model)
@@ -3482,21 +3465,21 @@ class Agent(BaseAgent):
         except Exception:
             pass  # Best-effort — don't let tracking errors mask the result
 
-    def _accumulate_run_usage(self, run_usage: Optional["RunUsage"]) -> None:
-        """Accumulate a run's usage metrics into the agent-level usage.
-        
+    def _accumulate_run_usage(self, task_usage: Optional["TaskUsage"]) -> None:
+        """Accumulate a task's usage metrics into the agent-level usage.
+
         Args:
-            run_usage: The RunUsage from a completed run. If None, no-op.
+            task_usage: The TaskUsage from a completed task. If None, no-op.
         """
-        if run_usage is None:
+        if task_usage is None:
             return
-        
-        from upsonic.usage import RunUsage as RunUsageClass
-        
+
+        from upsonic.usage import AgentUsage
+
         if self.usage is None:
-            self.usage = RunUsageClass()
-        
-        self.usage.incr(run_usage)
+            self.usage = AgentUsage()
+
+        self.usage.incr(task_usage)
 
     def _finalize_agent_usage(self, print_flag: bool) -> None:
         """Accumulate current run usage into agent-level usage and optionally print agent metrics.

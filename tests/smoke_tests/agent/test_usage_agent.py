@@ -1,8 +1,8 @@
 """
-Comprehensive Smoke Tests for agent-level usage tracking via RunUsage.
+Comprehensive Smoke Tests for agent-level usage tracking via AgentUsage.
 
-Verifies that agent.usage (RunUsage) and AgentRunOutput.usage properly accumulate
-metrics across multiple task runs, including:
+Verifies that agent.usage (AgentUsage) and AgentRunOutput.usage (TaskUsage)
+properly accumulate metrics across multiple task runs, including:
 
 1. Direct model.request() calls in ModelExecutionStep
 2. Sub-agent calls via do_async() in:
@@ -32,7 +32,8 @@ Also verifies:
   - print_do / print_do_async printing Agent Metrics
   - agent-as-tool usage propagation
   - tool_calls counting
-  - RunUsage to_dict / from_dict round-trip
+  - AgentUsage to_dict / from_dict round-trip
+  - TaskUsage on AgentRunOutput (return_output)
 
 Run with: uv run pytest tests/smoke_tests/agent/test_usage_agent.py -v -s
 """
@@ -41,7 +42,7 @@ import pytest
 from typing import Optional, List
 
 from upsonic import Agent, Task
-from upsonic.usage import RunUsage, RequestUsage
+from upsonic.usage import TaskUsage, AgentUsage
 
 
 # ---------------------------------------------------------------------------
@@ -56,16 +57,16 @@ def _make_agent(name: str = "AgentUsageTestAgent", tools: list = None) -> Agent:
     )
 
 
-def _assert_run_usage_positive(usage: RunUsage, label: str) -> None:
-    """Assert that a RunUsage has meaningful positive values."""
+def _assert_agent_usage_positive(usage: AgentUsage, label: str) -> None:
+    """Assert that an AgentUsage has meaningful positive values."""
     assert usage is not None, f"[{label}] usage is None"
     assert usage.requests > 0, f"[{label}] Expected requests > 0, got {usage.requests}"
     assert usage.input_tokens > 0, f"[{label}] Expected input_tokens > 0, got {usage.input_tokens}"
     assert usage.output_tokens > 0, f"[{label}] Expected output_tokens > 0, got {usage.output_tokens}"
 
 
-def _assert_run_usage_timing(usage: RunUsage, label: str) -> None:
-    """Assert that a RunUsage has all three timing fields populated."""
+def _assert_agent_usage_timing(usage: AgentUsage, label: str) -> None:
+    """Assert that an AgentUsage has all three timing fields populated."""
     assert usage.duration is not None and usage.duration > 0, (
         f"[{label}] duration missing or zero: {usage.duration}"
     )
@@ -80,6 +81,14 @@ def _assert_run_usage_timing(usage: RunUsage, label: str) -> None:
     )
 
 
+def _assert_task_usage_positive(usage: TaskUsage, label: str) -> None:
+    """Assert that a TaskUsage (from AgentRunOutput) has meaningful positive values."""
+    assert usage is not None, f"[{label}] usage is None"
+    assert usage.requests > 0, f"[{label}] Expected requests > 0, got {usage.requests}"
+    assert usage.input_tokens > 0, f"[{label}] Expected input_tokens > 0, got {usage.input_tokens}"
+    assert usage.output_tokens > 0, f"[{label}] Expected output_tokens > 0, got {usage.output_tokens}"
+
+
 # ---------------------------------------------------------------------------
 # 1. Single task — agent.usage populated after one run
 # ---------------------------------------------------------------------------
@@ -91,8 +100,8 @@ class TestAgentUsageSingleTask:
         task = Task("What is 2+2? Answer with just the number.")
         agent.do(task)
 
-        _assert_run_usage_positive(agent.usage, "single_do")
-        _assert_run_usage_timing(agent.usage, "single_do")
+        _assert_agent_usage_positive(agent.usage, "single_do")
+        _assert_agent_usage_timing(agent.usage, "single_do")
 
     @pytest.mark.asyncio
     async def test_agent_usage_after_single_do_async(self) -> None:
@@ -100,8 +109,8 @@ class TestAgentUsageSingleTask:
         task = Task("What is 3+3? Answer with just the number.")
         await agent.do_async(task)
 
-        _assert_run_usage_positive(agent.usage, "single_do_async")
-        _assert_run_usage_timing(agent.usage, "single_do_async")
+        _assert_agent_usage_positive(agent.usage, "single_do_async")
+        _assert_agent_usage_timing(agent.usage, "single_do_async")
 
 
 # ---------------------------------------------------------------------------
@@ -118,11 +127,8 @@ class TestAgentUsageMultipleTasks:
         task3 = Task("Say hello in Japanese.")
 
         agent.do(task1)
-        after_first = RunUsage(
-            requests=agent.usage.requests,
-            input_tokens=agent.usage.input_tokens,
-            output_tokens=agent.usage.output_tokens,
-        )
+        after_first_requests: int = agent.usage.requests
+        after_first_input: int = agent.usage.input_tokens
 
         agent.do(task2)
         after_second_requests: int = agent.usage.requests
@@ -130,20 +136,20 @@ class TestAgentUsageMultipleTasks:
 
         agent.do(task3)
 
-        assert agent.usage.requests > after_first.requests, (
+        assert agent.usage.requests > after_first_requests, (
             "Requests should accumulate across tasks"
         )
         assert agent.usage.requests > after_second_requests, (
             "Requests should keep accumulating"
         )
-        assert agent.usage.input_tokens > after_first.input_tokens, (
+        assert agent.usage.input_tokens > after_first_input, (
             "Input tokens should accumulate"
         )
         assert agent.usage.input_tokens > after_second_input, (
             "Input tokens should keep accumulating"
         )
 
-        _assert_run_usage_timing(agent.usage, "multi_task_accumulated")
+        _assert_agent_usage_timing(agent.usage, "multi_task_accumulated")
 
     @pytest.mark.asyncio
     async def test_agent_usage_accumulates_async(self) -> None:
@@ -161,8 +167,8 @@ class TestAgentUsageMultipleTasks:
         assert agent.usage.requests >= 3, (
             f"Expected at least 3 requests, got {agent.usage.requests}"
         )
-        _assert_run_usage_positive(agent.usage, "multi_async_accumulated")
-        _assert_run_usage_timing(agent.usage, "multi_async_accumulated")
+        _assert_agent_usage_positive(agent.usage, "multi_async_accumulated")
+        _assert_agent_usage_timing(agent.usage, "multi_async_accumulated")
 
     def test_task_usage_independent_but_agent_usage_accumulated(self) -> None:
         agent = _make_agent()
@@ -173,7 +179,7 @@ class TestAgentUsageMultipleTasks:
         agent.do(task1)
         agent.do(task2)
 
-        assert task1.usage is not task2.usage, "Each task should have its own RequestUsage"
+        assert task1.usage is not task2.usage, "Each task should have its own TaskUsage"
         assert task1.usage.input_tokens > 0
         assert task2.usage.input_tokens > 0
 
@@ -200,11 +206,11 @@ class TestMultipleAgentsIndependentUsage:
         agent_a.do(task_a)
         agent_b.do(task_b)
 
-        _assert_run_usage_positive(agent_a.usage, "agent_a")
-        _assert_run_usage_positive(agent_b.usage, "agent_b")
+        _assert_agent_usage_positive(agent_a.usage, "agent_a")
+        _assert_agent_usage_positive(agent_b.usage, "agent_b")
 
         assert agent_a.usage is not agent_b.usage, (
-            "Different agents must have different RunUsage instances"
+            "Different agents must have different AgentUsage instances"
         )
 
     @pytest.mark.asyncio
@@ -240,7 +246,7 @@ class TestAgentUsagePrintDo:
         task = Task("What is 10+10? Answer with just the number.")
         agent.print_do(task)
 
-        _assert_run_usage_positive(agent.usage, "print_do_agent")
+        _assert_agent_usage_positive(agent.usage, "print_do_agent")
 
         captured = capsys.readouterr()
         assert "Agent Metrics" in captured.out, "Should print Agent Metrics panel"
@@ -257,7 +263,7 @@ class TestAgentUsagePrintDo:
         task = Task("What is 20+20? Answer with just the number.")
         await agent.print_do_async(task)
 
-        _assert_run_usage_positive(agent.usage, "print_do_async_agent")
+        _assert_agent_usage_positive(agent.usage, "print_do_async_agent")
 
         captured = capsys.readouterr()
         assert "Agent Metrics" in captured.out
@@ -307,8 +313,8 @@ class TestAgentUsageWithTools:
         task = Task("Use the add tool to add 10 and 20.")
         agent.do(task)
 
-        _assert_run_usage_positive(agent.usage, "tool_agent")
-        _assert_run_usage_timing(agent.usage, "tool_agent")
+        _assert_agent_usage_positive(agent.usage, "tool_agent")
+        _assert_agent_usage_timing(agent.usage, "tool_agent")
 
     def test_agent_usage_accumulated_with_multiple_tool_tasks(self) -> None:
         def subtract(a: int, b: int) -> int:
@@ -350,7 +356,7 @@ class TestAgentUsageStructuredOutput:
         agent.do(Task("What is 6*6?", response_format=Answer))
 
         assert agent.usage.requests >= 2
-        _assert_run_usage_positive(agent.usage, "structured_accumulated")
+        _assert_agent_usage_positive(agent.usage, "structured_accumulated")
 
 
 # ---------------------------------------------------------------------------
@@ -376,7 +382,7 @@ class TestAgentAsToolUsagePropagation:
         task = Task("Ask MathHelper what is 12 * 12. Return just the number.")
         await parent_agent.do_async(task)
 
-        _assert_run_usage_positive(parent_agent.usage, "parent_with_sub")
+        _assert_agent_usage_positive(parent_agent.usage, "parent_with_sub")
         assert parent_agent.usage.requests >= 2, (
             f"Parent should have at least 2 requests (own + sub-agent), got {parent_agent.usage.requests}"
         )
@@ -406,7 +412,7 @@ class TestAgentAsToolUsagePropagation:
         )
         await coordinator.do_async(task)
 
-        _assert_run_usage_positive(coordinator.usage, "multi_sub_coordinator")
+        _assert_agent_usage_positive(coordinator.usage, "multi_sub_coordinator")
         assert coordinator.usage.requests >= 3, (
             f"Coordinator should have at least 3 requests, got {coordinator.usage.requests}"
         )
@@ -438,28 +444,27 @@ class TestAgentCostTracking:
 
 
 # ---------------------------------------------------------------------------
-# 9. return_output — RunUsage accessible from AgentRunOutput
+# 9. return_output — TaskUsage accessible from AgentRunOutput
 # ---------------------------------------------------------------------------
 
 class TestAgentRunOutputUsage:
 
-    def test_return_output_has_run_usage(self) -> None:
+    def test_return_output_has_task_usage(self) -> None:
         agent = _make_agent()
         task = Task("Say hi.")
         output = agent.do(task, return_output=True)
 
         assert output is not None
         assert output.usage is not None
-        assert isinstance(output.usage, RunUsage)
-        _assert_run_usage_positive(output.usage, "return_output")
+        assert isinstance(output.usage, TaskUsage)
+        _assert_task_usage_positive(output.usage, "return_output")
 
     @pytest.mark.asyncio
-    async def test_return_output_usage_matches_agent_usage_single_task(self) -> None:
+    async def test_return_output_usage_tokens_match_agent_single_task(self) -> None:
         agent = _make_agent()
         task = Task("Say hello.")
         output = await agent.do_async(task, return_output=True)
 
-        assert output.usage.requests == agent.usage.requests
         assert output.usage.input_tokens == agent.usage.input_tokens
         assert output.usage.output_tokens == agent.usage.output_tokens
 
@@ -521,16 +526,16 @@ class TestTaskAndAgentUsageConsistency:
 
 
 # ---------------------------------------------------------------------------
-# 11. RunUsage serialization round-trip
+# 11. AgentUsage serialization round-trip
 # ---------------------------------------------------------------------------
 
-class TestRunUsageSerialization:
+class TestAgentUsageSerialization:
 
-    def test_run_usage_to_dict_from_dict(self) -> None:
+    def test_agent_usage_to_dict_from_dict(self) -> None:
         agent = _make_agent()
         agent.do(Task("Tell me a joke."))
 
-        original: RunUsage = agent.usage
+        original: AgentUsage = agent.usage
         d = original.to_dict()
 
         assert "requests" in d
@@ -539,7 +544,7 @@ class TestRunUsageSerialization:
         assert "duration" in d
         assert "model_execution_time" in d
 
-        restored: RunUsage = RunUsage.from_dict(d)
+        restored: AgentUsage = AgentUsage.from_dict(d)
         assert restored.requests == original.requests
         assert restored.input_tokens == original.input_tokens
         assert restored.output_tokens == original.output_tokens
@@ -548,8 +553,7 @@ class TestRunUsageSerialization:
 
 
 # ===========================================================================
-# Tests migrated from test_usage_tracking.py (Anthropic-based tests via
-# AgentRunOutput.usage / return_output=True)
+# Tests for AgentRunOutput.usage (TaskUsage) via return_output=True
 # ===========================================================================
 
 
@@ -571,8 +575,8 @@ def test_basic_agent_usage_tracking():
     assert output is not None
     assert output.output is not None
 
-    usage: RunUsage = output.usage
-    _assert_run_usage_positive(usage, "basic_agent")
+    usage: TaskUsage = output.usage
+    _assert_task_usage_positive(usage, "basic_agent")
 
 
 @pytest.mark.asyncio
@@ -590,8 +594,8 @@ async def test_basic_agent_usage_tracking_async():
     assert output is not None
     assert output.output is not None
 
-    usage: RunUsage = output.usage
-    _assert_run_usage_positive(usage, "basic_agent_async")
+    usage: TaskUsage = output.usage
+    _assert_task_usage_positive(usage, "basic_agent_async")
 
 
 # ---------------------------------------------------------------------------
@@ -623,8 +627,8 @@ def test_structured_output_usage_tracking():
     assert isinstance(output.output, MathResult)
     assert output.output.answer == 56
 
-    usage: RunUsage = output.usage
-    _assert_run_usage_positive(usage, "structured_output")
+    usage: TaskUsage = output.usage
+    _assert_task_usage_positive(usage, "structured_output")
 
 
 # ---------------------------------------------------------------------------
@@ -661,8 +665,8 @@ def test_tool_usage_tracking():
     assert output is not None
     assert output.output is not None
 
-    usage: RunUsage = output.usage
-    _assert_run_usage_positive(usage, "tool_usage")
+    usage: TaskUsage = output.usage
+    _assert_task_usage_positive(usage, "tool_usage")
     assert usage.requests >= 1, "Expected at least 1 request (tool call + follow-up)"
 
 
@@ -694,8 +698,8 @@ async def test_agent_as_tool_usage_tracking():
     assert output is not None
     assert output.output is not None
 
-    usage: RunUsage = output.usage
-    _assert_run_usage_positive(usage, "agent_as_tool")
+    usage: TaskUsage = output.usage
+    _assert_task_usage_positive(usage, "agent_as_tool")
     assert usage.requests >= 2, (
         f"Expected at least 2 requests (parent + sub-agent), got {usage.requests}"
     )
@@ -727,8 +731,8 @@ def test_culture_extraction_usage_tracking():
     assert output is not None
     assert output.output is not None
 
-    usage: RunUsage = output.usage
-    _assert_run_usage_positive(usage, "culture_extraction")
+    usage: TaskUsage = output.usage
+    _assert_task_usage_positive(usage, "culture_extraction")
     assert usage.requests >= 2, (
         f"Expected at least 2 requests (culture extraction + main), got {usage.requests}"
     )
@@ -764,8 +768,8 @@ async def test_reflection_usage_tracking():
     assert output is not None
     assert output.output is not None
 
-    usage: RunUsage = output.usage
-    _assert_run_usage_positive(usage, "reflection")
+    usage: TaskUsage = output.usage
+    _assert_task_usage_positive(usage, "reflection")
     assert usage.requests >= 2, (
         f"Expected at least 2 requests (main + reflection eval), got {usage.requests}"
     )
@@ -828,8 +832,8 @@ def test_multiple_tools_structured_output_usage():
     assert isinstance(output.output, ComputationResult)
     assert output.output.final_answer == 32
 
-    usage: RunUsage = output.usage
-    _assert_run_usage_positive(usage, "multi_tool_structured")
+    usage: TaskUsage = output.usage
+    _assert_task_usage_positive(usage, "multi_tool_structured")
     assert usage.requests >= 1
 
 
@@ -839,7 +843,7 @@ def test_multiple_tools_structured_output_usage():
 
 @pytest.mark.asyncio
 async def test_usage_accumulation_separate_runs():
-    """Each do_async call should track usage independently."""
+    """Each do_async call should track usage independently on AgentRunOutput."""
     agent = Agent(
         model="openai/gpt-4o-mini",
         name="AccumulationAgent",
@@ -854,11 +858,11 @@ async def test_usage_accumulation_separate_runs():
     assert output1 is not None
     assert output2 is not None
 
-    usage1: RunUsage = output1.usage
-    usage2: RunUsage = output2.usage
+    usage1: TaskUsage = output1.usage
+    usage2: TaskUsage = output2.usage
 
-    _assert_run_usage_positive(usage1, "run1")
-    _assert_run_usage_positive(usage2, "run2")
+    _assert_task_usage_positive(usage1, "run1")
+    _assert_task_usage_positive(usage2, "run2")
 
     assert usage1.requests >= 1
     assert usage2.requests >= 1
@@ -883,8 +887,8 @@ def test_system_prompt_usage_tracking():
     assert output is not None
     assert output.output is not None
 
-    usage: RunUsage = output.usage
-    _assert_run_usage_positive(usage, "system_prompt")
+    usage: TaskUsage = output.usage
+    _assert_task_usage_positive(usage, "system_prompt")
     assert usage.input_tokens > 10, "System prompt should increase input tokens"
 
 
@@ -919,16 +923,16 @@ async def test_guardrail_usage_tracking():
     assert isinstance(output.output, CapitalInfo)
     assert output.output.capital.lower() == "paris"
 
-    usage: RunUsage = output.usage
-    _assert_run_usage_positive(usage, "guardrail")
+    usage: TaskUsage = output.usage
+    _assert_task_usage_positive(usage, "guardrail")
 
 
 # ---------------------------------------------------------------------------
-# 22. Verify RunUsage fields are populated correctly
+# 22. Verify TaskUsage fields are populated correctly
 # ---------------------------------------------------------------------------
 
 def test_usage_fields_completeness():
-    """Verify that all critical RunUsage fields are populated after a run."""
+    """Verify that all critical TaskUsage fields are populated after a run."""
     agent = Agent(
         model="openai/gpt-4o-mini",
         name="FieldsCheckAgent",
@@ -940,8 +944,8 @@ def test_usage_fields_completeness():
 
     assert output is not None
 
-    usage: RunUsage = output.usage
-    assert isinstance(usage, RunUsage)
+    usage: TaskUsage = output.usage
+    assert isinstance(usage, TaskUsage)
 
     assert usage.requests >= 1, f"requests should be >= 1, got {usage.requests}"
     assert usage.input_tokens > 0, f"input_tokens should be > 0, got {usage.input_tokens}"
@@ -990,8 +994,8 @@ async def test_multiple_agent_tools_usage_tracking():
     assert output is not None
     assert output.output is not None
 
-    usage: RunUsage = output.usage
-    _assert_run_usage_positive(usage, "multi_agent_tools")
+    usage: TaskUsage = output.usage
+    _assert_task_usage_positive(usage, "multi_agent_tools")
     assert usage.requests >= 3, (
         f"Expected at least 3 requests (coordinator + 2 sub-agents), got {usage.requests}"
     )
@@ -1052,8 +1056,8 @@ def test_combined_culture_tool_structured():
     assert output.output is not None
     assert isinstance(output.output, RoomRecommendation)
 
-    usage: RunUsage = output.usage
-    _assert_run_usage_positive(usage, "combined_culture_tool_structured")
+    usage: TaskUsage = output.usage
+    _assert_task_usage_positive(usage, "combined_culture_tool_structured")
     assert usage.requests >= 2, (
         f"Expected at least 2 requests (culture + main), got {usage.requests}"
     )
@@ -1078,8 +1082,8 @@ async def test_streaming_usage_tracking():
     assert output is not None
     assert output.output is not None
 
-    usage: RunUsage = output.usage
-    _assert_run_usage_positive(usage, "streaming")
+    usage: TaskUsage = output.usage
+    _assert_task_usage_positive(usage, "streaming")
 
 
 # ---------------------------------------------------------------------------
@@ -1099,8 +1103,8 @@ def test_cost_tracking():
 
     assert output is not None
 
-    usage: RunUsage = output.usage
-    _assert_run_usage_positive(usage, "cost_tracking")
+    usage: TaskUsage = output.usage
+    _assert_task_usage_positive(usage, "cost_tracking")
 
     assert usage.cost is not None, "Cost should be calculated for gpt-4o-mini"
     assert usage.cost > 0, f"Cost should be positive, got {usage.cost}"

@@ -400,8 +400,8 @@ class Direct:
         start_time = time.time()
         task.start_time = int(start_time)
 
-        from upsonic.usage import RequestUsage
-        task._usage = RequestUsage()
+        from upsonic.usage import TaskUsage
+        task._usage = TaskUsage()
         task._usage.start_timer()
         
         try:

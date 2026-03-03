@@ -1,7 +1,7 @@
 """
-Smoke tests for task-level usage tracking via RequestUsage.
+Smoke tests for task-level usage tracking via TaskUsage.
 
-Verifies that task._usage (RequestUsage) — the single source of truth for
+Verifies that task._usage (TaskUsage) — the single source of truth for
 task-level metrics — properly tracks:
   - duration (total wall-clock time)
   - model_execution_time (time in LLM API calls)
@@ -20,7 +20,7 @@ import pytest
 from typing import Optional
 
 from upsonic import Agent, Task
-from upsonic.usage import RequestUsage
+from upsonic.usage import TaskUsage
 
 
 # ---------------------------------------------------------------------------
@@ -37,7 +37,7 @@ def _make_agent(tools: list = None) -> Agent:
 
 def _assert_task_usage_complete(task: Task, label: str) -> None:
     """Assert that task._usage has all three timing fields and tokens populated."""
-    usage: Optional[RequestUsage] = task.usage
+    usage: Optional[TaskUsage] = task.usage
     assert usage is not None, f"[{label}] task.usage is None"
 
     assert usage.duration is not None and usage.duration > 0, (
@@ -123,6 +123,7 @@ class TestTaskPropertyDelegation:
 
         usage = task.usage
         assert usage is not None
+        assert isinstance(usage, TaskUsage)
 
         assert task.duration == usage.duration
         assert task.model_execution_time == usage.model_execution_time
@@ -177,8 +178,8 @@ class TestMultipleTasksSameAgent:
             "Tasks should have independent usage, not identical"
         )
 
-        assert task1.usage is not task2.usage, "Each task should have its own RequestUsage instance"
-        assert task2.usage is not task3.usage, "Each task should have its own RequestUsage instance"
+        assert task1.usage is not task2.usage, "Each task should have its own TaskUsage instance"
+        assert task2.usage is not task3.usage, "Each task should have its own TaskUsage instance"
 
     @pytest.mark.asyncio
     async def test_independent_task_usage_print_do_multiple(self, capsys) -> None:
@@ -220,6 +221,7 @@ class TestTaskUsageSerialization:
 
         restored = Task.from_dict(d)
         assert restored.usage is not None
+        assert isinstance(restored.usage, TaskUsage)
         assert restored.usage.duration == task.usage.duration
         assert restored.usage.model_execution_time == task.usage.model_execution_time
         assert restored.usage.input_tokens == task.usage.input_tokens

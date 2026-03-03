@@ -15,7 +15,7 @@ from upsonic.utils.package.exception import UsageLimitExceeded
 if TYPE_CHECKING:
     from upsonic.utils.timer import Timer
 
-__all__ = 'RequestUsage', 'RunUsage', 'Usage', 'UsageLimits'
+__all__ = 'RequestUsage', 'TaskUsage', 'RunUsage', 'AgentUsage', 'Usage', 'UsageLimits'
 
 
 @dataclass(repr=False, kw_only=True)
@@ -106,79 +106,28 @@ class UsageBase:
 
 @dataclass(repr=False, kw_only=True)
 class RequestUsage(UsageBase):
-    """LLM usage associated with a single request (task-level).
+    """LLM usage associated with a single request.
+
+    Represents token counts from a single LLM API call. This class is immutable
+    after creation — it should not be used for accumulation across multiple calls.
 
     This is an implementation of `genai_prices.types.AbstractUsage` so it can be used to calculate the price of the
     request using genai-prices.
     """
 
-    timer: Optional["Timer"] = None
-    """Internal timer utility for tracking task-level execution time."""
-
-    duration: Optional[float] = None
-    """Total task execution time, in seconds."""
-
-    model_execution_time: Optional[float] = None
-    """Total time spent in LLM API calls for this task, in seconds."""
-
     @property
-    def upsonic_execution_time(self) -> Optional[float]:
-        """Framework overhead time = duration - model_execution_time, in seconds."""
-        if self.duration is None or self.model_execution_time is None:
-            return None
-        return self.duration - self.model_execution_time
-
-    @property
-    def requests(self):
+    def requests(self) -> int:
         return 1
 
-    def start_timer(self) -> None:
-        """Start the internal timer for tracking task execution time."""
-        from upsonic.utils.timer import Timer
-        if self.timer is None:
-            self.timer = Timer()
-        self.timer.start()
-
-    def stop_timer(self, set_duration: bool = True) -> None:
-        """Stop the internal timer and optionally set duration.
-
-        Args:
-            set_duration: If True, set self.duration from timer.elapsed
-        """
-        if self.timer is not None:
-            self.timer.stop()
-            if set_duration:
-                self.duration = self.timer.elapsed
-
-    def add_model_execution_time(self, elapsed: float) -> None:
-        """Accumulate model (LLM API) execution time for this task.
-
-        Args:
-            elapsed: Time in seconds spent in a single model.request() call.
-        """
-        if self.model_execution_time is None:
-            self.model_execution_time = elapsed
-        else:
-            self.model_execution_time += elapsed
-
-    def incr(self, incr_usage: RequestUsage) -> None:
-        """Increment the usage in place.
+    def incr(self, incr_usage: "RequestUsage") -> None:
+        """Increment token counts in place (for summing response parts only).
 
         Args:
             incr_usage: The usage to increment by.
         """
         _incr_usage_tokens(self, incr_usage)
 
-        if incr_usage.model_execution_time is not None:
-            self.add_model_execution_time(incr_usage.model_execution_time)
-
-        if incr_usage.duration is not None:
-            if self.duration is None:
-                self.duration = incr_usage.duration
-            else:
-                self.duration += incr_usage.duration
-
-    def __add__(self, other: RequestUsage) -> RequestUsage:
+    def __add__(self, other: "RequestUsage") -> "RequestUsage":
         """Add two RequestUsages together.
 
         This is provided so it's trivial to sum usage information from multiple parts of a response.
@@ -199,7 +148,7 @@ class RequestUsage(UsageBase):
         provider_fallback: str,
         api_flavor: str = 'default',
         details: dict[str, Any] | None = None,
-    ) -> RequestUsage:
+    ) -> "RequestUsage":
         """Extract usage information from the response data using genai-prices.
 
         Args:
@@ -224,11 +173,9 @@ class RequestUsage(UsageBase):
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization.
-        
-        Excludes None/zero values for cleaner output.
-        
+
         Returns:
-            Dictionary representation of the usage metrics.
+            Dictionary representation of the token usage.
         """
         result: Dict[str, Any] = {
             "input_tokens": self.input_tokens,
@@ -239,30 +186,24 @@ class RequestUsage(UsageBase):
             "cache_audio_read_tokens": self.cache_audio_read_tokens,
             "output_audio_tokens": self.output_audio_tokens,
         }
-        
+
         if self.details:
             result["details"] = self.details
-        if self.duration is not None:
-            result["duration"] = self.duration
-        if self.model_execution_time is not None:
-            result["model_execution_time"] = self.model_execution_time
-        if self.upsonic_execution_time is not None:
-            result["upsonic_execution_time"] = self.upsonic_execution_time
-        
+
         result = {
             k: v for k, v in result.items()
             if v is not None and (not isinstance(v, (int, float)) or v != 0) and (not isinstance(v, dict) or len(v) > 0)
         }
-        
+
         return result
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "RequestUsage":
         """Reconstruct RequestUsage from dictionary.
-        
+
         Args:
             data: Dictionary containing RequestUsage fields.
-            
+
         Returns:
             RequestUsage instance.
         """
@@ -275,16 +216,16 @@ class RequestUsage(UsageBase):
             cache_audio_read_tokens=data.get("cache_audio_read_tokens", 0),
             output_audio_tokens=data.get("output_audio_tokens", 0),
             details=data.get("details", {}),
-            duration=data.get("duration"),
-            model_execution_time=data.get("model_execution_time"),
         )
 
 
 @dataclass(repr=False, kw_only=True)
-class RunUsage(UsageBase):
-    """Agent usage associated with an agent run.
+class TaskUsage(UsageBase):
+    """Task-level usage that accumulates metrics across all LLM calls within a single task.
 
-    Responsibility for calculating request usage is on the model; Upsonic simply sums the usage information across requests.
+    Lives on ``task._usage`` and ``AgentRunOutput.usage``.
+    Accepts ``RequestUsage`` (from model responses) and other ``TaskUsage`` (from
+    sub-agents, culture, reflection, policies, etc.) via ``incr()``.
     """
 
     requests: int = 0
@@ -320,7 +261,6 @@ class RunUsage(UsageBase):
     details: dict[str, int] = dataclasses.field(default_factory=dict)
     """Any extra details returned by the model."""
 
-    # Timer and timing metrics
     timer: Optional["Timer"] = None
     """Internal timer utility for tracking execution time."""
 
@@ -340,61 +280,53 @@ class RunUsage(UsageBase):
             return None
         return self.duration - self.model_execution_time
 
-    # Cost metrics
     cost: Optional[float] = None
     """Estimated cost of the run (provider-specific)."""
 
-    # Provider-specific and additional metrics
     provider_metrics: Optional[Dict[str, Any]] = None
     """Provider-specific metrics (e.g., latency breakdown, model info)."""
 
     additional_metrics: Optional[Dict[str, Any]] = None
     """Any additional custom metrics."""
 
-    def incr(self, incr_usage: RunUsage | RequestUsage) -> None:
+    def incr(self, incr_usage: "TaskUsage | RequestUsage") -> None:
         """Increment the usage in place.
 
         Args:
             incr_usage: The usage to increment by.
         """
-        if isinstance(incr_usage, RunUsage):
+        if isinstance(incr_usage, TaskUsage):
             self.requests += incr_usage.requests
             self.tool_calls += incr_usage.tool_calls
             self.reasoning_tokens += incr_usage.reasoning_tokens
-            
-            # Handle cost
+
             if incr_usage.cost is not None:
                 if self.cost is None:
                     self.cost = incr_usage.cost
                 else:
                     self.cost += incr_usage.cost
-            
-            # Handle duration - sum durations
+
             if incr_usage.duration is not None:
                 if self.duration is None:
                     self.duration = incr_usage.duration
                 else:
                     self.duration += incr_usage.duration
-            
-            # Handle model_execution_time - sum across runs
+
             if incr_usage.model_execution_time is not None:
                 if self.model_execution_time is None:
                     self.model_execution_time = incr_usage.model_execution_time
                 else:
                     self.model_execution_time += incr_usage.model_execution_time
-            
-            # Handle time_to_first_token - keep the first/smallest
+
             if incr_usage.time_to_first_token is not None:
                 if self.time_to_first_token is None:
                     self.time_to_first_token = incr_usage.time_to_first_token
-            
-            # Handle provider_metrics - merge dicts
+
             if incr_usage.provider_metrics:
                 if self.provider_metrics is None:
                     self.provider_metrics = {}
                 self.provider_metrics.update(incr_usage.provider_metrics)
-            
-            # Handle additional_metrics - merge dicts
+
             if incr_usage.additional_metrics:
                 if self.additional_metrics is None:
                     self.additional_metrics = {}
@@ -402,34 +334,17 @@ class RunUsage(UsageBase):
         elif isinstance(incr_usage, RequestUsage):
             self.requests += 1
 
-            if incr_usage.model_execution_time is not None:
-                if self.model_execution_time is None:
-                    self.model_execution_time = incr_usage.model_execution_time
-                else:
-                    self.model_execution_time += incr_usage.model_execution_time
-
-            if incr_usage.duration is not None:
-                if self.duration is None:
-                    self.duration = incr_usage.duration
-                else:
-                    self.duration += incr_usage.duration
-        
-        # Extract special token types from details dict (only when details is a dict)
         details = getattr(incr_usage, "details", None)
         if isinstance(details, dict) and details:
             if "reasoning_tokens" in details:
                 self.reasoning_tokens += details.get("reasoning_tokens", 0)
 
-        if isinstance(incr_usage, (RunUsage, RequestUsage)):
+        if isinstance(incr_usage, (TaskUsage, RequestUsage)):
             _incr_usage_tokens(self, incr_usage)
 
-    def __add__(self, other: RunUsage | RequestUsage) -> RunUsage:
-        """Add two RunUsages together.
-
-        This is provided so it's trivial to sum usage information from multiple runs.
-        """
+    def __add__(self, other: "TaskUsage | RequestUsage") -> "TaskUsage":
+        """Add two usages together."""
         new_usage = copy(self)
-        # Deep copy mutable fields to avoid sharing references
         if self.details:
             new_usage.details = self.details.copy()
         if self.provider_metrics:
@@ -439,13 +354,12 @@ class RunUsage(UsageBase):
         new_usage.incr(other)
         return new_usage
 
-    def __radd__(self, other: RunUsage | RequestUsage | int) -> RunUsage:
+    def __radd__(self, other: "TaskUsage | RequestUsage | int") -> "TaskUsage":
         """Right add to support sum() starting with 0."""
         if other == 0:
             return self
         return self + other
 
-    # Timer methods
     def start_timer(self) -> None:
         """Start the internal timer for tracking execution time."""
         from upsonic.utils.timer import Timer
@@ -455,7 +369,7 @@ class RunUsage(UsageBase):
 
     def stop_timer(self, set_duration: bool = True) -> None:
         """Stop the internal timer and optionally set duration.
-        
+
         Args:
             set_duration: If True, set self.duration from timer.elapsed
         """
@@ -469,11 +383,20 @@ class RunUsage(UsageBase):
         if self.timer is not None:
             self.time_to_first_token = self.timer.elapsed
 
+    def add_model_execution_time(self, elapsed: float) -> None:
+        """Accumulate model (LLM API) execution time.
+
+        Args:
+            elapsed: Time in seconds spent in a single model.request() call.
+        """
+        if self.model_execution_time is None:
+            self.model_execution_time = elapsed
+        else:
+            self.model_execution_time += elapsed
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization.
-        
-        Excludes the timer object and any None/zero values for cleaner output.
-        
+
         Returns:
             Dictionary representation of the usage metrics.
         """
@@ -489,8 +412,7 @@ class RunUsage(UsageBase):
             "output_audio_tokens": self.output_audio_tokens,
             "reasoning_tokens": self.reasoning_tokens,
         }
-        
-        # Add optional fields only if they have values
+
         if self.details:
             result["details"] = self.details
         if self.cost is not None:
@@ -507,24 +429,23 @@ class RunUsage(UsageBase):
             result["provider_metrics"] = self.provider_metrics
         if self.additional_metrics:
             result["additional_metrics"] = self.additional_metrics
-        
-        # Remove zero values for cleaner output
+
         result = {
             k: v for k, v in result.items()
             if v is not None and (not isinstance(v, (int, float)) or v != 0) and (not isinstance(v, dict) or len(v) > 0)
         }
-        
+
         return result
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "RunUsage":
-        """Reconstruct RunUsage from dictionary.
-        
+    def from_dict(cls, data: Dict[str, Any]) -> "TaskUsage":
+        """Reconstruct TaskUsage from dictionary.
+
         Args:
-            data: Dictionary containing RunUsage fields.
-            
+            data: Dictionary containing TaskUsage fields.
+
         Returns:
-            RunUsage instance.
+            TaskUsage instance.
         """
         return cls(
             requests=data.get("requests", 0),
@@ -546,30 +467,160 @@ class RunUsage(UsageBase):
             additional_metrics=data.get("additional_metrics"),
         )
 
-    def update_from_request_usage(self, request_usage: RequestUsage) -> None:
-        """Update this RunUsage from a RequestUsage (from model response).
-        
-        This is a convenience method for updating usage from model responses.
-        
+
+RunUsage = TaskUsage
+"""Backward-compatible alias. Use ``TaskUsage`` in new code."""
+
+
+@dataclass(repr=False, kw_only=True)
+class AgentUsage(UsageBase):
+    """Agent-level usage that aggregates ``TaskUsage`` across multiple task runs.
+
+    Lives on ``agent.usage``. Accumulates via ``incr(TaskUsage)`` at the end of
+    each task execution.
+    """
+
+    requests: int = 0
+    """Total number of LLM API requests across all tasks."""
+
+    tool_calls: int = 0
+    """Total number of tool calls across all tasks."""
+
+    input_tokens: int = 0
+    """Total input tokens across all tasks."""
+
+    cache_write_tokens: int = 0
+    cache_read_tokens: int = 0
+    input_audio_tokens: int = 0
+    cache_audio_read_tokens: int = 0
+
+    output_tokens: int = 0
+    """Total output tokens across all tasks."""
+
+    output_audio_tokens: int = 0
+    reasoning_tokens: int = 0
+
+    details: dict[str, int] = dataclasses.field(default_factory=dict)
+
+    duration: Optional[float] = None
+    """Total execution time across all tasks, in seconds."""
+
+    model_execution_time: Optional[float] = None
+    """Total time spent in LLM API calls across all tasks, in seconds."""
+
+    @property
+    def upsonic_execution_time(self) -> Optional[float]:
+        """Framework overhead time = duration - model_execution_time, in seconds."""
+        if self.duration is None or self.model_execution_time is None:
+            return None
+        return self.duration - self.model_execution_time
+
+    cost: Optional[float] = None
+    """Total estimated cost across all tasks."""
+
+    def incr(self, incr_usage: "TaskUsage | AgentUsage") -> None:
+        """Increment agent-level usage from a completed task or another agent.
+
         Args:
-            request_usage: The RequestUsage from a model response.
+            incr_usage: TaskUsage from a completed task, or AgentUsage from a sub-agent.
         """
-        self.incr(request_usage)
+        if isinstance(incr_usage, (TaskUsage, AgentUsage)):
+            self.requests += incr_usage.requests
+            self.tool_calls += getattr(incr_usage, "tool_calls", 0)
+            self.reasoning_tokens += getattr(incr_usage, "reasoning_tokens", 0)
 
-    def add_model_execution_time(self, elapsed: float) -> None:
-        """Accumulate model (LLM API) execution time.
-        
+            if incr_usage.cost is not None:
+                if self.cost is None:
+                    self.cost = incr_usage.cost
+                else:
+                    self.cost += incr_usage.cost
+
+            if incr_usage.duration is not None:
+                if self.duration is None:
+                    self.duration = incr_usage.duration
+                else:
+                    self.duration += incr_usage.duration
+
+            if incr_usage.model_execution_time is not None:
+                if self.model_execution_time is None:
+                    self.model_execution_time = incr_usage.model_execution_time
+                else:
+                    self.model_execution_time += incr_usage.model_execution_time
+
+            details = getattr(incr_usage, "details", None)
+            if isinstance(details, dict) and details:
+                if "reasoning_tokens" in details:
+                    self.reasoning_tokens += details.get("reasoning_tokens", 0)
+
+            _incr_usage_tokens(self, incr_usage)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for serialization.
+
+        Returns:
+            Dictionary representation of the agent-level usage metrics.
+        """
+        result: Dict[str, Any] = {
+            "requests": self.requests,
+            "tool_calls": self.tool_calls,
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "cache_write_tokens": self.cache_write_tokens,
+            "cache_read_tokens": self.cache_read_tokens,
+            "input_audio_tokens": self.input_audio_tokens,
+            "cache_audio_read_tokens": self.cache_audio_read_tokens,
+            "output_audio_tokens": self.output_audio_tokens,
+            "reasoning_tokens": self.reasoning_tokens,
+        }
+
+        if self.details:
+            result["details"] = self.details
+        if self.cost is not None:
+            result["cost"] = self.cost
+        if self.duration is not None:
+            result["duration"] = self.duration
+        if self.model_execution_time is not None:
+            result["model_execution_time"] = self.model_execution_time
+        if self.upsonic_execution_time is not None:
+            result["upsonic_execution_time"] = self.upsonic_execution_time
+
+        result = {
+            k: v for k, v in result.items()
+            if v is not None and (not isinstance(v, (int, float)) or v != 0) and (not isinstance(v, dict) or len(v) > 0)
+        }
+
+        return result
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "AgentUsage":
+        """Reconstruct AgentUsage from dictionary.
+
         Args:
-            elapsed: Time in seconds spent in a single model.request() call.
+            data: Dictionary containing AgentUsage fields.
+
+        Returns:
+            AgentUsage instance.
         """
-        if self.model_execution_time is None:
-            self.model_execution_time = elapsed
-        else:
-            self.model_execution_time += elapsed
+        return cls(
+            requests=data.get("requests", 0),
+            tool_calls=data.get("tool_calls", 0),
+            input_tokens=data.get("input_tokens", 0),
+            output_tokens=data.get("output_tokens", 0),
+            cache_write_tokens=data.get("cache_write_tokens", 0),
+            cache_read_tokens=data.get("cache_read_tokens", 0),
+            input_audio_tokens=data.get("input_audio_tokens", 0),
+            cache_audio_read_tokens=data.get("cache_audio_read_tokens", 0),
+            output_audio_tokens=data.get("output_audio_tokens", 0),
+            reasoning_tokens=data.get("reasoning_tokens", 0),
+            details=data.get("details", {}),
+            cost=data.get("cost"),
+            duration=data.get("duration"),
+            model_execution_time=data.get("model_execution_time"),
+        )
 
 
-def _incr_usage_tokens(slf: RunUsage | RequestUsage, incr_usage: RunUsage | RequestUsage) -> None:
-    """Increment the usage in place.
+def _incr_usage_tokens(slf: "TaskUsage | AgentUsage | RequestUsage", incr_usage: "TaskUsage | AgentUsage | RequestUsage") -> None:
+    """Increment token fields in place.
 
     Args:
         slf: The usage to increment.
@@ -590,9 +641,9 @@ def _incr_usage_tokens(slf: RunUsage | RequestUsage, incr_usage: RunUsage | Requ
 
 
 @dataclass(repr=False, kw_only=True)
-@deprecated('`Usage` is deprecated, use `RunUsage` instead')
-class Usage(RunUsage):
-    """Deprecated alias for `RunUsage`."""
+@deprecated('`Usage` is deprecated, use `TaskUsage` instead')
+class Usage(TaskUsage):
+    """Deprecated alias for `TaskUsage`."""
 
 
 @dataclass(repr=False, kw_only=True)
@@ -711,7 +762,7 @@ class UsageLimits:
             limit is not None for limit in (self.input_tokens_limit, self.output_tokens_limit, self.total_tokens_limit)
         )
 
-    def check_before_request(self, usage: RunUsage) -> None:
+    def check_before_request(self, usage: TaskUsage) -> None:
         """Raises a `UsageLimitExceeded` exception if the next request would exceed any of the limits."""
         request_limit = self.request_limit
         if request_limit is not None and usage.requests >= request_limit:
@@ -729,7 +780,7 @@ class UsageLimits:
                 f'The next request would exceed the total_tokens_limit of {self.total_tokens_limit} ({total_tokens=})'
             )
 
-    def check_tokens(self, usage: RunUsage) -> None:
+    def check_tokens(self, usage: TaskUsage) -> None:
         """Raises a `UsageLimitExceeded` exception if the usage exceeds any of the token limits."""
         input_tokens = usage.input_tokens
         if self.input_tokens_limit is not None and input_tokens > self.input_tokens_limit:
@@ -745,7 +796,7 @@ class UsageLimits:
         if self.total_tokens_limit is not None and total_tokens > self.total_tokens_limit:
             raise UsageLimitExceeded(f'Exceeded the total_tokens_limit of {self.total_tokens_limit} ({total_tokens=})')
 
-    def check_before_tool_call(self, projected_usage: RunUsage) -> None:
+    def check_before_tool_call(self, projected_usage: TaskUsage) -> None:
         """Raises a `UsageLimitExceeded` exception if the next tool call(s) would exceed the tool call limit."""
         tool_calls_limit = self.tool_calls_limit
         tool_calls = projected_usage.tool_calls
