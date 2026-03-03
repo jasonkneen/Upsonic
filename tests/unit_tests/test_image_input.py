@@ -1,7 +1,6 @@
 import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
 from contextlib import asynccontextmanager
-from PIL import Image
 import tempfile
 import os
 from upsonic import Task, Agent
@@ -16,6 +15,8 @@ class TestTaskImageContextHandling:
     
     @patch('upsonic.models.infer_model')
     def test_agent_with_multiple_images_returns_combined_names(self, mock_infer_model):
+        from PIL import Image
+
         # Create temporary test images
         with tempfile.TemporaryDirectory() as temp_dir:
             # Create simple test images

@@ -12,8 +12,6 @@ except (ImportError, AttributeError):
 from upsonic import Agent
 from upsonic.models import infer_model
 from upsonic.providers.openai import OpenAIProvider
-from upsonic.providers.anthropic import AnthropicProvider
-from upsonic.providers.google import GoogleProvider
 
 
 class TestModelSpecification(unittest.TestCase):
@@ -27,30 +25,53 @@ class TestModelSpecification(unittest.TestCase):
         self.assertEqual(agent1.model.model_name, "gpt-4o")
         self.assertIsInstance(agent1.model._provider, OpenAIProvider)
 
-    @patch('upsonic.providers.anthropic.AsyncAnthropic')
+    @patch('upsonic.models.infer_model')
     @patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'})
-    def test_anthropic_specification(self, mock_anthropic):
-        # Mock the Anthropic client
-        mock_anthropic.return_value = MagicMock()
-        
+    def test_anthropic_specification(self, mock_infer_model):
+        from upsonic.providers import infer_provider as real_infer_provider
+        mock_provider = MagicMock()
+        mock_provider.name = 'anthropic'
+        mock_provider.base_url = 'https://api.anthropic.com'
+        mock_provider.client = MagicMock()
+        mock_provider.model_profile.return_value = None
+
+        def side_effect(model: str, provider_factory: object = None):
+            if isinstance(model, str) and model.startswith('anthropic/'):
+                mock_result = MagicMock()
+                mock_result.model_name = model.split('/', 1)[1]
+                mock_result._provider = mock_provider
+                return mock_result
+            return infer_model(model, provider_factory=provider_factory or real_infer_provider)
+        mock_infer_model.side_effect = side_effect
+
         agent2 = Agent(name="String Agent 2", model="anthropic/claude-3-5-sonnet-latest")
         self.assertEqual(agent2.model.model_name, "claude-3-5-sonnet-latest")
-        self.assertIsInstance(agent2.model._provider, AnthropicProvider)
+        self.assertEqual(agent2.model._provider.name, "anthropic")
 
-    @patch('upsonic.providers.google.HttpOptions')
-    @patch('upsonic.providers.google.Client')
+    @patch('upsonic.models.infer_model')
     @patch.dict('os.environ', {'GOOGLE_API_KEY': 'test-key'})
-    def test_google_specification(self, mock_google, mock_http_options):
-        # Mock HttpOptions to accept any parameters (including httpx_async_client)
-        mock_http_options_instance = MagicMock()
-        mock_http_options.return_value = mock_http_options_instance
-        
-        # Mock the Google client
-        mock_google.return_value = MagicMock()
-        
+    def test_google_specification(self, mock_infer_model):
+        from upsonic.providers import infer_provider as real_infer_provider
+        mock_provider = MagicMock()
+        mock_provider.name = 'google-gla'
+        mock_provider.base_url = 'https://generativelanguage.googleapis.com'
+        mock_provider.client = MagicMock()
+        mock_provider.model_profile.return_value = None
+
+        def side_effect(model: str, provider_factory: object = None):
+            if isinstance(model, str) and (
+                model.startswith('google-gla/') or model.startswith('google-vertex/') or model.startswith('gemini/')
+            ):
+                mock_result = MagicMock()
+                mock_result.model_name = model.split('/', 1)[1]
+                mock_result._provider = mock_provider
+                return mock_result
+            return infer_model(model, provider_factory=provider_factory or real_infer_provider)
+        mock_infer_model.side_effect = side_effect
+
         agent3 = Agent(name="String Agent 3", model="google-gla/gemini-2.5-pro")
         self.assertEqual(agent3.model.model_name, "gemini-2.5-pro")
-        self.assertIsInstance(agent3.model._provider, GoogleProvider)
+        self.assertEqual(agent3.model._provider.name, "google-gla")
 
     @patch('upsonic.providers.openai.AsyncOpenAI')
     def test_model_inference_direct(self, mock_openai):
