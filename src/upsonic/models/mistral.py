@@ -171,6 +171,10 @@ class MistralModel(Model):
         return self._provider.base_url
 
     @property
+    def provider(self) -> Provider[Mistral]:
+        return self._provider
+
+    @property
     def model_name(self) -> MistralModelName:
         """The model name."""
         return self._model_name

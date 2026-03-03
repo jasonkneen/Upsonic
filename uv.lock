@@ -8862,6 +8862,11 @@ gmail-interface = [
     { name = "google-auth-httplib2" },
     { name = "google-auth-oauthlib" },
 ]
+gmail-tool = [
+    { name = "google-api-python-client" },
+    { name = "google-auth-httplib2" },
+    { name = "google-auth-oauthlib" },
+]
 html-loader = [
     { name = "aiohttp" },
     { name = "beautifulsoup4" },
@@ -9104,10 +9109,13 @@ requires-dist = [
     { name = "genai-prices", specifier = ">=0.0.38" },
     { name = "genai-prices", marker = "extra == 'tools'", specifier = ">=0.0.29" },
     { name = "google-api-python-client", marker = "extra == 'gmail-interface'" },
+    { name = "google-api-python-client", marker = "extra == 'gmail-tool'", specifier = ">=2.188.0" },
     { name = "google-auth", marker = "extra == 'embeddings'", specifier = ">=2.40.3" },
     { name = "google-auth", marker = "extra == 'models'", specifier = ">=2.40.3" },
     { name = "google-auth-httplib2", marker = "extra == 'gmail-interface'" },
+    { name = "google-auth-httplib2", marker = "extra == 'gmail-tool'", specifier = ">=0.3.0" },
     { name = "google-auth-oauthlib", marker = "extra == 'gmail-interface'" },
+    { name = "google-auth-oauthlib", marker = "extra == 'gmail-tool'", specifier = ">=1.2.4" },
     { name = "google-genai", marker = "extra == 'embeddings'", specifier = ">=1.41.0" },
     { name = "google-genai", marker = "extra == 'models'", specifier = ">=1.41.0" },
     { name = "greenlet", marker = "extra == 'postgres-storage'", specifier = ">=3.2.3" },
@@ -9225,7 +9233,7 @@ requires-dist = [
     { name = "xai-sdk", marker = "extra == 'models'", specifier = ">=1.4.0" },
     { name = "yfinance", marker = "extra == 'tools'", specifier = ">=0.2.66" },
 ]
-provides-extras = ["chroma", "qdrant", "milvus", "weaviate", "pinecone", "faiss", "pgvector", "supermemory", "vectordb", "sqlite-storage", "redis-storage", "postgres-storage", "mongo-storage", "mem0-storage", "storage", "models", "embeddings", "csv-loader", "docling-loader", "docx-loader", "html-loader", "json-loader", "markdown-loader", "pdf-loader", "pdfplumber-loader", "pymupdf-loader", "text-loader", "xml-loader", "yaml-loader", "loaders", "tools", "web", "ocr", "custom-tools", "crawlee-browser", "gmail-interface", "safety-engine", "slack-interface", "otel", "langfuse"]
+provides-extras = ["chroma", "qdrant", "milvus", "weaviate", "pinecone", "faiss", "pgvector", "supermemory", "vectordb", "sqlite-storage", "redis-storage", "postgres-storage", "mongo-storage", "mem0-storage", "storage", "models", "embeddings", "csv-loader", "docling-loader", "docx-loader", "html-loader", "json-loader", "markdown-loader", "pdf-loader", "pdfplumber-loader", "pymupdf-loader", "text-loader", "xml-loader", "yaml-loader", "loaders", "tools", "web", "ocr", "custom-tools", "crawlee-browser", "gmail-interface", "safety-engine", "slack-interface", "otel", "langfuse", "gmail-tool"]
 
 [package.metadata.requires-dev]
 dev = [

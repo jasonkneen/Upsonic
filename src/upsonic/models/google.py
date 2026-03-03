@@ -263,6 +263,10 @@ class GoogleModel(Model):
         return self._provider.base_url
 
     @property
+    def provider(self) -> Provider[Client]:
+        return self._provider
+
+    @property
     def model_name(self) -> GoogleModelName:
         """The model name."""
         return self._model_name

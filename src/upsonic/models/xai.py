@@ -195,6 +195,10 @@ class XaiModel(Model):
         return self._model_name
 
     @property
+    def provider(self) -> Provider[AsyncClient]:
+        return self._provider
+
+    @property
     def system(self) -> str:
         """The model provider."""
         return 'xai'

@@ -13,7 +13,7 @@ import asyncio
 import os
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from upsonic.tools import ToolKit, tool
 
@@ -52,6 +52,7 @@ class AutonomousShellToolKit(ToolKit):
         max_output_length: int = 10000,
         allowed_commands: Optional[List[str]] = None,
         blocked_commands: Optional[List[str]] = None,
+        **kwargs: Any,
     ) -> None:
         """
         Initialize shell toolkit.
@@ -62,8 +63,9 @@ class AutonomousShellToolKit(ToolKit):
             max_output_length: Maximum output length before truncation
             allowed_commands: If set, only these commands are allowed (whitelist)
             blocked_commands: Commands that are blocked (blacklist)
+            **kwargs: ToolKit params (include_tools, exclude_tools, timeout, etc.).
         """
-        super().__init__()
+        super().__init__(**kwargs)
         self.workspace: Path = Path(workspace).resolve()
         self.default_timeout: int = default_timeout
         self.max_output_length: int = max_output_length
@@ -178,7 +180,6 @@ class AutonomousShellToolKit(ToolKit):
         except Exception as e:
             return f"❌ Error running command: {str(e)}"
     
-    @tool
     async def arun_command(
         self,
         command: str,
@@ -296,7 +297,6 @@ class AutonomousShellToolKit(ToolKit):
         command = f"python3 -c '{escaped_code}'"
         return self.run_command(command, timeout=timeout)
     
-    @tool
     async def arun_python(
         self,
         code: str,
@@ -330,7 +330,6 @@ class AutonomousShellToolKit(ToolKit):
         else:
             return f"❌ Command '{command}' is not available"
     
-    @tool
     async def acheck_command_exists(self, command: str) -> str:
         """Async version of check_command_exists."""
         return await asyncio.get_event_loop().run_in_executor(

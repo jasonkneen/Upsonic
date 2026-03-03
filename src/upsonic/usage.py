@@ -106,15 +106,60 @@ class UsageBase:
 
 @dataclass(repr=False, kw_only=True)
 class RequestUsage(UsageBase):
-    """LLM usage associated with a single request.
+    """LLM usage associated with a single request (task-level).
 
     This is an implementation of `genai_prices.types.AbstractUsage` so it can be used to calculate the price of the
     request using genai-prices.
     """
 
+    timer: Optional["Timer"] = None
+    """Internal timer utility for tracking task-level execution time."""
+
+    duration: Optional[float] = None
+    """Total task execution time, in seconds."""
+
+    model_execution_time: Optional[float] = None
+    """Total time spent in LLM API calls for this task, in seconds."""
+
+    @property
+    def upsonic_execution_time(self) -> Optional[float]:
+        """Framework overhead time = duration - model_execution_time, in seconds."""
+        if self.duration is None or self.model_execution_time is None:
+            return None
+        return self.duration - self.model_execution_time
+
     @property
     def requests(self):
         return 1
+
+    def start_timer(self) -> None:
+        """Start the internal timer for tracking task execution time."""
+        from upsonic.utils.timer import Timer
+        if self.timer is None:
+            self.timer = Timer()
+        self.timer.start()
+
+    def stop_timer(self, set_duration: bool = True) -> None:
+        """Stop the internal timer and optionally set duration.
+
+        Args:
+            set_duration: If True, set self.duration from timer.elapsed
+        """
+        if self.timer is not None:
+            self.timer.stop()
+            if set_duration:
+                self.duration = self.timer.elapsed
+
+    def add_model_execution_time(self, elapsed: float) -> None:
+        """Accumulate model (LLM API) execution time for this task.
+
+        Args:
+            elapsed: Time in seconds spent in a single model.request() call.
+        """
+        if self.model_execution_time is None:
+            self.model_execution_time = elapsed
+        else:
+            self.model_execution_time += elapsed
 
     def incr(self, incr_usage: RequestUsage) -> None:
         """Increment the usage in place.
@@ -122,7 +167,16 @@ class RequestUsage(UsageBase):
         Args:
             incr_usage: The usage to increment by.
         """
-        return _incr_usage_tokens(self, incr_usage)
+        _incr_usage_tokens(self, incr_usage)
+
+        if incr_usage.model_execution_time is not None:
+            self.add_model_execution_time(incr_usage.model_execution_time)
+
+        if incr_usage.duration is not None:
+            if self.duration is None:
+                self.duration = incr_usage.duration
+            else:
+                self.duration += incr_usage.duration
 
     def __add__(self, other: RequestUsage) -> RequestUsage:
         """Add two RequestUsages together.
@@ -186,11 +240,15 @@ class RequestUsage(UsageBase):
             "output_audio_tokens": self.output_audio_tokens,
         }
         
-        # Add optional fields only if they have values
         if self.details:
             result["details"] = self.details
+        if self.duration is not None:
+            result["duration"] = self.duration
+        if self.model_execution_time is not None:
+            result["model_execution_time"] = self.model_execution_time
+        if self.upsonic_execution_time is not None:
+            result["upsonic_execution_time"] = self.upsonic_execution_time
         
-        # Remove zero values for cleaner output
         result = {
             k: v for k, v in result.items()
             if v is not None and (not isinstance(v, (int, float)) or v != 0) and (not isinstance(v, dict) or len(v) > 0)
@@ -217,6 +275,8 @@ class RequestUsage(UsageBase):
             cache_audio_read_tokens=data.get("cache_audio_read_tokens", 0),
             output_audio_tokens=data.get("output_audio_tokens", 0),
             details=data.get("details", {}),
+            duration=data.get("duration"),
+            model_execution_time=data.get("model_execution_time"),
         )
 
 
@@ -270,6 +330,16 @@ class RunUsage(UsageBase):
     duration: Optional[float] = None
     """Total run time, in seconds."""
 
+    model_execution_time: Optional[float] = None
+    """Total time spent in LLM API calls (model.request()), in seconds."""
+
+    @property
+    def upsonic_execution_time(self) -> Optional[float]:
+        """Framework overhead time = duration - model_execution_time, in seconds."""
+        if self.duration is None or self.model_execution_time is None:
+            return None
+        return self.duration - self.model_execution_time
+
     # Cost metrics
     cost: Optional[float] = None
     """Estimated cost of the run (provider-specific)."""
@@ -306,6 +376,13 @@ class RunUsage(UsageBase):
                 else:
                     self.duration += incr_usage.duration
             
+            # Handle model_execution_time - sum across runs
+            if incr_usage.model_execution_time is not None:
+                if self.model_execution_time is None:
+                    self.model_execution_time = incr_usage.model_execution_time
+                else:
+                    self.model_execution_time += incr_usage.model_execution_time
+            
             # Handle time_to_first_token - keep the first/smallest
             if incr_usage.time_to_first_token is not None:
                 if self.time_to_first_token is None:
@@ -323,8 +400,19 @@ class RunUsage(UsageBase):
                     self.additional_metrics = {}
                 self.additional_metrics.update(incr_usage.additional_metrics)
         elif isinstance(incr_usage, RequestUsage):
-            # RequestUsage counts as 1 request
             self.requests += 1
+
+            if incr_usage.model_execution_time is not None:
+                if self.model_execution_time is None:
+                    self.model_execution_time = incr_usage.model_execution_time
+                else:
+                    self.model_execution_time += incr_usage.model_execution_time
+
+            if incr_usage.duration is not None:
+                if self.duration is None:
+                    self.duration = incr_usage.duration
+                else:
+                    self.duration += incr_usage.duration
         
         # Extract special token types from details dict (only when details is a dict)
         details = getattr(incr_usage, "details", None)
@@ -409,6 +497,10 @@ class RunUsage(UsageBase):
             result["cost"] = self.cost
         if self.duration is not None:
             result["duration"] = self.duration
+        if self.model_execution_time is not None:
+            result["model_execution_time"] = self.model_execution_time
+        if self.upsonic_execution_time is not None:
+            result["upsonic_execution_time"] = self.upsonic_execution_time
         if self.time_to_first_token is not None:
             result["time_to_first_token"] = self.time_to_first_token
         if self.provider_metrics:
@@ -448,6 +540,7 @@ class RunUsage(UsageBase):
             details=data.get("details", {}),
             cost=data.get("cost"),
             duration=data.get("duration"),
+            model_execution_time=data.get("model_execution_time"),
             time_to_first_token=data.get("time_to_first_token"),
             provider_metrics=data.get("provider_metrics"),
             additional_metrics=data.get("additional_metrics"),
@@ -462,6 +555,17 @@ class RunUsage(UsageBase):
             request_usage: The RequestUsage from a model response.
         """
         self.incr(request_usage)
+
+    def add_model_execution_time(self, elapsed: float) -> None:
+        """Accumulate model (LLM API) execution time.
+        
+        Args:
+            elapsed: Time in seconds spent in a single model.request() call.
+        """
+        if self.model_execution_time is None:
+            self.model_execution_time = elapsed
+        else:
+            self.model_execution_time += elapsed
 
 
 def _incr_usage_tokens(slf: RunUsage | RequestUsage, incr_usage: RunUsage | RequestUsage) -> None:

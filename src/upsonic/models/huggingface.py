@@ -160,6 +160,10 @@ class HuggingFaceModel(Model):
         return self._provider.base_url
 
     @property
+    def provider(self) -> Provider[AsyncInferenceClient]:
+        return self._provider
+
+    @property
     def model_name(self) -> HuggingFaceModelName:
         """The model name."""
         return self._model_name

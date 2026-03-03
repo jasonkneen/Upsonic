@@ -78,8 +78,7 @@ def get_estimated_cost(input_tokens: int, output_tokens: int, model: Union["Mode
     try:
         from upsonic.utils.usage import get_estimated_cost as _get_estimated_cost
         return _get_estimated_cost(input_tokens, output_tokens, model)
-    except Exception as e:
-        console.print(f"[yellow]Warning: Cost calculation failed: {e}[/yellow]")
+    except Exception:
         return "~$0.0000"
 
 
@@ -1275,20 +1274,26 @@ def agent_total_cost(total_input_tokens: int, total_output_tokens: int, total_ti
     console.print(panel)
     spacing()
 
-def print_price_id_summary(price_id: str, task, print_output: bool = True) -> dict:
+def print_price_id_summary(
+    price_id: str,
+    task: Any,
+    print_output: bool = True,
+) -> Optional[dict]:
     """
     Get the summary of usage and costs for a specific price ID and print it in a formatted panel.
+
+    All timing data (duration, model_execution_time, upsonic_execution_time) is read
+    from task.usage (RequestUsage) — the single source of truth for task-level metrics.
     
     Args:
-        price_id (str): The price ID to look up
-        task: The task object containing timing information
+        price_id: The price ID to look up
+        task: The task object whose .usage (RequestUsage) carries timing
         print_output: Whether to print the output (default: True)
         
     Returns:
         dict: A dictionary containing the usage summary, or None if price_id not found
     """
     if not print_output:
-        # Return summary without printing if price_id exists
         if price_id in price_id_summary:
             summary = price_id_summary[price_id].copy()
             summary['estimated_cost'] = f"${summary['estimated_cost']:.4f}"
@@ -1296,7 +1301,6 @@ def print_price_id_summary(price_id: str, task, print_output: bool = True) -> di
         return None
     
     price_id_display = escape_rich_markup(price_id)
-    task_display = escape_rich_markup(str(task))
     
     if price_id not in price_id_summary:
         console.print("[bold red]Price ID not found![/bold red]")
@@ -1309,14 +1313,24 @@ def print_price_id_summary(price_id: str, task, print_output: bool = True) -> di
     table.width = 60
 
     table.add_row("[bold]Price ID:[/bold]", f"[magenta]{price_id_display}[/magenta]")
-    table.add_row("")  # Add spacing
+    table.add_row("")
     table.add_row("[bold]Input Tokens:[/bold]", f"[magenta]{summary['input_tokens']:,}[/magenta]")
     table.add_row("[bold]Output Tokens:[/bold]", f"[magenta]{summary['output_tokens']:,}[/magenta]")
     table.add_row("[bold]Total Estimated Cost:[/bold]", f"[magenta]{summary['estimated_cost']}[/magenta]")
-    
-    if task and hasattr(task, 'duration') and task.duration is not None:
-        time_str = f"{task.duration:.2f} seconds"
-        table.add_row("[bold]Time Taken:[/bold]", f"[magenta]{time_str}[/magenta]")
+
+    task_usage: Any = getattr(task, 'usage', None) if task else None
+
+    _duration: Optional[float] = getattr(task_usage, 'duration', None) if task_usage else None
+    if _duration is not None:
+        table.add_row("[bold]Time Taken:[/bold]", f"[magenta]{_duration:.2f} seconds[/magenta]")
+
+    _model_time: Optional[float] = getattr(task_usage, 'model_execution_time', None) if task_usage else None
+    _upsonic_time: Optional[float] = getattr(task_usage, 'upsonic_execution_time', None) if task_usage else None
+
+    if _model_time is not None:
+        table.add_row("[bold]Model Execution Time:[/bold]", f"[magenta]{_model_time:.2f} seconds[/magenta]")
+    if _upsonic_time is not None:
+        table.add_row("[bold]Framework Overhead:[/bold]", f"[magenta]{_upsonic_time:.2f} seconds[/magenta]")
 
     panel = Panel(
         table,
@@ -1358,6 +1372,8 @@ def print_agent_metrics(agent: "Agent", print_output: bool = True) -> Optional[D
         "tool_calls": usage.tool_calls,
         "cost": usage.cost,
         "duration": usage.duration,
+        "model_execution_time": usage.model_execution_time,
+        "upsonic_execution_time": usage.upsonic_execution_time,
     }
     
     if not print_output:
@@ -1382,6 +1398,11 @@ def print_agent_metrics(agent: "Agent", print_output: bool = True) -> Optional[D
     if usage.duration is not None:
         time_str: str = f"{usage.duration:.2f} seconds"
         table.add_row("[bold]Total Duration:[/bold]", f"[cyan]{time_str}[/cyan]")
+    
+    if usage.model_execution_time is not None:
+        table.add_row("[bold]Model Execution Time:[/bold]", f"[cyan]{usage.model_execution_time:.2f} seconds[/cyan]")
+    if usage.upsonic_execution_time is not None:
+        table.add_row("[bold]Framework Overhead:[/bold]", f"[cyan]{usage.upsonic_execution_time:.2f} seconds[/cyan]")
     
     panel = Panel(
         table,

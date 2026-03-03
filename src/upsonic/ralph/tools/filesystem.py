@@ -12,7 +12,7 @@ import os
 import fnmatch
 import re
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from upsonic.tools import ToolKit, tool
 
@@ -31,14 +31,15 @@ class RalphFilesystemToolKit(ToolKit):
     - run_command: Execute shell commands
     """
     
-    def __init__(self, workspace: Path):
+    def __init__(self, workspace: Path, **kwargs: Any):
         """
         Initialize filesystem toolkit.
         
         Args:
             workspace: Workspace directory path
+            **kwargs: ToolKit params (include_tools, exclude_tools, timeout, etc.).
         """
-        super().__init__()
+        super().__init__(**kwargs)
         self.workspace = Path(workspace).resolve()
     
     def _validate_path(self, path: str) -> Path:

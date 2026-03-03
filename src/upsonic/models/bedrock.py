@@ -342,6 +342,10 @@ class BedrockConverseModel(Model):
         return str(self.client.meta.endpoint_url)
 
     @property
+    def provider(self) -> Provider[BaseClient]:
+        return self._provider
+
+    @property
     def model_name(self) -> str:
         """The model name."""
         return self._model_name

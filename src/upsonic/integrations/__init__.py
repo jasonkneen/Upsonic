@@ -1,16 +1,17 @@
-"""Upsonic integrations with observability platforms."""
+"""Upsonic integrations with observability and prompt management platforms."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from upsonic.integrations.tracing import TracingProvider as TracingProvider
     from upsonic.integrations.tracing import DefaultTracingProvider as DefaultTracingProvider
     from upsonic.integrations.langfuse import Langfuse as Langfuse
+    from upsonic.integrations.promptlayer import PromptLayer as PromptLayer
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
     if name == "TracingProvider":
         from upsonic.integrations.tracing import TracingProvider
         return TracingProvider
@@ -20,7 +21,10 @@ def __getattr__(name: str):
     if name == "Langfuse":
         from upsonic.integrations.langfuse import Langfuse
         return Langfuse
+    if name == "PromptLayer":
+        from upsonic.integrations.promptlayer import PromptLayer
+        return PromptLayer
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-__all__ = ["TracingProvider", "DefaultTracingProvider", "Langfuse"]
+__all__ = ["TracingProvider", "DefaultTracingProvider", "Langfuse", "PromptLayer"]

@@ -104,8 +104,13 @@ class OutlinesModel(Model):
 
         if isinstance(provider, str):
             provider = infer_provider(provider)
+        self._provider: Provider[Any] = provider
 
         super().__init__(settings=settings, profile=profile or provider.model_profile)
+
+    @property
+    def provider(self) -> Provider[Any]:
+        return self._provider
 
     @classmethod
     def from_transformers(

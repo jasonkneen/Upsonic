@@ -7,7 +7,7 @@ for future iterations.
 
 from __future__ import annotations
 
-from typing import Literal, TYPE_CHECKING
+from typing import Any, Literal, TYPE_CHECKING
 
 from upsonic.tools import ToolKit, tool
 
@@ -23,14 +23,15 @@ class LearningsUpdaterToolKit(ToolKit):
     improving future performance.
     """
     
-    def __init__(self, state_manager: "StateManager"):
+    def __init__(self, state_manager: "StateManager", **kwargs: Any):
         """
         Initialize LearningsUpdaterToolKit.
         
         Args:
             state_manager: StateManager instance for file operations
+            **kwargs: ToolKit params (include_tools, exclude_tools, timeout, etc.).
         """
-        super().__init__()
+        super().__init__(**kwargs)
         self.state_manager = state_manager
     
     @tool

@@ -28,40 +28,17 @@ Example Usage:
     from upsonic.tools.custom_tools.crawlee import CrawleeTools
 
     tools = CrawleeTools()
-
-    # Scrape a single URL (HTTP, fast)
     result = tools.scrape_url("https://example.com")
-
-    # Extract all links from a page
-    result = tools.extract_links("https://example.com")
-
-    # Extract elements by CSS selector
-    result = tools.extract_with_selector("https://example.com", selector="h2.title")
-
-    # Extract tables from a page
-    result = tools.extract_tables("https://en.wikipedia.org/wiki/Python_(programming_language)")
-
-    # Get page metadata (title, description, OG tags)
-    result = tools.get_page_metadata("https://example.com")
-
-    # Crawl a website (multi-page)
-    result = tools.crawl_website("https://example.com", max_pages=10, max_depth=2)
-
-    # Scrape a JS-rendered page (browser)
-    result = tools.scrape_dynamic_page("https://example.com/spa")
-
-    # Take a screenshot of a page (browser)
-    result = tools.take_screenshot("https://example.com")
     ```
 """
 
-import asyncio
-import base64
 import json
 import tempfile
-from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
+from upsonic.tools.base import ToolKit
+from upsonic.tools.config import tool
+from upsonic.utils.integrations.crawlee import run_async
 from upsonic.utils.printing import error_log
 
 try:
@@ -89,37 +66,12 @@ except ImportError:
     _CRAWLEE_PW_AVAILABLE = False
 
 
-def _run_async(coro: Any) -> Any:
-    """Run an async coroutine safely from a sync context.
-
-    Handles the case where an event loop is already running (e.g. when
-    the framework wraps a sync tool call) by executing the coroutine in
-    a dedicated thread with its own event loop.
-    """
-    try:
-        asyncio.get_running_loop()
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            return pool.submit(asyncio.run, coro).result()
-    except RuntimeError:
-        return asyncio.run(coro)
-
-
-class CrawleeTools:
-    """
-    Crawlee web scraping and crawling toolkit.
+class CrawleeTools(ToolKit):
+    """Crawlee web scraping and crawling toolkit.
 
     Provides HTTP-based (BeautifulSoup) and browser-based (Playwright) tools
     for scraping, crawling, and extracting data from websites. All operations
     run locally with no API key required.
-
-    Attributes:
-        headless: Whether to run Playwright browsers in headless mode.
-        browser_type: Playwright browser engine ('chromium', 'firefox', 'webkit').
-        max_request_retries: Default retry count for failed requests.
-        max_concurrency: Maximum number of concurrent requests during crawls.
-        proxy_urls: Optional list of proxy server URLs for rotation.
-        respect_robots_txt: Whether to honour robots.txt rules.
-        max_content_length: Maximum character length of extracted text per page.
     """
 
     def __init__(
@@ -131,18 +83,9 @@ class CrawleeTools:
         proxy_urls: Optional[List[str]] = None,
         respect_robots_txt: bool = True,
         max_content_length: int = 50_000,
-        enable_scrape: bool = True,
-        enable_extract_links: bool = True,
-        enable_extract_with_selector: bool = True,
-        enable_extract_tables: bool = True,
-        enable_get_page_metadata: bool = True,
-        enable_crawl: bool = True,
-        enable_scrape_dynamic: bool = True,
-        enable_screenshot: bool = True,
-        all: bool = False,
+        **kwargs: Any,
     ) -> None:
-        """
-        Initialize the CrawleeTools toolkit.
+        """Initialize the CrawleeTools toolkit.
 
         Args:
             headless: Run Playwright browsers in headless mode.
@@ -152,16 +95,10 @@ class CrawleeTools:
             proxy_urls: List of proxy URLs for proxy rotation.
             respect_robots_txt: Honour robots.txt directives.
             max_content_length: Max characters of extracted text per page.
-            enable_scrape: Enable the scrape_url tool.
-            enable_extract_links: Enable the extract_links tool.
-            enable_extract_with_selector: Enable the extract_with_selector tool.
-            enable_extract_tables: Enable the extract_tables tool.
-            enable_get_page_metadata: Enable the get_page_metadata tool.
-            enable_crawl: Enable the crawl_website tool.
-            enable_scrape_dynamic: Enable the scrape_dynamic_page tool.
-            enable_screenshot: Enable the take_screenshot tool.
-            all: Enable all tools regardless of individual flags.
+            **kwargs: ToolKit params (include_tools, exclude_tools, timeout, etc.).
         """
+        super().__init__(**kwargs)
+
         if not _CRAWLEE_BS_AVAILABLE and not _CRAWLEE_PW_AVAILABLE:
             from upsonic.utils.printing import import_error
 
@@ -190,28 +127,6 @@ class CrawleeTools:
             except ImportError:
                 pass
 
-        self._tools: List[Callable[..., str]] = []
-
-        if enable_scrape or all:
-            self._tools.append(self.scrape_url)
-        if enable_extract_links or all:
-            self._tools.append(self.extract_links)
-        if enable_extract_with_selector or all:
-            self._tools.append(self.extract_with_selector)
-        if enable_extract_tables or all:
-            self._tools.append(self.extract_tables)
-        if enable_get_page_metadata or all:
-            self._tools.append(self.get_page_metadata)
-        if enable_crawl or all:
-            self._tools.append(self.crawl_website)
-        if enable_scrape_dynamic or all:
-            self._tools.append(self.scrape_dynamic_page)
-        if enable_screenshot or all:
-            self._tools.append(self.take_screenshot)
-
-    def functions(self) -> List[Callable[..., str]]:
-        """Return the list of enabled tool functions."""
-        return self._tools
 
 
     def _make_configuration(self) -> Any:
@@ -259,34 +174,12 @@ class CrawleeTools:
         return kwargs
 
 
-    def scrape_url(
+    async def ascrape_url(
         self,
         url: str,
         only_main_content: bool = True,
         max_content_length: Optional[int] = None,
     ) -> str:
-        """
-        Scrape a single URL and extract its text content using HTTP (no browser needed).
-
-        Args:
-            url: The URL to scrape.
-            only_main_content: If True, strips nav/header/footer/script/style elements.
-            max_content_length: Max characters to return. Defaults to instance setting.
-
-        Returns:
-            JSON string with url, title, text content, and status_code.
-        """
-        return _run_async(
-            self._ascrape_url(url, only_main_content, max_content_length)
-        )
-
-    async def _ascrape_url(
-        self,
-        url: str,
-        only_main_content: bool = True,
-        max_content_length: Optional[int] = None,
-    ) -> str:
-        """Async implementation of scrape_url."""
         if not _CRAWLEE_BS_AVAILABLE:
             return json.dumps({"error": "crawlee[beautifulsoup] is not installed."})
 
@@ -326,30 +219,11 @@ class CrawleeTools:
             error_log(f"Crawlee scrape_url error: {e}")
             return json.dumps({"error": str(e), "url": url})
 
-
-    def extract_links(
+    async def aextract_links(
         self,
         url: str,
         css_filter: Optional[str] = None,
     ) -> str:
-        """
-        Extract all links from a web page.
-
-        Args:
-            url: The URL to extract links from.
-            css_filter: Optional CSS selector to limit which <a> tags are included.
-
-        Returns:
-            JSON string with the list of links (href, text) and total count.
-        """
-        return _run_async(self._aextract_links(url, css_filter))
-
-    async def _aextract_links(
-        self,
-        url: str,
-        css_filter: Optional[str] = None,
-    ) -> str:
-        """Async implementation of extract_links."""
         if not _CRAWLEE_BS_AVAILABLE:
             return json.dumps({"error": "crawlee[beautifulsoup] is not installed."})
 
@@ -398,35 +272,12 @@ class CrawleeTools:
             error_log(f"Crawlee extract_links error: {e}")
             return json.dumps({"error": str(e), "url": url})
 
-
-    def extract_with_selector(
+    async def aextract_with_selector(
         self,
         url: str,
         selector: str,
         max_content_length: Optional[int] = None,
     ) -> str:
-        """
-        Extract specific elements from a web page using a CSS selector.
-
-        Args:
-            url: The URL to scrape.
-            selector: CSS selector to match elements (e.g. 'h2.title', 'div.product-card').
-            max_content_length: Max characters per element's text. Defaults to instance setting.
-
-        Returns:
-            JSON string with matched elements (text, html, tag name, attributes) and count.
-        """
-        return _run_async(
-            self._aextract_with_selector(url, selector, max_content_length)
-        )
-
-    async def _aextract_with_selector(
-        self,
-        url: str,
-        selector: str,
-        max_content_length: Optional[int] = None,
-    ) -> str:
-        """Async implementation of extract_with_selector."""
         if not _CRAWLEE_BS_AVAILABLE:
             return json.dumps({"error": "crawlee[beautifulsoup] is not installed."})
 
@@ -480,30 +331,11 @@ class CrawleeTools:
             error_log(f"Crawlee extract_with_selector error: {e}")
             return json.dumps({"error": str(e), "url": url})
 
-
-    def extract_tables(
+    async def aextract_tables(
         self,
         url: str,
         table_index: Optional[int] = None,
     ) -> str:
-        """
-        Extract HTML tables from a web page as structured JSON.
-
-        Args:
-            url: The URL containing tables to extract.
-            table_index: If specified, only extract the table at this zero-based index.
-
-        Returns:
-            JSON string with table data (headers, rows) for each table found.
-        """
-        return _run_async(self._aextract_tables(url, table_index))
-
-    async def _aextract_tables(
-        self,
-        url: str,
-        table_index: Optional[int] = None,
-    ) -> str:
-        """Async implementation of extract_tables."""
         if not _CRAWLEE_BS_AVAILABLE:
             return json.dumps({"error": "crawlee[beautifulsoup] is not installed."})
 
@@ -573,28 +405,7 @@ class CrawleeTools:
             error_log(f"Crawlee extract_tables error: {e}")
             return json.dumps({"error": str(e), "url": url})
 
-
-    def get_page_metadata(
-        self,
-        url: str,
-    ) -> str:
-        """
-        Extract metadata from a web page including title, meta tags, and Open Graph data.
-
-        Args:
-            url: The URL to extract metadata from.
-
-        Returns:
-            JSON string with title, description, canonical URL, Open Graph tags,
-            and all meta tags found on the page.
-        """
-        return _run_async(self._aget_page_metadata(url))
-
-    async def _aget_page_metadata(
-        self,
-        url: str,
-    ) -> str:
-        """Async implementation of get_page_metadata."""
+    async def aget_page_metadata(self, url: str) -> str:
         if not _CRAWLEE_BS_AVAILABLE:
             return json.dumps({"error": "crawlee[beautifulsoup] is not installed."})
 
@@ -655,8 +466,7 @@ class CrawleeTools:
             error_log(f"Crawlee get_page_metadata error: {e}")
             return json.dumps({"error": str(e), "url": url})
 
-
-    def crawl_website(
+    async def acrawl_website(
         self,
         url: str,
         max_pages: int = 10,
@@ -666,46 +476,6 @@ class CrawleeTools:
         only_main_content: bool = True,
         max_content_length: Optional[int] = None,
     ) -> str:
-        """
-        Crawl a website starting from a seed URL, following links across pages.
-
-        Follows same-domain links by default. Returns extracted text from each page.
-
-        Args:
-            url: The starting URL to crawl from.
-            max_pages: Maximum number of pages to visit.
-            max_depth: Maximum link depth from the starting URL (None = unlimited).
-            include_patterns: Glob patterns for URLs to include (e.g. ['/blog/**']).
-            exclude_patterns: Glob patterns for URLs to exclude (e.g. ['/admin/**']).
-            only_main_content: Strip nav/header/footer/script/style elements.
-            max_content_length: Max characters of text per page. Defaults to instance setting.
-
-        Returns:
-            JSON string with a list of crawled pages (url, title, text) and total count.
-        """
-        return _run_async(
-            self._acrawl_website(
-                url,
-                max_pages,
-                max_depth,
-                include_patterns,
-                exclude_patterns,
-                only_main_content,
-                max_content_length,
-            )
-        )
-
-    async def _acrawl_website(
-        self,
-        url: str,
-        max_pages: int = 10,
-        max_depth: Optional[int] = None,
-        include_patterns: Optional[List[str]] = None,
-        exclude_patterns: Optional[List[str]] = None,
-        only_main_content: bool = True,
-        max_content_length: Optional[int] = None,
-    ) -> str:
-        """Async implementation of crawl_website."""
         if not _CRAWLEE_BS_AVAILABLE:
             return json.dumps({"error": "crawlee[beautifulsoup] is not installed."})
 
@@ -785,38 +555,12 @@ class CrawleeTools:
             error_log(f"Crawlee crawl_website error: {e}")
             return json.dumps({"error": str(e), "url": url})
 
-
-    def scrape_dynamic_page(
+    async def ascrape_dynamic_page(
         self,
         url: str,
         wait_for_selector: Optional[str] = None,
         max_content_length: Optional[int] = None,
     ) -> str:
-        """
-        Scrape a JavaScript-rendered page using a real browser (Playwright).
-
-        Use this instead of scrape_url when the page relies on JavaScript to
-        render its content (single-page apps, lazy-loaded content, etc.).
-
-        Args:
-            url: The URL to scrape.
-            wait_for_selector: CSS selector to wait for before extracting content.
-            max_content_length: Max characters to return. Defaults to instance setting.
-
-        Returns:
-            JSON string with url, title, extracted text, and html_length.
-        """
-        return _run_async(
-            self._ascrape_dynamic_page(url, wait_for_selector, max_content_length)
-        )
-
-    async def _ascrape_dynamic_page(
-        self,
-        url: str,
-        wait_for_selector: Optional[str] = None,
-        max_content_length: Optional[int] = None,
-    ) -> str:
-        """Async implementation of scrape_dynamic_page."""
         if not _CRAWLEE_PW_AVAILABLE:
             return json.dumps(
                 {
@@ -866,40 +610,13 @@ class CrawleeTools:
             error_log(f"Crawlee scrape_dynamic_page error: {e}")
             return json.dumps({"error": str(e), "url": url})
 
-
-    def take_screenshot(
+    async def atake_screenshot(
         self,
         url: str,
         full_page: bool = True,
         output_path: Optional[str] = None,
         wait_for_selector: Optional[str] = None,
     ) -> str:
-        """
-        Take a screenshot of a web page using a real browser (Playwright).
-
-        The screenshot is saved to disk and the file path is returned.
-
-        Args:
-            url: The URL to screenshot.
-            full_page: Capture the entire scrollable page, not just the viewport.
-            output_path: File path to save the screenshot. Auto-generated if not provided.
-            wait_for_selector: CSS selector to wait for before taking the screenshot.
-
-        Returns:
-            JSON string with the file path, page title, and screenshot size in bytes.
-        """
-        return _run_async(
-            self._atake_screenshot(url, full_page, output_path, wait_for_selector)
-        )
-
-    async def _atake_screenshot(
-        self,
-        url: str,
-        full_page: bool = True,
-        output_path: Optional[str] = None,
-        wait_for_selector: Optional[str] = None,
-    ) -> str:
-        """Async implementation of take_screenshot."""
         if not _CRAWLEE_PW_AVAILABLE:
             return json.dumps(
                 {
@@ -958,3 +675,172 @@ class CrawleeTools:
         except Exception as e:
             error_log(f"Crawlee take_screenshot error: {e}")
             return json.dumps({"error": str(e), "url": url})
+
+    # ------------------------------------------------------------------
+    # Tool methods (sync wrappers exposed to LLM)
+    # ------------------------------------------------------------------
+
+    @tool
+    def scrape_url(
+        self,
+        url: str,
+        only_main_content: bool = True,
+        max_content_length: Optional[int] = None,
+    ) -> str:
+        """Scrape a single URL and extract its text content using HTTP (no browser needed).
+
+        Args:
+            url: The URL to scrape.
+            only_main_content: If True, strips nav/header/footer/script/style elements.
+            max_content_length: Max characters to return. Defaults to instance setting.
+
+        Returns:
+            JSON string with url, title, text content, and status_code.
+        """
+        return run_async(
+            self.ascrape_url(url, only_main_content, max_content_length)
+        )
+
+    @tool
+    def extract_links(
+        self,
+        url: str,
+        css_filter: Optional[str] = None,
+    ) -> str:
+        """Extract all links from a web page.
+
+        Args:
+            url: The URL to extract links from.
+            css_filter: Optional CSS selector to limit which <a> tags are included.
+
+        Returns:
+            JSON string with the list of links (href, text) and total count.
+        """
+        return run_async(self.aextract_links(url, css_filter))
+
+    @tool
+    def extract_with_selector(
+        self,
+        url: str,
+        selector: str,
+        max_content_length: Optional[int] = None,
+    ) -> str:
+        """Extract specific elements from a web page using a CSS selector.
+
+        Args:
+            url: The URL to scrape.
+            selector: CSS selector to match elements (e.g. 'h2.title', 'div.product-card').
+            max_content_length: Max characters per element's text. Defaults to instance setting.
+
+        Returns:
+            JSON string with matched elements (text, html, tag name, attributes) and count.
+        """
+        return run_async(
+            self.aextract_with_selector(url, selector, max_content_length)
+        )
+
+    @tool
+    def extract_tables(
+        self,
+        url: str,
+        table_index: Optional[int] = None,
+    ) -> str:
+        """Extract HTML tables from a web page as structured JSON.
+
+        Args:
+            url: The URL containing tables to extract.
+            table_index: If specified, only extract the table at this zero-based index.
+
+        Returns:
+            JSON string with table data (headers, rows) for each table found.
+        """
+        return run_async(self.aextract_tables(url, table_index))
+
+    @tool
+    def get_page_metadata(self, url: str) -> str:
+        """Extract metadata from a web page including title, meta tags, and Open Graph data.
+
+        Args:
+            url: The URL to extract metadata from.
+
+        Returns:
+            JSON string with title, description, canonical URL, Open Graph tags,
+            and all meta tags found on the page.
+        """
+        return run_async(self.aget_page_metadata(url))
+
+    @tool
+    def crawl_website(
+        self,
+        url: str,
+        max_pages: int = 10,
+        max_depth: Optional[int] = None,
+        include_patterns: Optional[List[str]] = None,
+        exclude_patterns: Optional[List[str]] = None,
+        only_main_content: bool = True,
+        max_content_length: Optional[int] = None,
+    ) -> str:
+        """Crawl a website starting from a seed URL, following links across pages.
+
+        Args:
+            url: The starting URL to crawl from.
+            max_pages: Maximum number of pages to visit.
+            max_depth: Maximum link depth from the starting URL (None = unlimited).
+            include_patterns: Glob patterns for URLs to include (e.g. ['/blog/**']).
+            exclude_patterns: Glob patterns for URLs to exclude (e.g. ['/admin/**']).
+            only_main_content: Strip nav/header/footer/script/style elements.
+            max_content_length: Max characters of text per page. Defaults to instance setting.
+
+        Returns:
+            JSON string with a list of crawled pages (url, title, text) and total count.
+        """
+        return run_async(
+            self.acrawl_website(
+                url, max_pages, max_depth, include_patterns,
+                exclude_patterns, only_main_content, max_content_length,
+            )
+        )
+
+    @tool
+    def scrape_dynamic_page(
+        self,
+        url: str,
+        wait_for_selector: Optional[str] = None,
+        max_content_length: Optional[int] = None,
+    ) -> str:
+        """Scrape a JavaScript-rendered page using a real browser (Playwright).
+
+        Args:
+            url: The URL to scrape.
+            wait_for_selector: CSS selector to wait for before extracting content.
+            max_content_length: Max characters to return. Defaults to instance setting.
+
+        Returns:
+            JSON string with url, title, extracted text, and html_length.
+        """
+        return run_async(
+            self.ascrape_dynamic_page(url, wait_for_selector, max_content_length)
+        )
+
+    @tool
+    def take_screenshot(
+        self,
+        url: str,
+        full_page: bool = True,
+        output_path: Optional[str] = None,
+        wait_for_selector: Optional[str] = None,
+    ) -> str:
+        """Take a screenshot of a web page using a real browser (Playwright).
+
+        Args:
+            url: The URL to screenshot.
+            full_page: Capture the entire scrollable page, not just the viewport.
+            output_path: File path to save the screenshot. Auto-generated if not provided.
+            wait_for_selector: CSS selector to wait for before taking the screenshot.
+
+        Returns:
+            JSON string with the file path, page title, and screenshot size in bytes.
+        """
+        return run_async(
+            self.atake_screenshot(url, full_page, output_path, wait_for_selector)
+        )

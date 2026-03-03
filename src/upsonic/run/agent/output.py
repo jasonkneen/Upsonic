@@ -575,6 +575,15 @@ class AgentRunOutput:
         usage = self._ensure_usage()
         usage.tool_calls += count
     
+    def add_model_execution_time(self, elapsed: float) -> None:
+        """Accumulate model (LLM API) execution time into usage.
+        
+        Args:
+            elapsed: Time in seconds spent in a single model.request() call.
+        """
+        usage = self._ensure_usage()
+        usage.add_model_execution_time(elapsed)
+
     def set_usage_cost(self, cost: float) -> None:
         """Set the cost in usage.
         

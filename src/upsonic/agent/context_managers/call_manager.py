@@ -61,17 +61,21 @@ class CallManager:
         Args:
             context: AgentRunOutput object containing messages and output.
         """
-        # Only call call_end if we have a context
         if context is not None:
-            # Lazy import for heavy modules
-            from upsonic.utils.llm_usage import llm_usage
             from upsonic.utils.tool_usage import tool_usage
             from upsonic.utils.printing import call_end
-            
-            # Calculate usage and tool usage from context (AgentRunOutput)
-            usage = llm_usage(context)
+
+            task_usage = getattr(self.task, '_usage', None)
+            if task_usage is not None:
+                usage: dict[str, int] = {
+                    "input_tokens": task_usage.input_tokens,
+                    "output_tokens": task_usage.output_tokens,
+                }
+            else:
+                from upsonic.utils.llm_usage import llm_usage
+                usage = llm_usage(context)
+
             tool_usage_result = tool_usage(context, self.task)
-            # Call the end logging
             call_end(
                 context.output,
                 self.model,

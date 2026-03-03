@@ -24,7 +24,7 @@ class SubagentToolKit(ToolKit):
     - Tools already registered in each subagent's __init__
     """
     
-    def __init__(self, parent_agent: Any):
+    def __init__(self, parent_agent: Any, **kwargs: Any):
         """
         Initialize the subagent toolkit.
         
@@ -33,7 +33,9 @@ class SubagentToolKit(ToolKit):
         Args:
             parent_agent: Reference to the parent DeepAgent instance
                          Must have .subagents attribute (List[Agent])
+            **kwargs: ToolKit params (include_tools, exclude_tools, timeout, etc.).
         """
+        super().__init__(**kwargs)
         self.agent = parent_agent
         
         # Update task tool docstring with available subagents

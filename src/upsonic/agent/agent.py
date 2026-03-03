@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import threading
+import time
 import uuid
 from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Literal, Optional, Union, TYPE_CHECKING
 
@@ -95,6 +96,7 @@ if TYPE_CHECKING:
     from upsonic.session.agent import RunData
     from upsonic.models.instrumented import InstrumentationSettings
     from upsonic.integrations.tracing import TracingProvider
+    from upsonic.integrations.promptlayer import PromptLayer
     from upsonic.agent.otel_manager import AgentOTelManager
     from fastmcp import FastMCP
 else:
@@ -270,6 +272,8 @@ class Agent(BaseAgent):
         workspace: Optional[str] = None,
         # OpenTelemetry instrumentation
         instrument: Union[bool, "TracingProvider", "InstrumentationSettings", None] = None,
+        # PromptLayer integration
+        promptlayer: Optional["PromptLayer"] = None,
     ):
         """
         Initialize the Agent with comprehensive configuration options.
@@ -347,12 +351,18 @@ class Agent(BaseAgent):
                 If None/False, no instrumentation (default).
                 When enabled, all LLM calls, pipeline steps, and tool executions
                 are traced with OpenTelemetry spans following GenAI semantic conventions.
+            promptlayer: PromptLayer integration instance.
+                When set, every agent execution automatically logs the request
+                (task description, output, model, cost) to PromptLayer for
+                tracking, scoring, and prompt version correlation.
         """
         from upsonic.models import infer_model
         self.model = infer_model(model)
         self.model_name=model
 
         self._tracing_provider, self._instrument_settings, self._otel = self._resolve_instrumentation(instrument)
+        self.promptlayer: Optional["PromptLayer"] = promptlayer
+        self._suppress_promptlayer_logging: bool = False
 
         self.name = name
         self.agent_id_ = agent_id_
@@ -374,7 +384,8 @@ class Agent(BaseAgent):
         self.instructions = instructions
         self.education = education
         self.work_experience = work_experience
-        self.system_prompt = system_prompt
+        self._user_system_prompt: Optional[str] = system_prompt
+        self._last_built_system_prompt: Optional[str] = None
         
         self.company_url = company_url
         self.company_objective = company_objective
@@ -725,6 +736,19 @@ class Agent(BaseAgent):
         
         return settings
     
+    @property
+    def system_prompt(self) -> Optional[str]:
+        """Return the latest fully-built system prompt, falling back to the
+        user-provided value when no build has occurred yet."""
+        if self._last_built_system_prompt is not None:
+            return self._last_built_system_prompt
+        return self._user_system_prompt
+
+    @system_prompt.setter
+    def system_prompt(self, value: Optional[str]) -> None:
+        self._user_system_prompt = value
+        self._last_built_system_prompt = None
+
     @property
     def agent_id(self) -> str:
         """Get or generate agent ID."""
@@ -1135,6 +1159,107 @@ class Agent(BaseAgent):
             self.model = instrument_model(self.model, settings)
 
         return tracing_provider, settings, AgentOTelManager(settings, tracing_provider)
+
+    async def _log_to_promptlayer_unified(
+        self,
+        task: "Task",
+        output: Any,
+        start_time: float,
+        end_time: float,
+    ) -> None:
+        if self.promptlayer is None or self._suppress_promptlayer_logging:
+            return
+        try:
+            from upsonic.eval._pl_helpers import extract_model_parameters, accumulate_agent_usage
+
+            task_description: str = str(task.description) if task is not None else ""
+            output_text: str = str(output) if output is not None else ""
+            model_name: str = str(self.model_name) if self.model_name else "unknown"
+
+            provider: str
+            model_short: str
+            provider, model_short = self.promptlayer._parse_provider_model(model_name)
+
+            tags: List[str] = ["upsonic-agent"]
+            if self.name:
+                tags.append(f"agent:{self.name}")
+
+            metadata_dict: Dict[str, Any] = {
+                "agent_name": self.name or "",
+                "model": model_name,
+            }
+
+            total_cost: Optional[float] = self._calculate_aggregated_cost()
+            if total_cost is not None:
+                metadata_dict["total_cost"] = total_cost
+
+            input_tokens: int
+            output_tokens: int
+            price: float
+            input_tokens, output_tokens, price = accumulate_agent_usage(self)
+
+            model_parameters: Optional[Dict[str, Any]] = extract_model_parameters(self)
+
+            pl_tools: Optional[List[Dict[str, Any]]] = self._build_pl_tools()
+
+            pl_tool_calls: Optional[List[Dict[str, Any]]] = None
+            if task is not None and task.tool_calls:
+                import json as _json
+                pl_tool_calls = [
+                    {
+                        "type": "function",
+                        "id": tc.get("tool_call_id", f"call_{idx}"),
+                        "function": {
+                            "name": tc.get("tool_name", ""),
+                            "arguments": _json.dumps(tc.get("params", {}), default=str),
+                        },
+                    }
+                    for idx, tc in enumerate(task.tool_calls)
+                ]
+
+            request_id: int = await self.promptlayer.alog(
+                provider=provider,
+                model=model_short,
+                input_text=task_description,
+                output_text=output_text,
+                start_time=start_time,
+                end_time=end_time,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                price=price,
+                parameters=model_parameters,
+                tags=tags,
+                metadata=metadata_dict,
+                function_name=model_name,
+                system_prompt=self.system_prompt,
+                tools=pl_tools,
+                tool_calls=pl_tool_calls,
+            )
+
+            if task is not None:
+                task._promptlayer_request_id = request_id
+        except Exception:
+            pass
+
+    def _build_pl_tools(self) -> Optional[List[Dict[str, Any]]]:
+        """Build PromptLayer-compatible tool definitions from the agent's registered tools."""
+        try:
+            tool_defs = list(self.tool_manager.get_tool_definitions())
+        except Exception:
+            return None
+        if not tool_defs:
+            return None
+        result: List[Dict[str, Any]] = []
+        for td in tool_defs:
+            result.append({
+                "type": "function",
+                "function": {
+                    "name": td.name,
+                    "description": td.description or "",
+                    "parameters": td.parameters_json_schema,
+                },
+            })
+        return result
 
     def _apply_model_override(self, model: Optional[Union[str, "Model"]]) -> Optional["Model"]:
         """Apply a per-call model override and return the original model for restoration.
@@ -1605,6 +1730,7 @@ class Agent(BaseAgent):
             if sp_handler.should_include_system_prompt(messages):
                 system_prompt = sp_handler.get_system_prompt()
                 if system_prompt:
+                    self._last_built_system_prompt = system_prompt
                     system_part = SystemPromptPart(content=system_prompt)
                     parts.append(system_part)
             
@@ -1661,6 +1787,7 @@ class Agent(BaseAgent):
             if not messages:
                 system_prompt = sp_handler.get_system_prompt()
                 if system_prompt:
+                    self._last_built_system_prompt = system_prompt
                     system_part = SystemPromptPart(content=system_prompt)
                     parts.append(system_part)
             
@@ -2218,13 +2345,23 @@ class Agent(BaseAgent):
             model_params = self._build_model_request_parameters(getattr(self, 'current_task', None))
             model_params = self.model.customize_request_parameters(model_params)
             
+            _retry_model_start: float = time.time()
             retry_response: "ModelResponse" = await self.model.request(
                 messages=messages,
                 model_settings=self.model.settings,
                 model_request_parameters=model_params
             )
+            _retry_model_elapsed: float = time.time() - _retry_model_start
+            
+            _current_task = getattr(self, 'current_task', None)
+            if _current_task is not None and _current_task._usage is not None:
+                _current_task._usage.add_model_execution_time(_retry_model_elapsed)
+            
+            if _current_task is not None and _current_task._usage is not None and hasattr(retry_response, 'usage') and retry_response.usage:
+                _current_task._usage.incr(retry_response.usage)
             
             if hasattr(self, '_agent_run_output') and self._agent_run_output:
+                self._agent_run_output.add_model_execution_time(_retry_model_elapsed)
                 if hasattr(retry_response, 'usage') and retry_response.usage:
                     self._agent_run_output.update_usage_from_response(retry_response.usage)
                     try:
@@ -2265,14 +2402,22 @@ class Agent(BaseAgent):
                 model_params = self._build_model_request_parameters(getattr(self, 'current_task', None))
                 model_params = self.model.customize_request_parameters(model_params)
                 
+                _limit_model_start: float = time.time()
                 final_response = await self.model.request(
                     messages=messages,
                     model_settings=self.model.settings,
                     model_request_parameters=model_params
                 )
+                _limit_model_elapsed: float = time.time() - _limit_model_start
                 
-                # Track usage from tool-limit follow-up LLM call
+                _current_task = getattr(self, 'current_task', None)
+                if _current_task is not None and _current_task._usage is not None:
+                    _current_task._usage.add_model_execution_time(_limit_model_elapsed)
+                    if hasattr(final_response, 'usage') and final_response.usage:
+                        _current_task._usage.incr(final_response.usage)
+                
                 if hasattr(self, '_agent_run_output') and self._agent_run_output:
+                    self._agent_run_output.add_model_execution_time(_limit_model_elapsed)
                     if hasattr(final_response, 'usage') and final_response.usage:
                         self._agent_run_output.update_usage_from_response(final_response.usage)
                         try:
@@ -2336,14 +2481,22 @@ class Agent(BaseAgent):
             model_params = self._build_model_request_parameters(getattr(self, 'current_task', None))
             model_params = self.model.customize_request_parameters(model_params)
             
+            _followup_model_start: float = time.time()
             follow_up_response = await self.model.request(
                 messages=messages,
                 model_settings=self.model.settings,
                 model_request_parameters=model_params
             )
+            _followup_model_elapsed: float = time.time() - _followup_model_start
             
-            # Track usage from follow-up LLM call after tool execution
+            _current_task = getattr(self, 'current_task', None)
+            if _current_task is not None and _current_task._usage is not None:
+                _current_task._usage.add_model_execution_time(_followup_model_elapsed)
+                if hasattr(follow_up_response, 'usage') and follow_up_response.usage:
+                    _current_task._usage.incr(follow_up_response.usage)
+            
             if hasattr(self, '_agent_run_output') and self._agent_run_output:
+                self._agent_run_output.add_model_execution_time(_followup_model_elapsed)
                 if hasattr(follow_up_response, 'usage') and follow_up_response.usage:
                     self._agent_run_output.update_usage_from_response(follow_up_response.usage)
                     try:
@@ -2636,14 +2789,21 @@ class Agent(BaseAgent):
             model_params = self._build_model_request_parameters(task)
             model_params = self.model.customize_request_parameters(model_params)
             
+            _guardrail_model_start: float = time.time()
             response = await self.model.request(
                 messages=messages,
                 model_settings=self.model.settings,
                 model_request_parameters=model_params
             )
+            _guardrail_model_elapsed: float = time.time() - _guardrail_model_start
             
-            # Track usage from each guardrail retry iteration
+            if task._usage is not None:
+                task._usage.add_model_execution_time(_guardrail_model_elapsed)
+                if hasattr(response, 'usage') and response.usage:
+                    task._usage.incr(response.usage)
+            
             if hasattr(self, '_agent_run_output') and self._agent_run_output:
+                self._agent_run_output.add_model_execution_time(_guardrail_model_elapsed)
                 if hasattr(response, 'usage') and response.usage:
                     self._agent_run_output.update_usage_from_response(response.usage)
                     try:
@@ -3088,6 +3248,7 @@ class Agent(BaseAgent):
         task.price_id_ = None
         _ = task.price_id
         task._tool_calls = []
+        self._last_built_system_prompt = None
 
         if debug or self.debug:
             self.user_policy_manager.debug = True
@@ -3120,6 +3281,7 @@ class Agent(BaseAgent):
 
             original_model = self._apply_model_override(model)
 
+            _pl_start_time: float = time.time()
             task_desc: str = str(task.description) if task is not None and hasattr(task, "description") else ""
             with self._otel.agent_run_span(
                 run_id,
@@ -3145,6 +3307,12 @@ class Agent(BaseAgent):
                         agent_user_id=self.user_id,
                         agent_session_id=self.session_id,
                         total_cost=self._calculate_aggregated_cost(),
+                    )
+                    await self._log_to_promptlayer_unified(
+                        task=task,
+                        output=self._agent_run_output.output if self._agent_run_output else result,
+                        start_time=_pl_start_time,
+                        end_time=time.time(),
                     )
                     return result
                 except Exception as exc:
@@ -3747,6 +3915,8 @@ class Agent(BaseAgent):
                 debug=debug or self.debug
             )
             
+            _pl_start_time: float = time.time()
+            _stream_succeeded: bool = False
             stream_task_desc: str = str(task.description) if task is not None and hasattr(task, "description") else ""
             with self._otel.agent_run_span(
                 run_id,
@@ -3765,6 +3935,7 @@ class Agent(BaseAgent):
                             if text_content:
                                 self._agent_run_output.accumulated_text += text_content
                                 yield text_content
+                    _stream_succeeded = True
                 except Exception as stream_error:
                     self._otel.record_error(otel_span, stream_error)
                     raise stream_error
@@ -3776,6 +3947,16 @@ class Agent(BaseAgent):
                         agent_session_id=self.session_id,
                         total_cost=self._calculate_aggregated_cost(),
                     )
+                    if _stream_succeeded:
+                        _stream_output: str = ""
+                        if self._agent_run_output:
+                            _stream_output = self._agent_run_output.accumulated_text or str(self._agent_run_output.output or "")
+                        await self._log_to_promptlayer_unified(
+                            task=task,
+                            output=_stream_output,
+                            start_time=_pl_start_time,
+                            end_time=time.time(),
+                        )
             
         finally:
             if original_model is not None:

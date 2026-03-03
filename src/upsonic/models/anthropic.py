@@ -289,6 +289,10 @@ class AnthropicModel(Model):
         return str(self.client.base_url)
 
     @property
+    def provider(self) -> Provider[AsyncAnthropicClient]:
+        return self._provider
+
+    @property
     def model_name(self) -> AnthropicModelName:
         """The model name."""
         return self._model_name

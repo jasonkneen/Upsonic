@@ -382,7 +382,10 @@ def calculate_cost(
     )
 
     model_name = get_model_name(model)
-    price_calc = calc_price(usage, model_name)
+    provider_id: Optional[str] = None
+    if not isinstance(model, str):
+        provider_id = getattr(model, "provider_name", None)
+    price_calc = calc_price(usage, model_name, provider_id=provider_id)
     cost = float(price_calc.total_price)
 
     if reasoning_tokens > 0:
@@ -392,7 +395,9 @@ def calculate_cost(
             cache_write_tokens=0,
             cache_read_tokens=0,
         )
-        reasoning_price = calc_price(reasoning_usage, model_name)
+        reasoning_price = calc_price(
+            reasoning_usage, model_name, provider_id=provider_id
+        )
         cost += float(reasoning_price.total_price)
 
     return cost

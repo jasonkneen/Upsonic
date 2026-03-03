@@ -11,7 +11,7 @@ import fnmatch
 import re
 import shutil
 from pathlib import Path
-from typing import List, Optional, Set
+from typing import Any, List, Optional, Set
 
 from upsonic.tools import ToolKit, tool
 
@@ -49,14 +49,15 @@ class AutonomousFilesystemToolKit(ToolKit):
         ```
     """
     
-    def __init__(self, workspace: Path) -> None:
+    def __init__(self, workspace: Path, **kwargs: Any) -> None:
         """
         Initialize filesystem toolkit with workspace sandboxing.
         
         Args:
             workspace: Workspace directory path. All operations are restricted to this directory.
+            **kwargs: ToolKit params (include_tools, exclude_tools, timeout, etc.).
         """
-        super().__init__()
+        super().__init__(**kwargs)
         self.workspace: Path = Path(workspace).resolve()
         self._read_files: Set[str] = set()
     
@@ -165,7 +166,6 @@ class AutonomousFilesystemToolKit(ToolKit):
         except Exception as e:
             return f"Error reading file: {str(e)}"
     
-    @tool
     async def aread_file(
         self,
         file_path: str,
@@ -246,7 +246,6 @@ class AutonomousFilesystemToolKit(ToolKit):
         except Exception as e:
             return f"Error writing file: {str(e)}"
     
-    @tool
     async def awrite_file(
         self,
         file_path: str,
@@ -367,7 +366,6 @@ class AutonomousFilesystemToolKit(ToolKit):
         except Exception as e:
             return f"Error editing file: {str(e)}"
     
-    @tool
     async def aedit_file(
         self,
         file_path: str,
@@ -492,7 +490,6 @@ class AutonomousFilesystemToolKit(ToolKit):
         except Exception as e:
             return f"Error listing directory: {str(e)}"
     
-    @tool
     async def alist_files(
         self,
         directory: str = ".",
@@ -567,7 +564,6 @@ class AutonomousFilesystemToolKit(ToolKit):
         except Exception as e:
             return f"Error searching files: {str(e)}"
     
-    @tool
     async def asearch_files(
         self,
         pattern: str,
@@ -684,7 +680,6 @@ class AutonomousFilesystemToolKit(ToolKit):
         except Exception as e:
             return f"Error searching files: {str(e)}"
     
-    @tool
     async def agrep_files(
         self,
         text: str,
@@ -744,7 +739,6 @@ class AutonomousFilesystemToolKit(ToolKit):
         except Exception as e:
             return f"Error moving: {str(e)}"
     
-    @tool
     async def amove_file(self, source: str, destination: str) -> str:
         """Async version of move_file."""
         return await asyncio.get_event_loop().run_in_executor(
@@ -788,7 +782,6 @@ class AutonomousFilesystemToolKit(ToolKit):
         except Exception as e:
             return f"Error copying: {str(e)}"
     
-    @tool
     async def acopy_file(self, source: str, destination: str) -> str:
         """Async version of copy_file."""
         return await asyncio.get_event_loop().run_in_executor(
@@ -839,7 +832,6 @@ class AutonomousFilesystemToolKit(ToolKit):
         except Exception as e:
             return f"Error deleting: {str(e)}"
     
-    @tool
     async def adelete_file(self, path: str, recursive: bool = False) -> str:
         """Async version of delete_file."""
         return await asyncio.get_event_loop().run_in_executor(
@@ -901,7 +893,6 @@ class AutonomousFilesystemToolKit(ToolKit):
         except Exception as e:
             return f"Error getting file info: {str(e)}"
     
-    @tool
     async def afile_info(self, path: str) -> str:
         """Async version of file_info."""
         return await asyncio.get_event_loop().run_in_executor(
@@ -936,7 +927,6 @@ class AutonomousFilesystemToolKit(ToolKit):
         except Exception as e:
             return f"Error creating directory: {str(e)}"
     
-    @tool
     async def acreate_directory(self, path: str) -> str:
         """Async version of create_directory."""
         return await asyncio.get_event_loop().run_in_executor(

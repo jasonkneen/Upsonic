@@ -399,38 +399,41 @@ class Direct:
         
         start_time = time.time()
         task.start_time = int(start_time)
+
+        from upsonic.usage import RequestUsage
+        task._usage = RequestUsage()
+        task._usage.start_timer()
         
         try:
-            # Build messages from task (pass state for Graph context support)
             messages = await self._build_messages_from_task(task, state=state)
             
-            # Build request parameters
             model_params = self._build_request_parameters(task)
             model_params = model.customize_request_parameters(model_params)
             
-            # Make the request
+            _model_start: float = time.time()
             response = await model.request(
                 messages=messages,
                 model_settings=model.settings,
                 model_request_parameters=model_params
             )
+            _model_elapsed: float = time.time() - _model_start
+            task._usage.add_model_execution_time(_model_elapsed)
             
             end_time = time.time()
             task.end_time = int(end_time)
+            task._usage.stop_timer()
             
-            # Extract output
             result = self._extract_output(response, task)
-            
-            # Set task response
             task._response = result
             
-            # Get usage information
-            usage = {
-                'input_tokens': response.usage.input_tokens if hasattr(response, 'usage') and response.usage else 0,
-                'output_tokens': response.usage.output_tokens if hasattr(response, 'usage') and response.usage else 0
+            if hasattr(response, 'usage') and response.usage:
+                task._usage.incr(response.usage)
+            
+            usage: dict[str, int] = {
+                'input_tokens': task._usage.input_tokens,
+                'output_tokens': task._usage.output_tokens,
             }
             
-            # Track usage in price_id_summary via call_end
             from upsonic.utils.printing import call_end
             call_end(
                 result=result,

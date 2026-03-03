@@ -5,7 +5,7 @@ Requires a valid FIRECRAWL_API_KEY environment variable.
 Automatically skipped when the key is not set.
 
 Coverage:
-- Constructor and functions() enablement flags
+- Constructor and exclude_tools filtering (include_tools is additive)
 - Every sync and async method with ALL parameters
 - Every scrape format mode: markdown, links, html, rawHtml, summary, images
 - Crawling with all options (blocking + non-blocking + management)
@@ -14,6 +14,11 @@ Coverage:
 - Batch scraping with all formats (blocking + non-blocking + management)
 - Extraction with all options (blocking + non-blocking + management)
 - Proper output structure assertions for every method
+
+Uses www.nike.com.tr as the test target.
+
+Run:
+    uv run pytest tests/smoke_tests/tools/test_firecrawl_tool.py -v --tb=short
 """
 
 import json
@@ -32,9 +37,9 @@ pytestmark = [
     ),
 ]
 
-TEST_URL: str = "https://www.nike.com/tr/"
+TEST_URL: str = "https://www.nike.com.tr"
 TEST_SEARCH_QUERY: str = "Python programming language"
-BATCH_URLS: List[str] = ["https://www.nike.com/tr/", "https://www.nike.com/"]
+BATCH_URLS: List[str] = ["https://www.nike.com.tr", "https://www.nike.com.tr/w/erkek-6yleepznik1"]
 ALL_FORMATS: List[str] = ["markdown", "links", "html", "rawHtml", "summary", "images"]
 
 CRAWL_RATE_LIMIT_SLEEP: int = 25
@@ -43,7 +48,7 @@ CRAWL_RATE_LIMIT_SLEEP: int = 25
 @pytest.fixture(scope="module")
 def tools() -> Any:
     from upsonic.tools.custom_tools.firecrawl import FirecrawlTools
-    return FirecrawlTools(api_key=FIRECRAWL_API_KEY, all=True)
+    return FirecrawlTools(api_key=FIRECRAWL_API_KEY)
 
 
 _SKIP_ERROR_PATTERNS: List[str] = [
@@ -69,7 +74,6 @@ def _parse(raw: str) -> Dict[str, Any]:
 
 
 def _assert_document(parsed: Dict[str, Any]) -> None:
-    """Assert the output is a valid Document (scrape result)."""
     assert "metadata" in parsed
     metadata: Any = parsed["metadata"]
     assert isinstance(metadata, dict)
@@ -77,7 +81,6 @@ def _assert_document(parsed: Dict[str, Any]) -> None:
 
 
 def _assert_crawl_job(parsed: Dict[str, Any]) -> None:
-    """Assert the output is a valid CrawlJob."""
     assert "status" in parsed
     assert parsed["status"] in ("scraping", "completed", "failed", "cancelled")
     assert "total" in parsed
@@ -89,7 +92,6 @@ def _assert_crawl_job(parsed: Dict[str, Any]) -> None:
 
 
 def _assert_crawl_response(parsed: Dict[str, Any]) -> None:
-    """Assert the output is a valid CrawlResponse (start_crawl)."""
     assert "id" in parsed
     assert isinstance(parsed["id"], str)
     assert len(parsed["id"]) > 0
@@ -98,13 +100,11 @@ def _assert_crawl_response(parsed: Dict[str, Any]) -> None:
 
 
 def _assert_map_data(parsed: Dict[str, Any]) -> None:
-    """Assert the output is a valid MapData."""
     assert "links" in parsed
     assert isinstance(parsed["links"], list)
 
 
 def _assert_search_data(parsed: Dict[str, Any]) -> None:
-    """Assert the output is a valid SearchData."""
     has_results: bool = (
         parsed.get("web") is not None
         or parsed.get("news") is not None
@@ -114,7 +114,6 @@ def _assert_search_data(parsed: Dict[str, Any]) -> None:
 
 
 def _assert_batch_scrape_job(parsed: Dict[str, Any]) -> None:
-    """Assert the output is a valid BatchScrapeJob."""
     assert "status" in parsed
     assert parsed["status"] in ("scraping", "completed", "failed", "cancelled")
     assert "total" in parsed
@@ -126,7 +125,6 @@ def _assert_batch_scrape_job(parsed: Dict[str, Any]) -> None:
 
 
 def _assert_batch_scrape_response(parsed: Dict[str, Any]) -> None:
-    """Assert the output is a valid BatchScrapeResponse (start_batch_scrape)."""
     assert "id" in parsed
     assert isinstance(parsed["id"], str)
     assert len(parsed["id"]) > 0
@@ -134,26 +132,39 @@ def _assert_batch_scrape_response(parsed: Dict[str, Any]) -> None:
 
 
 def _assert_extract_response(parsed: Dict[str, Any]) -> None:
-    """Assert the output is a valid ExtractResponse."""
     assert "success" in parsed or "status" in parsed or "data" in parsed
 
 
 def _assert_extract_job_started(parsed: Dict[str, Any]) -> None:
-    """Assert the output is a valid start_extract response with a job id."""
     assert "id" in parsed
     assert isinstance(parsed["id"], str)
     assert len(parsed["id"]) > 0
 
 
 def _assert_extract_status(parsed: Dict[str, Any]) -> None:
-    """Assert the output is a valid get_extract_status response."""
     assert "status" in parsed
     assert parsed["status"] in ("processing", "completed", "failed", "cancelled")
+
+
+def _process_toolkit(toolkit: Any) -> None:
+    from upsonic.tools.processor import ToolProcessor
+    processor: ToolProcessor = ToolProcessor()
+    processor._process_toolkit(toolkit)
 
 
 # ──────────────────────────────────────────────────────────────────────
 #  Initialization
 # ──────────────────────────────────────────────────────────────────────
+
+ALL_TOOL_NAMES: List[str] = [
+    "scrape_url", "crawl_website", "start_crawl",
+    "map_website", "search_web",
+    "batch_scrape", "start_batch_scrape",
+    "extract_data", "start_extract",
+    "get_crawl_status", "cancel_crawl",
+    "get_batch_scrape_status", "get_extract_status",
+]
+
 
 class TestInit:
 
@@ -168,7 +179,7 @@ class TestInit:
         assert t.default_formats == ["markdown"]
         assert t.default_scrape_limit == 100
         assert t.default_search_limit == 5
-        assert t.timeout == 120
+        assert t.fc_timeout == 120
         assert t.poll_interval == 2
         assert t.api_url is None
 
@@ -180,14 +191,14 @@ class TestInit:
             default_formats=["markdown", "html"],
             default_scrape_limit=50,
             default_search_limit=10,
-            timeout=60,
+            fc_timeout=60,
             poll_interval=5,
         )
         assert t.api_url == "https://custom.firecrawl.example.com"
         assert t.default_formats == ["markdown", "html"]
         assert t.default_scrape_limit == 50
         assert t.default_search_limit == 10
-        assert t.timeout == 60
+        assert t.fc_timeout == 60
         assert t.poll_interval == 5
 
     def test_init_missing_key_raises(self) -> None:
@@ -199,7 +210,7 @@ class TestInit:
 
 
 # ──────────────────────────────────────────────────────────────────────
-#  functions() enablement
+#  functions / exclude_tools filtering (include_tools is additive)
 # ──────────────────────────────────────────────────────────────────────
 
 class TestFunctions:
@@ -207,89 +218,110 @@ class TestFunctions:
     def test_default_functions(self) -> None:
         from upsonic.tools.custom_tools.firecrawl import FirecrawlTools
         t: FirecrawlTools = FirecrawlTools(api_key=FIRECRAWL_API_KEY)
-        names: List[str] = [f.__name__ for f in t.functions()]
-        for expected in [
-            "scrape_url", "crawl_website", "start_crawl",
-            "map_website", "search_web",
-            "batch_scrape", "start_batch_scrape",
-            "extract_data", "start_extract",
-            "get_crawl_status", "cancel_crawl",
-            "get_batch_scrape_status", "get_extract_status",
-        ]:
-            assert expected in names, f"{expected} missing from default functions()"
+        _process_toolkit(t)
+        names: List[str] = [f.__name__ for f in t.functions]
+        for expected in ALL_TOOL_NAMES:
+            assert expected in names, f"{expected} missing from default functions"
 
-    def test_all_flag(self) -> None:
+    def test_all_tools_count(self) -> None:
         from upsonic.tools.custom_tools.firecrawl import FirecrawlTools
-        t: FirecrawlTools = FirecrawlTools(api_key=FIRECRAWL_API_KEY, all=True)
-        names: List[str] = [f.__name__ for f in t.functions()]
+        t: FirecrawlTools = FirecrawlTools(api_key=FIRECRAWL_API_KEY)
+        _process_toolkit(t)
+        names: List[str] = [f.__name__ for f in t.functions]
         assert len(names) == 13
 
-    def test_selective_scrape_only(self) -> None:
+    def test_include_tools_is_additive(self) -> None:
         from upsonic.tools.custom_tools.firecrawl import FirecrawlTools
         t: FirecrawlTools = FirecrawlTools(
             api_key=FIRECRAWL_API_KEY,
-            enable_scrape=True,
-            enable_crawl=False,
-            enable_map=False,
-            enable_search=False,
-            enable_batch_scrape=False,
-            enable_extract=False,
-            enable_crawl_management=False,
-            enable_batch_management=False,
-            enable_extract_management=False,
+            include_tools=["scrape_url"],
         )
-        names: List[str] = [f.__name__ for f in t.functions()]
+        _process_toolkit(t)
+        names: List[str] = [f.__name__ for f in t.functions]
+        assert "scrape_url" in names, "included tool should be present"
+        assert len(names) == len(ALL_TOOL_NAMES), (
+            "include_tools is additive -- all @tool methods + included should be registered"
+        )
+
+    def test_exclude_all_except_scrape(self) -> None:
+        from upsonic.tools.custom_tools.firecrawl import FirecrawlTools
+        excluded: List[str] = [n for n in ALL_TOOL_NAMES if n != "scrape_url"]
+        t: FirecrawlTools = FirecrawlTools(
+            api_key=FIRECRAWL_API_KEY,
+            exclude_tools=excluded,
+        )
+        _process_toolkit(t)
+        names: List[str] = [f.__name__ for f in t.functions]
         assert names == ["scrape_url"]
 
-    def test_selective_search_only(self) -> None:
+    def test_exclude_all_except_search(self) -> None:
         from upsonic.tools.custom_tools.firecrawl import FirecrawlTools
+        excluded: List[str] = [n for n in ALL_TOOL_NAMES if n != "search_web"]
         t: FirecrawlTools = FirecrawlTools(
             api_key=FIRECRAWL_API_KEY,
-            enable_scrape=False,
-            enable_crawl=False,
-            enable_map=False,
-            enable_search=True,
-            enable_batch_scrape=False,
-            enable_extract=False,
-            enable_crawl_management=False,
-            enable_batch_management=False,
-            enable_extract_management=False,
+            exclude_tools=excluded,
         )
-        names: List[str] = [f.__name__ for f in t.functions()]
+        _process_toolkit(t)
+        names: List[str] = [f.__name__ for f in t.functions]
         assert names == ["search_web"]
 
-    def test_selective_crawl_with_management(self) -> None:
+    def test_exclude_all_except_crawl_management(self) -> None:
         from upsonic.tools.custom_tools.firecrawl import FirecrawlTools
+        keep: set = {"crawl_website", "start_crawl", "get_crawl_status", "cancel_crawl"}
+        excluded: List[str] = [n for n in ALL_TOOL_NAMES if n not in keep]
         t: FirecrawlTools = FirecrawlTools(
             api_key=FIRECRAWL_API_KEY,
-            enable_scrape=False,
-            enable_crawl=True,
-            enable_map=False,
-            enable_search=False,
-            enable_batch_scrape=False,
-            enable_extract=False,
-            enable_crawl_management=True,
-            enable_batch_management=False,
-            enable_extract_management=False,
+            exclude_tools=excluded,
         )
-        names: List[str] = [f.__name__ for f in t.functions()]
-        assert set(names) == {"crawl_website", "start_crawl", "get_crawl_status", "cancel_crawl"}
+        _process_toolkit(t)
+        names: List[str] = [f.__name__ for f in t.functions]
+        assert set(names) == keep
 
-    def test_selective_none_enabled(self) -> None:
+    def test_exclude_all_tools(self) -> None:
         from upsonic.tools.custom_tools.firecrawl import FirecrawlTools
         t: FirecrawlTools = FirecrawlTools(
             api_key=FIRECRAWL_API_KEY,
-            enable_scrape=False,
-            enable_crawl=False,
-            enable_map=False,
-            enable_search=False,
-            enable_batch_scrape=False,
-            enable_extract=False,
-            enable_crawl_management=False,
-            enable_batch_management=False,
-            enable_extract_management=False,
+            exclude_tools=ALL_TOOL_NAMES,
         )
-        assert t.functions() == []
+        _process_toolkit(t)
+        assert t.functions == []
+
+    def test_exclude_scrape_keeps_rest(self) -> None:
+        from upsonic.tools.custom_tools.firecrawl import FirecrawlTools
+        t: FirecrawlTools = FirecrawlTools(
+            api_key=FIRECRAWL_API_KEY,
+            exclude_tools=["scrape_url"],
+        )
+        _process_toolkit(t)
+        names: List[str] = [f.__name__ for f in t.functions]
+        assert "scrape_url" not in names
+        assert len(names) == 12
+
+    def test_exclude_batch_tools(self) -> None:
+        from upsonic.tools.custom_tools.firecrawl import FirecrawlTools
+        t: FirecrawlTools = FirecrawlTools(
+            api_key=FIRECRAWL_API_KEY,
+            exclude_tools=["batch_scrape", "start_batch_scrape", "get_batch_scrape_status"],
+        )
+        _process_toolkit(t)
+        names: List[str] = [f.__name__ for f in t.functions]
+        assert "batch_scrape" not in names
+        assert "start_batch_scrape" not in names
+        assert "get_batch_scrape_status" not in names
+        assert len(names) == 10
+
+    def test_exclude_extract_tools(self) -> None:
+        from upsonic.tools.custom_tools.firecrawl import FirecrawlTools
+        t: FirecrawlTools = FirecrawlTools(
+            api_key=FIRECRAWL_API_KEY,
+            exclude_tools=["extract_data", "start_extract", "get_extract_status"],
+        )
+        _process_toolkit(t)
+        names: List[str] = [f.__name__ for f in t.functions]
+        assert "extract_data" not in names
+        assert "start_extract" not in names
+        assert "get_extract_status" not in names
+        assert len(names) == 10
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -381,7 +413,7 @@ class TestScrapeUrlAttributes:
         _assert_document(parsed)
 
     def test_location(self, tools: Any) -> None:
-        parsed: Dict[str, Any] = _parse(tools.scrape_url(TEST_URL, location={"country": "US"}))
+        parsed: Dict[str, Any] = _parse(tools.scrape_url(TEST_URL, location={"country": "TR"}))
         _assert_document(parsed)
 
     def test_mobile(self, tools: Any) -> None:
@@ -421,7 +453,7 @@ class TestScrapeUrlAttributes:
             exclude_tags=["nav"],
             wait_for=500,
             timeout=30000,
-            location={"country": "US"},
+            location={"country": "TR"},
             mobile=False,
             skip_tls_verification=False,
             remove_base64_images=True,
@@ -432,13 +464,13 @@ class TestScrapeUrlAttributes:
 
     @pytest.mark.asyncio
     async def test_async_basic(self, tools: Any) -> None:
-        parsed: Dict[str, Any] = _parse(await tools._ascrape_url(TEST_URL))
+        parsed: Dict[str, Any] = _parse(await tools.ascrape_url(TEST_URL))
         _assert_document(parsed)
         assert parsed.get("markdown") is not None
 
     @pytest.mark.asyncio
     async def test_async_all_formats(self, tools: Any) -> None:
-        parsed: Dict[str, Any] = _parse(await tools._ascrape_url(TEST_URL, formats=ALL_FORMATS))
+        parsed: Dict[str, Any] = _parse(await tools.ascrape_url(TEST_URL, formats=ALL_FORMATS))
         _assert_document(parsed)
         assert parsed.get("markdown") is not None
         assert parsed.get("html") is not None
@@ -446,7 +478,7 @@ class TestScrapeUrlAttributes:
 
     @pytest.mark.asyncio
     async def test_async_all_attributes(self, tools: Any) -> None:
-        parsed: Dict[str, Any] = _parse(await tools._ascrape_url(
+        parsed: Dict[str, Any] = _parse(await tools.ascrape_url(
             TEST_URL,
             formats=["markdown"],
             only_main_content=True,
@@ -454,7 +486,7 @@ class TestScrapeUrlAttributes:
             exclude_tags=["footer"],
             wait_for=500,
             timeout=30000,
-            location={"country": "US"},
+            location={"country": "TR"},
             mobile=True,
             skip_tls_verification=False,
             remove_base64_images=True,
@@ -467,7 +499,7 @@ class TestScrapeUrlAttributes:
             "type": "object",
             "properties": {"title": {"type": "string"}},
         }
-        parsed: Dict[str, Any] = _parse(await tools._ascrape_url(
+        parsed: Dict[str, Any] = _parse(await tools.ascrape_url(
             TEST_URL,
             json_schema=schema,
             json_prompt="Extract the page title",
@@ -536,12 +568,12 @@ class TestCrawlWebsite:
 
     @pytest.mark.asyncio
     async def test_async_basic(self, tools: Any) -> None:
-        parsed: Dict[str, Any] = _parse(await tools._acrawl_website(TEST_URL, limit=2, max_discovery_depth=1))
+        parsed: Dict[str, Any] = _parse(await tools.acrawl_website(TEST_URL, limit=2, max_discovery_depth=1))
         _assert_crawl_job(parsed)
 
     @pytest.mark.asyncio
     async def test_async_all_attributes(self, tools: Any) -> None:
-        parsed: Dict[str, Any] = _parse(await tools._acrawl_website(
+        parsed: Dict[str, Any] = _parse(await tools.acrawl_website(
             TEST_URL,
             limit=2,
             scrape_formats=["markdown", "html"],
@@ -594,21 +626,21 @@ class TestCrawlManagement:
 
     @pytest.mark.asyncio
     async def test_async_start_status_cancel(self, tools: Any) -> None:
-        start_parsed: Dict[str, Any] = _parse(await tools._astart_crawl(TEST_URL, limit=2, max_discovery_depth=1))
+        start_parsed: Dict[str, Any] = _parse(await tools.astart_crawl(TEST_URL, limit=2, max_discovery_depth=1))
         _assert_crawl_response(start_parsed)
         job_id: str = start_parsed["id"]
 
         time.sleep(3)
-        status_parsed: Dict[str, Any] = _parse(await tools._aget_crawl_status(job_id))
+        status_parsed: Dict[str, Any] = _parse(await tools.aget_crawl_status(job_id))
         _assert_crawl_job(status_parsed)
 
-        cancel_raw: str = await tools._acancel_crawl(job_id)
+        cancel_raw: str = await tools.acancel_crawl(job_id)
         cancel_parsed: Dict[str, Any] = json.loads(cancel_raw)
         assert "cancelled" in cancel_parsed or "error" in cancel_parsed
 
     @pytest.mark.asyncio
     async def test_async_start_crawl_all_attributes(self, tools: Any) -> None:
-        start_parsed: Dict[str, Any] = _parse(await tools._astart_crawl(
+        start_parsed: Dict[str, Any] = _parse(await tools.astart_crawl(
             TEST_URL,
             limit=2,
             scrape_formats=["html"],
@@ -618,7 +650,7 @@ class TestCrawlManagement:
             sitemap="skip",
         ))
         _assert_crawl_response(start_parsed)
-        await tools._acancel_crawl(start_parsed["id"])
+        await tools.acancel_crawl(start_parsed["id"])
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -638,12 +670,12 @@ class TestMapWebsite:
 
     @pytest.mark.asyncio
     async def test_async_basic(self, tools: Any) -> None:
-        parsed: Dict[str, Any] = _parse(await tools._amap_website(TEST_URL))
+        parsed: Dict[str, Any] = _parse(await tools.amap_website(TEST_URL))
         _assert_map_data(parsed)
 
     @pytest.mark.asyncio
     async def test_async_with_limit(self, tools: Any) -> None:
-        parsed: Dict[str, Any] = _parse(await tools._amap_website(TEST_URL, limit=5))
+        parsed: Dict[str, Any] = _parse(await tools.amap_website(TEST_URL, limit=5))
         _assert_map_data(parsed)
         assert len(parsed["links"]) <= 5
 
@@ -671,7 +703,7 @@ class TestSearchWeb:
         _assert_search_data(parsed)
 
     def test_with_location(self, tools: Any) -> None:
-        parsed: Dict[str, Any] = _parse(tools.search_web(TEST_SEARCH_QUERY, limit=2, location="US"))
+        parsed: Dict[str, Any] = _parse(tools.search_web(TEST_SEARCH_QUERY, limit=2, location="TR"))
         _assert_search_data(parsed)
 
     def test_with_tbs_past_week(self, tools: Any) -> None:
@@ -713,7 +745,7 @@ class TestSearchWeb:
             TEST_SEARCH_QUERY,
             limit=3,
             scrape_options={"formats": ["markdown"]},
-            location="US",
+            location="TR",
             tbs="qdr:m",
             timeout=30000,
             sources=["web"],
@@ -723,16 +755,16 @@ class TestSearchWeb:
 
     @pytest.mark.asyncio
     async def test_async_basic(self, tools: Any) -> None:
-        parsed: Dict[str, Any] = _parse(await tools._asearch_web(TEST_SEARCH_QUERY, limit=2))
+        parsed: Dict[str, Any] = _parse(await tools.asearch_web(TEST_SEARCH_QUERY, limit=2))
         _assert_search_data(parsed)
 
     @pytest.mark.asyncio
     async def test_async_all_attributes(self, tools: Any) -> None:
-        parsed: Dict[str, Any] = _parse(await tools._asearch_web(
+        parsed: Dict[str, Any] = _parse(await tools.asearch_web(
             TEST_SEARCH_QUERY,
             limit=2,
             scrape_options={"formats": ["markdown"]},
-            location="US",
+            location="TR",
             tbs="qdr:w",
             timeout=30000,
             sources=["web", "news"],
@@ -803,17 +835,17 @@ class TestBatchScrape:
 
     @pytest.mark.asyncio
     async def test_async_basic(self, tools: Any) -> None:
-        parsed: Dict[str, Any] = _parse(await tools._abatch_scrape(BATCH_URLS))
+        parsed: Dict[str, Any] = _parse(await tools.abatch_scrape(BATCH_URLS))
         _assert_batch_scrape_job(parsed)
 
     @pytest.mark.asyncio
     async def test_async_all_formats(self, tools: Any) -> None:
-        parsed: Dict[str, Any] = _parse(await tools._abatch_scrape(BATCH_URLS, formats=ALL_FORMATS))
+        parsed: Dict[str, Any] = _parse(await tools.abatch_scrape(BATCH_URLS, formats=ALL_FORMATS))
         _assert_batch_scrape_job(parsed)
 
     @pytest.mark.asyncio
     async def test_async_all_attributes(self, tools: Any) -> None:
-        parsed: Dict[str, Any] = _parse(await tools._abatch_scrape(
+        parsed: Dict[str, Any] = _parse(await tools.abatch_scrape(
             BATCH_URLS, formats=["markdown", "links"], poll_interval=3,
         ))
         _assert_batch_scrape_job(parsed)
@@ -844,17 +876,17 @@ class TestBatchScrapeManagement:
 
     @pytest.mark.asyncio
     async def test_async_start_and_get_status(self, tools: Any) -> None:
-        start_parsed: Dict[str, Any] = _parse(await tools._astart_batch_scrape(BATCH_URLS))
+        start_parsed: Dict[str, Any] = _parse(await tools.astart_batch_scrape(BATCH_URLS))
         _assert_batch_scrape_response(start_parsed)
         job_id: str = start_parsed["id"]
 
         time.sleep(5)
-        status_parsed: Dict[str, Any] = _parse(await tools._aget_batch_scrape_status(job_id))
+        status_parsed: Dict[str, Any] = _parse(await tools.aget_batch_scrape_status(job_id))
         _assert_batch_scrape_job(status_parsed)
 
     @pytest.mark.asyncio
     async def test_async_start_with_formats(self, tools: Any) -> None:
-        start_parsed: Dict[str, Any] = _parse(await tools._astart_batch_scrape(
+        start_parsed: Dict[str, Any] = _parse(await tools.astart_batch_scrape(
             BATCH_URLS, formats=["html", "summary"],
         ))
         _assert_batch_scrape_response(start_parsed)
@@ -868,7 +900,7 @@ class TestExtractData:
 
     def test_with_prompt(self, tools: Any) -> None:
         parsed: Dict[str, Any] = _parse(tools.extract_data(
-            urls=["https://example.com"],
+            urls=["https://www.nike.com.tr"],
             prompt="Extract the page title and description",
         ))
         _assert_extract_response(parsed)
@@ -883,7 +915,7 @@ class TestExtractData:
             },
         }
         parsed: Dict[str, Any] = _parse(tools.extract_data(
-            urls=["https://example.com"],
+            urls=["https://www.nike.com.tr"],
             prompt="Extract the page title and description",
             schema=schema,
         ))
@@ -892,7 +924,7 @@ class TestExtractData:
 
     def test_with_enable_web_search(self, tools: Any) -> None:
         parsed: Dict[str, Any] = _parse(tools.extract_data(
-            urls=["https://example.com"],
+            urls=["https://www.nike.com.tr"],
             prompt="Extract the page title",
             enable_web_search=False,
         ))
@@ -900,7 +932,7 @@ class TestExtractData:
 
     def test_with_scrape_options(self, tools: Any) -> None:
         parsed: Dict[str, Any] = _parse(tools.extract_data(
-            urls=["https://example.com"],
+            urls=["https://www.nike.com.tr"],
             prompt="Extract the page title",
             scrape_options={"formats": ["markdown"]},
         ))
@@ -912,7 +944,7 @@ class TestExtractData:
             "properties": {"title": {"type": "string"}},
         }
         parsed: Dict[str, Any] = _parse(tools.extract_data(
-            urls=["https://example.com"],
+            urls=["https://www.nike.com.tr"],
             prompt="Extract the page title",
             schema=schema,
             enable_web_search=False,
@@ -923,8 +955,8 @@ class TestExtractData:
 
     @pytest.mark.asyncio
     async def test_async_with_prompt(self, tools: Any) -> None:
-        parsed: Dict[str, Any] = _parse(await tools._aextract_data(
-            urls=["https://example.com"],
+        parsed: Dict[str, Any] = _parse(await tools.aextract_data(
+            urls=["https://www.nike.com.tr"],
             prompt="Extract the page title and description",
         ))
         _assert_extract_response(parsed)
@@ -936,8 +968,8 @@ class TestExtractData:
             "type": "object",
             "properties": {"title": {"type": "string"}},
         }
-        parsed: Dict[str, Any] = _parse(await tools._aextract_data(
-            urls=["https://example.com"],
+        parsed: Dict[str, Any] = _parse(await tools.aextract_data(
+            urls=["https://www.nike.com.tr"],
             prompt="Extract the page title",
             schema=schema,
             enable_web_search=False,
@@ -955,7 +987,7 @@ class TestExtractManagement:
 
     def test_start_and_get_status(self, tools: Any) -> None:
         start_parsed: Dict[str, Any] = _parse(tools.start_extract(
-            urls=["https://example.com"],
+            urls=["https://www.nike.com.tr"],
             prompt="Extract the page title",
         ))
         _assert_extract_job_started(start_parsed)
@@ -970,7 +1002,7 @@ class TestExtractManagement:
             "properties": {"title": {"type": "string"}},
         }
         start_parsed: Dict[str, Any] = _parse(tools.start_extract(
-            urls=["https://example.com"],
+            urls=["https://www.nike.com.tr"],
             prompt="Extract the page title",
             schema=schema,
         ))
@@ -978,7 +1010,7 @@ class TestExtractManagement:
 
     def test_start_with_enable_web_search(self, tools: Any) -> None:
         start_parsed: Dict[str, Any] = _parse(tools.start_extract(
-            urls=["https://example.com"],
+            urls=["https://www.nike.com.tr"],
             prompt="Extract the page title",
             enable_web_search=False,
         ))
@@ -990,7 +1022,7 @@ class TestExtractManagement:
             "properties": {"title": {"type": "string"}},
         }
         start_parsed: Dict[str, Any] = _parse(tools.start_extract(
-            urls=["https://example.com"],
+            urls=["https://www.nike.com.tr"],
             prompt="Extract the page title",
             schema=schema,
             enable_web_search=False,
@@ -999,14 +1031,14 @@ class TestExtractManagement:
 
     @pytest.mark.asyncio
     async def test_async_start_and_get_status(self, tools: Any) -> None:
-        start_parsed: Dict[str, Any] = _parse(await tools._astart_extract(
-            urls=["https://example.com"],
+        start_parsed: Dict[str, Any] = _parse(await tools.astart_extract(
+            urls=["https://www.nike.com.tr"],
             prompt="Extract the page title",
         ))
         _assert_extract_job_started(start_parsed)
 
         time.sleep(5)
-        status_parsed: Dict[str, Any] = _parse(await tools._aget_extract_status(start_parsed["id"]))
+        status_parsed: Dict[str, Any] = _parse(await tools.aget_extract_status(start_parsed["id"]))
         _assert_extract_status(status_parsed)
 
     @pytest.mark.asyncio
@@ -1015,8 +1047,8 @@ class TestExtractManagement:
             "type": "object",
             "properties": {"title": {"type": "string"}},
         }
-        start_parsed: Dict[str, Any] = _parse(await tools._astart_extract(
-            urls=["https://example.com"],
+        start_parsed: Dict[str, Any] = _parse(await tools.astart_extract(
+            urls=["https://www.nike.com.tr"],
             prompt="Extract the page title",
             schema=schema,
             enable_web_search=False,

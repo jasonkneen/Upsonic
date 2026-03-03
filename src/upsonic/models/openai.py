@@ -558,6 +558,10 @@ class OpenAIChatModel(Model):
         return str(self.client.base_url)
 
     @property
+    def provider(self) -> Provider[AsyncOpenAI]:
+        return self._provider
+
+    @property
     def model_name(self) -> OpenAIModelName:
         """The model name."""
         return self._model_name
@@ -1368,6 +1372,10 @@ class OpenAIResponsesModel(Model):
     @property
     def base_url(self) -> str:
         return str(self.client.base_url)
+
+    @property
+    def provider(self) -> Provider[AsyncOpenAI]:
+        return self._provider
 
     @property
     def model_name(self) -> OpenAIModelName:

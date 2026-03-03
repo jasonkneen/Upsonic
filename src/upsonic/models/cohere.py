@@ -145,6 +145,10 @@ class CohereModel(Model):
         return str(client_wrapper.get_base_url())
 
     @property
+    def provider(self) -> Provider[AsyncClientV2]:
+        return self._provider
+
+    @property
     def model_name(self) -> CohereModelName:
         """The model name."""
         return self._model_name

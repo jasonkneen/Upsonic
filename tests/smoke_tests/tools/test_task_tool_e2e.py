@@ -19,7 +19,7 @@ from typing import List, Dict, Any
 
 pytestmark = pytest.mark.timeout(180)
 
-MODEL = "anthropic/claude-sonnet-4-5"
+MODEL = "openai/gpt-4o-mini"
 
 
 @tool

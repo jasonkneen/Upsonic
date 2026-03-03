@@ -4,9 +4,11 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from functools import cached_property
+from typing import Any, Optional
 
 from upsonic.messages import ModelMessage, ModelResponse
 from upsonic.profiles import ModelProfile
+from upsonic.providers import Provider
 from upsonic.models.settings import ModelSettings
 from upsonic.usage import RequestUsage
 from upsonic.models import KnownModelName, Model, ModelRequestParameters, StreamedResponse, infer_model
@@ -67,6 +69,10 @@ class WrapperModel(Model):
     @property
     def model_name(self) -> str:
         return self.wrapped.model_name
+
+    @property
+    def provider(self) -> Optional[Provider[Any]]:
+        return getattr(self.wrapped, "provider", None)
 
     @property
     def system(self) -> str:

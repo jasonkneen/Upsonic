@@ -20,8 +20,7 @@ from contextlib import redirect_stdout
 
 pytestmark = pytest.mark.timeout(120)
 
-
-# Custom tools (functions with @tool decorator)
+MODEL = "openai/gpt-4o-mini"
 @tool
 def add_numbers(a: int, b: int) -> int:
     """Add two numbers together."""
@@ -71,10 +70,72 @@ class TextToolKit(ToolKit):
         return text.lower()
 
 
+class AsyncMathToolKit(ToolKit):
+    """ToolKit with both sync @tool methods and async methods for use_async testing."""
+    
+    @tool
+    def add_sync(self, a: int, b: int) -> int:
+        """Sync add two numbers."""
+        return a + b
+    
+    @tool
+    def subtract_sync(self, a: int, b: int) -> int:
+        """Sync subtract b from a."""
+        return a - b
+    
+    async def multiply_async(self, a: int, b: int) -> int:
+        """Async multiply two numbers."""
+        return a * b
+    
+    async def divide_async(self, a: int, b: int) -> float:
+        """Async divide a by b."""
+        if b == 0:
+            raise ValueError("Cannot divide by zero")
+        return a / b
+    
+    def helper_not_decorated(self, x: int) -> int:
+        """Public sync method WITHOUT @tool decorator."""
+        return x * 10
+    
+    def _private_helper(self) -> None:
+        """Private helper, should never be registered."""
+        pass
+
+
+class ConfiguredToolKit(ToolKit):
+    """ToolKit with explicit decorator configs for testing config priority."""
+    
+    @tool(requires_confirmation=True, timeout=999.0)
+    def dangerous_action(self, x: int) -> int:
+        """A dangerous action that needs confirmation."""
+        return x * 2
+    
+    @tool(timeout=60.0)
+    def safe_action(self, y: str) -> str:
+        """A safe action."""
+        return y.upper()
+
+
+class BareToolKit(ToolKit):
+    """ToolKit with public methods but NO @tool decorators (Case 5/6)."""
+    
+    def compute(self, x: int) -> int:
+        """Compute something."""
+        return x * 2
+    
+    def format_text(self, text: str) -> str:
+        """Format text."""
+        return text.strip()
+    
+    async def async_compute(self, x: int) -> int:
+        """Async compute something."""
+        return x * 3
+
+
 @pytest.mark.asyncio
 async def test_agent_add_remove_custom_tools():
     """Test adding and removing custom tools (functions) from Agent."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
     
     # Initially no tools
     assert len(agent.registered_agent_tools) == 0, "Agent should start with no tools"
@@ -108,7 +169,7 @@ async def test_agent_add_remove_custom_tools():
 @pytest.mark.asyncio
 async def test_agent_add_remove_toolkit():
     """Test adding and removing ToolKit instances from Agent."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
     
     # Add ToolKit
     math_kit = MathToolKit()
@@ -141,7 +202,7 @@ async def test_agent_add_remove_toolkit():
 @pytest.mark.asyncio
 async def test_agent_remove_individual_toolkit_methods():
     """Test removing individual methods from a ToolKit by name (keeping the toolkit instance)."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
     
     # Add ToolKit
     math_kit = MathToolKit()
@@ -180,7 +241,7 @@ async def test_agent_remove_individual_class_methods():
     try:
         from upsonic.tools.common_tools.financial_tools import YFinanceTools
         
-        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+        agent = Agent(model=MODEL, name="Test Agent", debug=True)
         
         # Create and add financial tools instance (pure class, not ToolKit)
         financial_tools = YFinanceTools(stock_price=True, enable_all=False)
@@ -217,7 +278,7 @@ async def test_agent_remove_individual_class_methods():
 @pytest.mark.asyncio
 async def test_task_remove_individual_toolkit_methods():
     """Test removing individual methods from a ToolKit in a Task by name."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
     
     # Create task with ToolKit
     math_kit = MathToolKit()
@@ -269,7 +330,7 @@ async def test_task_remove_individual_toolkit_methods():
 @pytest.mark.asyncio
 async def test_agent_add_remove_builtin_tools():
     """Test adding and removing builtin tools from Agent."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
     
     # Initially no tools
     assert len(agent.registered_agent_tools) == 0, "Agent should start with no regular tools"
@@ -320,7 +381,7 @@ async def test_agent_add_remove_builtin_tools():
 @pytest.mark.asyncio
 async def test_task_add_remove_builtin_tools():
     """Test adding and removing builtin tools from Task (without execution)."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
     
     # Create task with builtin tools
     # Note: We're testing tool management, not execution, so we don't actually run the task
@@ -382,7 +443,7 @@ async def test_task_add_remove_builtin_tools():
 @pytest.mark.asyncio
 async def test_runtime_builtin_tool_registration():
     """Test that builtin tools in tasks are properly separated during registration."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
     
     # Create task with builtin tools (not registered yet)
     code_exec = CodeExecutionTool()
@@ -424,7 +485,7 @@ async def test_runtime_builtin_tool_registration():
 @pytest.mark.asyncio
 async def test_task_mixed_builtin_and_regular_tools():
     """Test mixing builtin tools and regular tools in a task."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
     
     # Create task with both builtin and regular tools
     code_exec = CodeExecutionTool()
@@ -490,7 +551,7 @@ async def test_agent_initialization_with_builtin_tools():
     
     # Initialize agent with both builtin and regular tools
     agent = Agent(
-        model="anthropic/claude-sonnet-4-5",
+        model=MODEL,
         name="Test Agent",
         tools=[web_search, code_exec, add_numbers, multiply_numbers],
         debug=True
@@ -518,7 +579,7 @@ async def test_agent_initialization_with_builtin_tools():
 @pytest.mark.asyncio
 async def test_builtin_tools_not_in_tool_processor():
     """Verify that builtin tools are NOT processed by ToolProcessor."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
     
     # Get initial count of registered tools in processor
     initial_processor_count = len(agent.tool_manager.processor.registered_tools)
@@ -555,7 +616,7 @@ async def test_agent_add_remove_financial_tools():
     try:
         from upsonic.tools.common_tools.financial_tools import YFinanceTools
         
-        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+        agent = Agent(model=MODEL, name="Test Agent", debug=True)
         
         # Create financial tools instance (pure class, not ToolKit)
         # YFinanceTools is a regular class instance, processor extracts public methods
@@ -597,7 +658,7 @@ async def test_agent_add_remove_mcp_handler():
     try:
         from upsonic.tools.mcp import MCPHandler
         
-        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+        agent = Agent(model=MODEL, name="Test Agent", debug=True)
         
         # Create MCP handler (using filesystem server as example)
         # Note: This tests the tool management logic, not actual MCP execution
@@ -642,7 +703,7 @@ async def test_agent_remove_individual_mcp_tools():
     try:
         from upsonic.tools.mcp import MCPHandler
         
-        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+        agent = Agent(model=MODEL, name="Test Agent", debug=True)
         
         # Create MCP handler
         handler = MCPHandler(
@@ -701,7 +762,7 @@ async def test_agent_add_remove_multiple_mcp_handlers():
     try:
         from upsonic.tools.mcp import MCPHandler
         
-        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+        agent = Agent(model=MODEL, name="Test Agent", debug=True)
         
         # Create first MCP handler
         handler1 = MCPHandler(
@@ -764,7 +825,7 @@ async def test_task_add_remove_mcp_handler():
     try:
         from upsonic.tools.mcp import MCPHandler
         
-        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+        agent = Agent(model=MODEL, name="Test Agent", debug=True)
         
         # Create MCP handler
         handler = MCPHandler(
@@ -820,7 +881,7 @@ async def test_agent_add_remove_duckduckgo_tool():
     try:
         from upsonic.tools.common_tools.duckduckgo import duckduckgo_search_tool
         
-        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+        agent = Agent(model=MODEL, name="Test Agent", debug=True)
         
         # Create DuckDuckGo tool (function tool)
         ddg_tool = duckduckgo_search_tool()
@@ -849,7 +910,7 @@ async def test_agent_add_remove_tavily_tool():
         if not tavily_api_key:
             pytest.skip("TAVILY_API_KEY not set")
         
-        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+        agent = Agent(model=MODEL, name="Test Agent", debug=True)
         
         # Create Tavily tool (function tool)
         tavily_tool = tavily_search_tool(api_key=tavily_api_key)
@@ -874,7 +935,7 @@ async def test_agent_add_remove_thinking_tool():
     
     # Test 1: Auto-added via enable_thinking_tool with other tools
     agent = Agent(
-        model="anthropic/claude-sonnet-4-5", 
+        model=MODEL, 
         name="Test Agent", 
         debug=True, 
         enable_thinking_tool=True,
@@ -891,7 +952,7 @@ async def test_agent_add_remove_thinking_tool():
     assert "add_numbers" in agent.registered_agent_tools, "add_numbers should still be registered"
     
     # Test 2: Explicitly added as regular tool
-    agent2 = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent 2", debug=True, enable_thinking_tool=False)
+    agent2 = Agent(model=MODEL, name="Test Agent 2", debug=True, enable_thinking_tool=False)
     
     # Initially no plan_and_execute
     assert "plan_and_execute" not in agent2.registered_agent_tools, "plan_and_execute should not be present initially"
@@ -904,31 +965,32 @@ async def test_agent_add_remove_thinking_tool():
     agent2.remove_tools(plan_and_execute)
     assert "plan_and_execute" not in agent2.registered_agent_tools, "plan_and_execute should be removed"
     
-    # Test 3: Task-level override
-    agent3 = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent 3", debug=True, enable_thinking_tool=False)
-    
-    # Task with thinking enabled (overrides agent)
+    # Test 3: Task-level override — enable_thinking_tool adds plan_and_execute to task.
+    # 3a: Run without thinking tool so the model reliably calls add_numbers; verify tool_calls and output.
+    agent3 = Agent(model=MODEL, name="Test Agent 3", debug=True, enable_thinking_tool=False)
+    task_call = Task(
+        description="Use add_numbers to calculate 10 + 20. Return only the number.",
+        tools=[add_numbers],
+        enable_thinking_tool=False
+    )
+    output_buffer = StringIO()
+    with redirect_stdout(output_buffer):
+        await agent3.print_do_async(task_call)
+    output_text = output_buffer.getvalue()
+    assert len(task_call.tool_calls) > 0, "Task must have at least one tool call (model must call add_numbers)"
+    assert "Tool Calls" in output_text, "Output should contain 'Tool Calls' table when tools were called"
+    called_names = [tc.get("tool_name", "") for tc in task_call.tool_calls]
+    assert "add_numbers" in called_names, f"add_numbers should be in tool_calls, got: {called_names}"
+
+    # 3b: Run with enable_thinking_tool=True; verify plan_and_execute and add_numbers are registered and removable.
     task = Task(
         description="Use add_numbers to calculate 10 + 20. Return only the number.",
         tools=[add_numbers],
         enable_thinking_tool=True
     )
-    
-    # Execute to trigger registration
-    output_buffer = StringIO()
-    with redirect_stdout(output_buffer):
-        result = await agent3.print_do_async(task)
-    
-    # Verify printed output shows tool calls
-    output_text = output_buffer.getvalue()
-    assert "Tool Calls" in output_text, "Output should contain 'Tool Calls' table"
-    
-    # Verify task.tool_calls attribute
-    assert len(task.tool_calls) > 0, "task.tool_calls should not be empty"
-    called_names = [tc.get("tool_name", "") for tc in task.tool_calls]
-    # With enable_thinking_tool, the LLM may use plan_and_execute which internally calls add_numbers
-    assert "plan_and_execute" in called_names or "add_numbers" in called_names, \
-        f"plan_and_execute or add_numbers should be in tool_calls, got: {called_names}"
+    output_buffer2 = StringIO()
+    with redirect_stdout(output_buffer2):
+        await agent3.print_do_async(task)
     
     # plan_and_execute should be in task tools
     assert "plan_and_execute" in task.registered_task_tools, "plan_and_execute should be in task tools"
@@ -945,14 +1007,14 @@ async def test_agent_as_tool():
     """Test adding and removing Agent as a tool."""
     # Create sub-agent
     sub_agent = Agent(
-        model="anthropic/claude-sonnet-4-5",
+        model=MODEL,
         name="Math Assistant",
         role="Math Specialist",
         goal="Help with mathematical calculations"
     )
     
     # Create main agent
-    main_agent = Agent(model="anthropic/claude-sonnet-4-5", name="Main Agent", debug=True)
+    main_agent = Agent(model=MODEL, name="Main Agent", debug=True)
     
     # Add sub-agent as tool
     main_agent.add_tools(sub_agent)
@@ -972,7 +1034,7 @@ async def test_agent_as_tool():
 @pytest.mark.asyncio
 async def test_task_add_remove_tools():
     """Test adding and removing tools from Task."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
     
     # Create task with tools
     task = Task(description="Use add_numbers to calculate 2 + 3. Return the number.", tools=[add_numbers])
@@ -1022,7 +1084,7 @@ async def test_task_add_remove_tools():
 @pytest.mark.asyncio
 async def test_runtime_task_tool_registration():
     """Test that task tools are registered at runtime when agent.print_do_async(task) is called."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
     
     # Create task with tools (not registered yet)
     task = Task(
@@ -1071,7 +1133,7 @@ async def test_runtime_task_tool_registration():
 @pytest.mark.asyncio
 async def test_mixed_tool_types():
     """Test mixing custom tools, toolkits, and builtin tools."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
     
     # Add mixed tool types
     math_kit = MathToolKit()
@@ -1112,7 +1174,7 @@ async def test_mixed_tool_types():
 @pytest.mark.asyncio
 async def test_tool_manager_attributes():
     """Test that tool_manager attributes are properly updated."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
     
     # Add tools
     agent.add_tools([add_numbers, multiply_numbers])
@@ -1135,10 +1197,332 @@ async def test_tool_manager_attributes():
     assert "add_numbers" not in tool_names_after, "tool_manager should not have add_numbers after removal"
 
 
+# ============================================================
+# ToolKit Registration Cases (Agent-level)
+# Cases 1-7 from the refactored ToolKit registration algorithm
+# ============================================================
+
+
+@pytest.mark.asyncio
+async def test_toolkit_case1_bare_tool_decorator_no_config():
+    """Case 1: No config set on ToolKit init -- only @tool-decorated methods are registered with defaults."""
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
+
+    math_kit = MathToolKit()
+    agent.add_tools(math_kit)
+
+    assert "subtract" in agent.registered_agent_tools, "subtract should be registered"
+    assert "divide" in agent.registered_agent_tools, "divide should be registered"
+    assert len(agent.registered_agent_tools) == 2, "Only @tool-decorated methods should be registered"
+
+    for tool_obj in agent.registered_agent_tools.values():
+        config = tool_obj.config
+        assert config.timeout == 30.0, "Default timeout should be preserved"
+        assert config.requires_confirmation is False, "Default requires_confirmation should be False"
+
+
+@pytest.mark.asyncio
+async def test_toolkit_case2_init_config_overrides_decorator():
+    """Case 2: ToolKit init config overrides @tool decorator config."""
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
+
+    kit = ConfiguredToolKit(timeout=120.0)
+    agent.add_tools(kit)
+
+    assert "dangerous_action" in agent.registered_agent_tools
+    assert "safe_action" in agent.registered_agent_tools
+
+    dangerous_config = agent.registered_agent_tools["dangerous_action"].config
+    assert dangerous_config.timeout == 120.0, (
+        "ToolKit init timeout=120 should override decorator timeout=999"
+    )
+    assert dangerous_config.requires_confirmation is True, (
+        "Decorator requires_confirmation=True should survive (toolkit didn't set it)"
+    )
+
+    safe_config = agent.registered_agent_tools["safe_action"].config
+    assert safe_config.timeout == 120.0, (
+        "ToolKit init timeout=120 should override decorator timeout=60"
+    )
+
+
+@pytest.mark.asyncio
+async def test_toolkit_case3_exclude_tools():
+    """Case 3: exclude_tools prevents methods from being registered."""
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
+
+    kit = MathToolKit(exclude_tools=["subtract"])
+    agent.add_tools(kit)
+
+    assert "subtract" not in agent.registered_agent_tools, "subtract should be excluded"
+    assert "divide" in agent.registered_agent_tools, "divide should be registered"
+    assert len(agent.registered_agent_tools) == 1
+
+
+@pytest.mark.asyncio
+async def test_toolkit_case3_include_tools_additive():
+    """Case 3: include_tools is additive -- adds non-decorated methods on top of @tool methods."""
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
+
+    kit = AsyncMathToolKit(include_tools=["helper_not_decorated"])
+    agent.add_tools(kit)
+
+    assert "add_sync" in agent.registered_agent_tools, "@tool-decorated add_sync should be registered"
+    assert "subtract_sync" in agent.registered_agent_tools, "@tool-decorated subtract_sync should be registered"
+    assert "helper_not_decorated" in agent.registered_agent_tools, (
+        "helper_not_decorated should be added via include_tools"
+    )
+    assert len(agent.registered_agent_tools) == 3
+
+
+@pytest.mark.asyncio
+async def test_toolkit_case3_exclude_is_supreme():
+    """Case 3: exclude_tools is supreme -- overrides even include_tools."""
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
+
+    kit = AsyncMathToolKit(
+        include_tools=["helper_not_decorated"],
+        exclude_tools=["helper_not_decorated", "add_sync"],
+    )
+    agent.add_tools(kit)
+
+    assert "add_sync" not in agent.registered_agent_tools, "add_sync excluded"
+    assert "helper_not_decorated" not in agent.registered_agent_tools, "helper excluded even though included"
+    assert "subtract_sync" in agent.registered_agent_tools, "subtract_sync should remain"
+    assert len(agent.registered_agent_tools) == 1
+
+
+@pytest.mark.asyncio
+async def test_toolkit_case4_use_async_mode():
+    """Case 4: use_async=True registers ALL async methods, drops ALL sync (even @tool-decorated)."""
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
+
+    kit = AsyncMathToolKit(use_async=True)
+    agent.add_tools(kit)
+
+    assert "multiply_async" in agent.registered_agent_tools, "async method should be registered"
+    assert "divide_async" in agent.registered_agent_tools, "async method should be registered"
+    assert "async_compute" not in agent.registered_agent_tools, (
+        "async_compute is on BareToolKit, not AsyncMathToolKit"
+    )
+    assert "add_sync" not in agent.registered_agent_tools, "sync @tool method should be dropped"
+    assert "subtract_sync" not in agent.registered_agent_tools, "sync @tool method should be dropped"
+    assert "helper_not_decorated" not in agent.registered_agent_tools, "sync non-decorated should be dropped"
+    assert len(agent.registered_agent_tools) == 2
+
+
+@pytest.mark.asyncio
+async def test_toolkit_case4_use_async_respects_exclude():
+    """Case 4: use_async=True still respects exclude_tools."""
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
+
+    kit = AsyncMathToolKit(use_async=True, exclude_tools=["multiply_async"])
+    agent.add_tools(kit)
+
+    assert "multiply_async" not in agent.registered_agent_tools, "excluded async method should not be registered"
+    assert "divide_async" in agent.registered_agent_tools, "non-excluded async method should be registered"
+    assert len(agent.registered_agent_tools) == 1
+
+
+@pytest.mark.asyncio
+async def test_toolkit_case4_use_async_include_adds_sync_back():
+    """Case 4+3: use_async=True + include_tools can force-add a sync method back."""
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
+
+    kit = AsyncMathToolKit(use_async=True, include_tools=["add_sync"])
+    agent.add_tools(kit)
+
+    assert "multiply_async" in agent.registered_agent_tools, "async method should be registered"
+    assert "divide_async" in agent.registered_agent_tools, "async method should be registered"
+    assert "add_sync" in agent.registered_agent_tools, (
+        "include_tools should force-add sync method even in use_async mode"
+    )
+    assert "subtract_sync" not in agent.registered_agent_tools, "non-included sync should stay dropped"
+    assert len(agent.registered_agent_tools) == 3
+
+
+@pytest.mark.asyncio
+async def test_toolkit_case5_no_decorator_with_init_params_empty():
+    """Case 5: No @tool decorator + init params set = nothing registered."""
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
+
+    kit = BareToolKit(timeout=120.0)
+    agent.add_tools(kit)
+
+    assert len(agent.registered_agent_tools) == 0, (
+        "Init params alone should NOT create tools from non-decorated methods"
+    )
+
+
+@pytest.mark.asyncio
+async def test_toolkit_case6_no_decorator_no_config_empty():
+    """Case 6: No @tool decorator + no init config = nothing registered."""
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
+
+    kit = BareToolKit()
+    agent.add_tools(kit)
+
+    assert len(agent.registered_agent_tools) == 0, (
+        "No @tool and no config means nothing should be registered"
+    )
+
+
+@pytest.mark.asyncio
+async def test_toolkit_case7_discovery_before_config():
+    """Case 7: Tool set is decided BEFORE config merge -- config doesn't affect discovery."""
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
+
+    kit = ConfiguredToolKit(timeout=1.0)
+    agent.add_tools(kit)
+
+    registered_names = set(agent.registered_agent_tools.keys())
+    assert registered_names == {"dangerous_action", "safe_action"}, (
+        "Config params should not change which tools are discovered"
+    )
+
+    for tool_obj in agent.registered_agent_tools.values():
+        assert tool_obj.config.timeout == 1.0, "All tools should have timeout=1.0 from toolkit init"
+
+
+@pytest.mark.asyncio
+async def test_toolkit_bare_toolkit_use_async_discovers_async():
+    """BareToolKit with use_async=True discovers async methods even without @tool."""
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
+
+    kit = BareToolKit(use_async=True)
+    agent.add_tools(kit)
+
+    assert "async_compute" in agent.registered_agent_tools, (
+        "use_async should discover async methods even without @tool"
+    )
+    assert "compute" not in agent.registered_agent_tools, "sync method should be dropped in use_async"
+    assert "format_text" not in agent.registered_agent_tools, "sync method should be dropped in use_async"
+    assert len(agent.registered_agent_tools) == 1
+
+
+@pytest.mark.asyncio
+async def test_toolkit_bare_toolkit_include_tools_only():
+    """BareToolKit with only include_tools should register those methods."""
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
+
+    kit = BareToolKit(include_tools=["compute"])
+    agent.add_tools(kit)
+
+    assert "compute" in agent.registered_agent_tools, (
+        "include_tools should add compute even without @tool"
+    )
+    assert "format_text" not in agent.registered_agent_tools
+    assert "async_compute" not in agent.registered_agent_tools
+    assert len(agent.registered_agent_tools) == 1
+
+
+@pytest.mark.asyncio
+async def test_toolkit_config_priority_decorator_survives_unset_init():
+    """Decorator config fields survive when ToolKit init does not override them."""
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
+
+    kit = ConfiguredToolKit(max_retries=10)
+    agent.add_tools(kit)
+
+    dangerous_config = agent.registered_agent_tools["dangerous_action"].config
+    assert dangerous_config.requires_confirmation is True, (
+        "Decorator requires_confirmation=True should survive (init didn't set it)"
+    )
+    assert dangerous_config.timeout == 999.0, (
+        "Decorator timeout=999 should survive (init didn't set timeout)"
+    )
+    assert dangerous_config.max_retries == 10, "Init max_retries=10 should be applied"
+
+    safe_config = agent.registered_agent_tools["safe_action"].config
+    assert safe_config.timeout == 60.0, "Decorator timeout=60 should survive (init didn't set timeout)"
+    assert safe_config.max_retries == 10, "Init max_retries=10 should be applied"
+
+
+@pytest.mark.asyncio
+async def test_toolkit_add_remove_with_use_async():
+    """Full add/remove lifecycle with use_async ToolKit."""
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
+
+    kit = AsyncMathToolKit(use_async=True)
+    agent.add_tools(kit)
+
+    assert "multiply_async" in agent.registered_agent_tools
+    assert "divide_async" in agent.registered_agent_tools
+    assert kit in agent.tools
+
+    agent.remove_tools("multiply_async")
+    assert "multiply_async" not in agent.registered_agent_tools
+    assert "divide_async" in agent.registered_agent_tools
+    assert kit in agent.tools
+
+    agent.remove_tools(kit)
+    assert "divide_async" not in agent.registered_agent_tools
+    assert kit not in agent.tools
+    assert len(agent.registered_agent_tools) == 0
+
+
+@pytest.mark.asyncio
+async def test_toolkit_with_exclude_and_mixed_tools():
+    """Agent with ToolKit (exclude_tools) + standalone function tools."""
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
+
+    math_kit = MathToolKit(exclude_tools=["divide"])
+    agent.add_tools([math_kit, add_numbers])
+
+    assert "subtract" in agent.registered_agent_tools
+    assert "divide" not in agent.registered_agent_tools, "divide should be excluded"
+    assert "add_numbers" in agent.registered_agent_tools
+    assert len(agent.registered_agent_tools) == 2
+
+
+@pytest.mark.asyncio
+async def test_toolkit_dedup_with_use_async():
+    """Deduplication works correctly with use_async ToolKit."""
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
+    processor = agent.tool_manager.processor
+
+    kit = AsyncMathToolKit(use_async=True)
+    agent.add_tools(kit)
+
+    kit_id = id(kit)
+    assert kit_id in processor.class_instance_to_tools
+    initial_tracking = list(processor.class_instance_to_tools[kit_id])
+    assert set(initial_tracking) == {"multiply_async", "divide_async"}
+
+    agent.add_tools(kit)
+    second_tracking = list(processor.class_instance_to_tools[kit_id])
+    assert second_tracking == initial_tracking, "Deduplication should prevent re-registration"
+
+
+@pytest.mark.asyncio
+async def test_toolkit_re_add_use_async_after_removal():
+    """Remove and re-add a use_async ToolKit -- tracking is properly reset."""
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
+    processor = agent.tool_manager.processor
+
+    kit = AsyncMathToolKit(use_async=True)
+    agent.add_tools(kit)
+
+    kit_id = id(kit)
+    assert kit_id in processor._raw_tool_ids
+    assert kit_id in processor.class_instance_to_tools
+
+    agent.remove_tools(kit)
+    assert kit_id not in processor._raw_tool_ids
+    assert kit_id not in processor.class_instance_to_tools
+    assert len(agent.registered_agent_tools) == 0
+
+    agent.add_tools(kit)
+    assert "multiply_async" in agent.registered_agent_tools
+    assert "divide_async" in agent.registered_agent_tools
+    assert kit_id in processor._raw_tool_ids
+    assert kit_id in processor.class_instance_to_tools
+
+
 @pytest.mark.asyncio
 async def test_task_tool_attributes_after_execution():
     """Test that task tool attributes are properly set after execution."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
     
     # Add agent tools
     agent.add_tools([add_numbers])
@@ -1190,7 +1574,7 @@ async def test_task_tool_attributes_after_execution():
 @pytest.mark.asyncio
 async def test_all_tool_types_comprehensive():
     """Comprehensive test of all tool types together."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
     
     regular_tools_added = []
     builtin_tools_added = []
@@ -1223,7 +1607,7 @@ async def test_all_tool_types_comprehensive():
     assert "code_execution" not in agent.registered_agent_tools, "Builtin tools should NOT be in registered_agent_tools"
     
     # 4. Add Agent as tool
-    sub_agent = Agent(model="anthropic/claude-sonnet-4-5", name="Helper")
+    sub_agent = Agent(model=MODEL, name="Helper")
     agent.add_tools(sub_agent)
     tool_names = list(agent.registered_agent_tools.keys())
     agent_tool_name = [name for name in tool_names if name.startswith("ask_")][0]
@@ -1316,7 +1700,7 @@ async def test_all_tool_types_comprehensive():
 @pytest.mark.asyncio
 async def test_deduplication_prevents_reprocessing():
     """Test that registering the same tool twice doesn't re-process it."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
     
     # Get initial state
     processor = agent.tool_manager.processor
@@ -1346,7 +1730,7 @@ async def test_deduplication_prevents_reprocessing():
 @pytest.mark.asyncio
 async def test_toolkit_deduplication_no_duplicate_tracking():
     """Test that registering the same ToolKit twice doesn't create duplicate tracking entries."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
     processor = agent.tool_manager.processor
     
     # Create and add ToolKit
@@ -1373,7 +1757,7 @@ async def test_toolkit_deduplication_no_duplicate_tracking():
 @pytest.mark.asyncio
 async def test_class_instance_to_tools_cleanup_on_individual_removal():
     """Test that class_instance_to_tools is properly cleaned up when removing individual tools."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
     processor = agent.tool_manager.processor
     
     # Add ToolKit
@@ -1403,7 +1787,7 @@ async def test_class_instance_to_tools_cleanup_on_individual_removal():
 @pytest.mark.asyncio
 async def test_raw_tool_ids_cleanup_on_removal():
     """Test that _raw_tool_ids is properly cleaned up when tools are removed."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
     processor = agent.tool_manager.processor
     
     # Track initial state
@@ -1428,7 +1812,7 @@ async def test_raw_tool_ids_cleanup_on_removal():
 @pytest.mark.asyncio
 async def test_raw_tool_ids_cleanup_on_object_removal():
     """Test that _raw_tool_ids is properly cleaned up when removing by object."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
     processor = agent.tool_manager.processor
     
     # Track initial state
@@ -1455,7 +1839,7 @@ async def test_mcp_handlers_list_cleanup_on_individual_removal():
     try:
         from upsonic.tools.mcp import MCPHandler
         
-        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+        agent = Agent(model=MODEL, name="Test Agent", debug=True)
         processor = agent.tool_manager.processor
         
         # Create MCP handler
@@ -1494,7 +1878,7 @@ async def test_mcp_handlers_list_cleanup_on_individual_removal():
 @pytest.mark.asyncio
 async def test_function_tool_deduplication():
     """Test that registering the same function tool twice doesn't create duplicates."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
     processor = agent.tool_manager.processor
     
     # Add function tool
@@ -1516,7 +1900,7 @@ async def test_function_tool_deduplication():
 @pytest.mark.asyncio
 async def test_re_add_after_removal():
     """Test that removing and re-adding a tool works correctly."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
     processor = agent.tool_manager.processor
     
     # Add tool
@@ -1548,7 +1932,7 @@ async def test_re_add_after_removal():
 @pytest.mark.asyncio  
 async def test_toolkit_re_add_after_removal():
     """Test that removing and re-adding a ToolKit works correctly."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
     processor = agent.tool_manager.processor
     
     # Add ToolKit
@@ -1579,7 +1963,7 @@ async def test_toolkit_re_add_after_removal():
 @pytest.mark.asyncio
 async def test_mixed_deduplication():
     """Test deduplication with mixed tool types."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
     
     math_kit = MathToolKit()
     text_kit = TextToolKit()
@@ -1602,7 +1986,7 @@ async def test_mixed_deduplication():
 @pytest.mark.asyncio
 async def test_processor_tracking_consistency():
     """Test that processor tracking dictionaries stay consistent through operations."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
     processor = agent.tool_manager.processor
     
     # Start clean
@@ -1661,7 +2045,7 @@ async def test_mcp_handler_with_tool_name_prefix_agent_init():
         
         # Initialize agent with prefixed handler
         agent = Agent(
-            model="anthropic/claude-sonnet-4-5",
+            model=MODEL,
             name="Test Agent",
             tools=[handler],
             debug=True
@@ -1702,7 +2086,7 @@ async def test_mcp_handler_with_tool_name_prefix_add_tools():
     try:
         from upsonic.tools.mcp import MCPHandler
         
-        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+        agent = Agent(model=MODEL, name="Test Agent", debug=True)
         
         # Create MCP handler with prefix
         handler = MCPHandler(
@@ -1751,7 +2135,7 @@ async def test_mcp_prefixed_tools_removal_by_name():
     try:
         from upsonic.tools.mcp import MCPHandler
         
-        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+        agent = Agent(model=MODEL, name="Test Agent", debug=True)
         
         # Create MCP handler with prefix
         handler = MCPHandler(
@@ -1803,7 +2187,7 @@ async def test_mcp_prefix_prevents_collisions():
     try:
         from upsonic.tools.mcp import MCPHandler
         
-        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+        agent = Agent(model=MODEL, name="Test Agent", debug=True)
         
         # Create two handlers pointing to same server type but different dirs
         # Without prefix, they would have identical tool names and collision would occur
@@ -1872,7 +2256,7 @@ async def test_multi_mcp_handler_with_single_prefix():
     try:
         from upsonic.tools.mcp import MultiMCPHandler
         
-        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+        agent = Agent(model=MODEL, name="Test Agent", debug=True)
         
         # Create MultiMCPHandler with single prefix (will become prefix_0, prefix_1)
         multi_handler = MultiMCPHandler(
@@ -1923,7 +2307,7 @@ async def test_multi_mcp_handler_with_prefixes_list():
     try:
         from upsonic.tools.mcp import MultiMCPHandler
         
-        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+        agent = Agent(model=MODEL, name="Test Agent", debug=True)
         
         # Create MultiMCPHandler with specific prefixes for each server
         multi_handler = MultiMCPHandler(
@@ -1992,7 +2376,7 @@ async def test_multi_mcp_handler_prefixes_validation():
         )
         
         # The validation happens during connect(), which happens when we add to agent
-        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+        agent = Agent(model=MODEL, name="Test Agent", debug=True)
         
         # Adding handler with mismatched prefixes - validation error is logged
         # and no tools are registered (graceful failure)
@@ -2021,7 +2405,7 @@ async def test_task_mcp_handler_with_prefix():
     try:
         from upsonic.tools.mcp import MCPHandler
         
-        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+        agent = Agent(model=MODEL, name="Test Agent", debug=True)
         
         # Create MCP handler with prefix
         handler = MCPHandler(
@@ -2082,7 +2466,7 @@ async def test_mcp_tool_metadata_contains_prefix_info():
     try:
         from upsonic.tools.mcp import MCPHandler
         
-        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+        agent = Agent(model=MODEL, name="Test Agent", debug=True)
         
         # Create MCP handler with prefix
         handler = MCPHandler(
@@ -2128,7 +2512,7 @@ async def test_mcp_handler_without_prefix_no_prefix_metadata():
     try:
         from upsonic.tools.mcp import MCPHandler
         
-        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+        agent = Agent(model=MODEL, name="Test Agent", debug=True)
         
         # Create MCP handler WITHOUT prefix
         handler = MCPHandler(
@@ -2169,7 +2553,7 @@ async def test_mcp_handler_processor_tracking_with_prefix():
     try:
         from upsonic.tools.mcp import MCPHandler
         
-        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+        agent = Agent(model=MODEL, name="Test Agent", debug=True)
         processor = agent.tool_manager.processor
         
         # Create MCP handler with prefix
@@ -2231,7 +2615,7 @@ async def test_mcp_handler_processor_tracking_with_prefix():
 @pytest.mark.asyncio
 async def test_task_add_remove_custom_tools_management():
     """Test adding and removing custom tools (functions) from Task via management API."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
 
     task = Task(description="test", tools=[add_numbers])
     assert add_numbers in task.tools
@@ -2263,7 +2647,7 @@ async def test_task_add_remove_custom_tools_management():
 @pytest.mark.asyncio
 async def test_task_add_remove_toolkit():
     """Test adding and removing ToolKit instances from Task."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
 
     math_kit = MathToolKit()
     text_kit = TextToolKit()
@@ -2297,7 +2681,7 @@ async def test_task_remove_individual_class_methods():
     try:
         from upsonic.tools.common_tools.financial_tools import YFinanceTools
 
-        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+        agent = Agent(model=MODEL, name="Test Agent", debug=True)
 
         financial_tools = YFinanceTools(stock_price=True, enable_all=False)
         task = Task(description="test", tools=[financial_tools])
@@ -2326,7 +2710,7 @@ async def test_task_add_remove_financial_tools():
     try:
         from upsonic.tools.common_tools.financial_tools import YFinanceTools
 
-        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+        agent = Agent(model=MODEL, name="Test Agent", debug=True)
 
         financial_tools = YFinanceTools(stock_price=True, enable_all=False)
         task = Task(description="test", tools=[financial_tools])
@@ -2362,7 +2746,7 @@ async def test_task_remove_individual_mcp_tools():
     try:
         from upsonic.tools.mcp import MCPHandler
 
-        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+        agent = Agent(model=MODEL, name="Test Agent", debug=True)
 
         handler = MCPHandler(
             command="npx -y @modelcontextprotocol/server-filesystem /tmp"
@@ -2399,7 +2783,7 @@ async def test_task_add_remove_duckduckgo_tool():
     try:
         from upsonic.tools.common_tools.duckduckgo import duckduckgo_search_tool
 
-        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+        agent = Agent(model=MODEL, name="Test Agent", debug=True)
 
         ddg_tool = duckduckgo_search_tool()
         task = Task(description="test", tools=[ddg_tool])
@@ -2425,7 +2809,7 @@ async def test_task_add_remove_tavily_tool():
         if not tavily_api_key:
             pytest.skip("TAVILY_API_KEY not set")
 
-        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+        agent = Agent(model=MODEL, name="Test Agent", debug=True)
 
         tavily_tool = tavily_search_tool(api_key=tavily_api_key)
         task = Task(description="test", tools=[tavily_tool])
@@ -2445,13 +2829,13 @@ async def test_task_add_remove_tavily_tool():
 async def test_task_agent_as_tool():
     """Test adding and removing Agent as a tool on Task."""
     sub_agent = Agent(
-        model="anthropic/claude-sonnet-4-5",
+        model=MODEL,
         name="Math Assistant",
         role="Math Specialist",
         goal="Help with mathematical calculations"
     )
 
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Main Agent", debug=True)
+    agent = Agent(model=MODEL, name="Main Agent", debug=True)
     task = Task(description="test", tools=[sub_agent, add_numbers])
 
     agent._setup_task_tools(task)
@@ -2487,7 +2871,7 @@ async def test_task_initialization_with_builtin_tools():
     assert len(task.registered_task_tools) == 0, "Not registered until setup"
     assert len(task.task_builtin_tools) == 0, "Not populated until setup"
 
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
     agent._setup_task_tools(task)
 
     assert len(task.task_builtin_tools) == 2
@@ -2503,7 +2887,7 @@ async def test_task_initialization_with_builtin_tools():
 @pytest.mark.asyncio
 async def test_task_builtin_tools_not_in_tool_processor():
     """Verify that builtin tools are NOT processed by Task's ToolProcessor."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
 
     web_search = WebSearchTool()
     code_exec = CodeExecutionTool()
@@ -2529,7 +2913,7 @@ async def test_task_builtin_tools_not_in_tool_processor():
 @pytest.mark.asyncio
 async def test_task_tool_manager_attributes_full():
     """Test that task tool_manager attributes are properly updated."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
 
     task = Task(description="test", tools=[add_numbers, multiply_numbers])
     agent._setup_task_tools(task)
@@ -2559,7 +2943,7 @@ async def test_task_tool_manager_attributes_full():
 @pytest.mark.asyncio
 async def test_task_mixed_tool_types():
     """Test mixing custom tools, toolkits, and builtin tools on Task."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
 
     math_kit = MathToolKit()
     web_search = WebSearchTool()
@@ -2589,7 +2973,7 @@ async def test_task_mixed_tool_types():
 @pytest.mark.asyncio
 async def test_task_all_tool_types_comprehensive():
     """Comprehensive test of all tool types together on Task."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
 
     regular_tools_added: list = []
     builtin_tools_added: list = []
@@ -2598,7 +2982,7 @@ async def test_task_all_tool_types_comprehensive():
     web_search = WebSearchTool()
     code_exec = CodeExecutionTool()
 
-    sub_agent = Agent(model="anthropic/claude-sonnet-4-5", name="Helper")
+    sub_agent = Agent(model=MODEL, name="Helper")
 
     tools_list: list = [add_numbers, math_kit, web_search, code_exec, sub_agent]
 
@@ -2665,7 +3049,7 @@ async def test_task_all_tool_types_comprehensive():
 @pytest.mark.asyncio
 async def test_task_deduplication_prevents_reprocessing():
     """Test that registering the same tool twice on a task doesn't re-process it."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
 
     task = Task(description="test", tools=[add_numbers, add_numbers])
     agent._setup_task_tools(task)
@@ -2679,7 +3063,7 @@ async def test_task_deduplication_prevents_reprocessing():
 @pytest.mark.asyncio
 async def test_task_toolkit_deduplication_no_duplicate_tracking():
     """Test that registering the same ToolKit twice on task doesn't create duplicate tracking."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
 
     math_kit = MathToolKit()
     task = Task(description="test", tools=[math_kit])
@@ -2697,7 +3081,7 @@ async def test_task_toolkit_deduplication_no_duplicate_tracking():
 @pytest.mark.asyncio
 async def test_task_class_instance_to_tools_cleanup_on_individual_removal():
     """Test task processor class_instance_to_tools cleanup on individual tool removal."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
 
     math_kit = MathToolKit()
     task = Task(description="test", tools=[math_kit])
@@ -2723,7 +3107,7 @@ async def test_task_class_instance_to_tools_cleanup_on_individual_removal():
 @pytest.mark.asyncio
 async def test_task_raw_tool_ids_cleanup_on_removal():
     """Test task processor _raw_tool_ids cleanup when tools are removed individually."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
 
     math_kit = MathToolKit()
     task = Task(description="test", tools=[math_kit])
@@ -2742,7 +3126,7 @@ async def test_task_raw_tool_ids_cleanup_on_removal():
 @pytest.mark.asyncio
 async def test_task_raw_tool_ids_cleanup_on_object_removal():
     """Test task processor _raw_tool_ids cleanup when removing toolkit by object."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
 
     math_kit = MathToolKit()
     task = Task(description="test", tools=[math_kit])
@@ -2760,7 +3144,7 @@ async def test_task_raw_tool_ids_cleanup_on_object_removal():
 @pytest.mark.asyncio
 async def test_task_function_tool_deduplication():
     """Test that registering the same function tool twice on task doesn't duplicate."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
 
     task = Task(description="test", tools=[add_numbers, add_numbers, add_numbers])
     agent._setup_task_tools(task)
@@ -2774,7 +3158,7 @@ async def test_task_function_tool_deduplication():
 @pytest.mark.asyncio
 async def test_task_toolkit_re_add_after_removal():
     """Test that removing and re-adding a ToolKit on task works correctly."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
 
     math_kit = MathToolKit()
     task = Task(description="test", tools=[math_kit])
@@ -2807,7 +3191,7 @@ async def test_task_toolkit_re_add_after_removal():
 @pytest.mark.asyncio
 async def test_task_mixed_deduplication():
     """Test deduplication with mixed tool types on Task."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
 
     math_kit = MathToolKit()
     text_kit = TextToolKit()
@@ -2827,7 +3211,7 @@ async def test_task_mixed_deduplication():
 @pytest.mark.asyncio
 async def test_task_processor_tracking_consistency():
     """Test that task processor tracking stays consistent through operations."""
-    agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+    agent = Agent(model=MODEL, name="Test Agent", debug=True)
 
     math_kit = MathToolKit()
     task = Task(description="test", tools=[math_kit])
@@ -2862,7 +3246,7 @@ async def test_task_mcp_handlers_list_cleanup_on_individual_removal():
     try:
         from upsonic.tools.mcp import MCPHandler
 
-        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+        agent = Agent(model=MODEL, name="Test Agent", debug=True)
 
         handler = MCPHandler(
             command="npx -y @modelcontextprotocol/server-filesystem /tmp"
@@ -2898,7 +3282,7 @@ async def test_task_mcp_handler_with_tool_name_prefix_management():
     try:
         from upsonic.tools.mcp import MCPHandler
 
-        agent = Agent(model="anthropic/claude-sonnet-4-5", name="Test Agent", debug=True)
+        agent = Agent(model=MODEL, name="Test Agent", debug=True)
 
         handler = MCPHandler(
             command="npx -y @modelcontextprotocol/server-filesystem /tmp",

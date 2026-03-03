@@ -212,36 +212,157 @@ class ToolProcessor:
         )
     
     def _process_toolkit(self, toolkit: ToolKit) -> Dict[str, Tool]:
-        """Process a ToolKit instance."""
-        tools = {}
-        
-        # Check if this is a KnowledgeBase instance
+        """Process a ToolKit instance using a two-phase algorithm.
+
+        Phase 1 -- Discover which methods become tools:
+            * ``@tool``-decorated methods form the base candidate set.
+            * ``use_async=True`` replaces candidates with **all** non-private
+              async methods and drops every sync method.
+            * ``include_tools`` is **additive** -- names are added on top.
+            * ``exclude_tools`` is **supreme** -- names are always removed.
+
+        Phase 2 -- Assign configs and register:
+            * Methods with ``_upsonic_tool_config`` (from ``@tool``): merge
+              with toolkit defaults (toolkit init overrides decorator).
+            * Methods without config (added via ``include_tools`` or
+              ``use_async`` discovery): use toolkit defaults merged with
+              fresh ``ToolConfig()``.
+        """
+        tools: Dict[str, Tool] = {}
+
         try:
             from upsonic.knowledge_base.knowledge_base import KnowledgeBase
             if isinstance(toolkit, KnowledgeBase):
-                toolkit_id = id(toolkit)
-                self.knowledge_base_instances[toolkit_id] = toolkit
+                self.knowledge_base_instances[id(toolkit)] = toolkit
         except ImportError:
-            # KnowledgeBase might not be available, skip
             pass
-        
-        for name, method in inspect.getmembers(toolkit, inspect.ismethod):
-            # Only process methods marked with @tool
-            if hasattr(method, '_upsonic_is_tool'):
-                tool = self._process_function_tool(method)
-                tools[tool.name] = tool
-        
-        # Track which tools belong to this toolkit instance (avoid duplicates)
+
+        use_async: bool = getattr(toolkit, '_toolkit_use_async', False)
+        include_tools: List[str] | None = getattr(toolkit, '_toolkit_include_tools', None)
+        exclude_tools: List[str] | None = getattr(toolkit, '_toolkit_exclude_tools', None)
+
+        # ── Phase 1: discover candidates ──────────────────────────
+        candidates: Dict[str, Any] = {}
+
+        if use_async:
+            for name, method in inspect.getmembers(toolkit, inspect.ismethod):
+                if name.startswith('_'):
+                    continue
+                if inspect.iscoroutinefunction(method):
+                    candidates[name] = method
+        else:
+            for name, method in inspect.getmembers(toolkit, inspect.ismethod):
+                if getattr(method, '_upsonic_is_tool', False):
+                    candidates[name] = method
+
+        if include_tools is not None:
+            for name in include_tools:
+                if name not in candidates:
+                    method: Any = getattr(toolkit, name, None)
+                    if method is not None and inspect.ismethod(method):
+                        candidates[name] = method
+
+        if exclude_tools is not None:
+            for name in exclude_tools:
+                candidates.pop(name, None)
+
+        # ── Phase 2: build configs & register ─────────────────────
+        registered_callables: List[Any] = []
+
+        for name, method in candidates.items():
+            decorator_config: ToolConfig = getattr(
+                method, '_upsonic_tool_config', ToolConfig()
+            )
+            config: ToolConfig = self._apply_toolkit_config_overrides(
+                toolkit, decorator_config
+            )
+
+            wrapper = self._make_tool_wrapper(method, name, config)
+            tool = self._process_function_tool(wrapper)
+            tools[tool.name] = tool
+            registered_callables.append(wrapper)
+
+        toolkit.tools = registered_callables
+
         if tools:
-            toolkit_id = id(toolkit)
+            toolkit_id: int = id(toolkit)
             if toolkit_id not in self.class_instance_to_tools:
                 self.class_instance_to_tools[toolkit_id] = []
-            existing_tools = set(self.class_instance_to_tools[toolkit_id])
-            for tool_name in tools.keys():
+            existing_tools: set = set(self.class_instance_to_tools[toolkit_id])
+            for tool_name in tools:
                 if tool_name not in existing_tools:
                     self.class_instance_to_tools[toolkit_id].append(tool_name)
-        
+
         return tools
+
+    @staticmethod
+    def _make_tool_wrapper(
+        method: Any,
+        tool_name: str,
+        config: ToolConfig,
+    ) -> Any:
+        """Wrap a bound method in a plain function with its own ``__dict__``.
+
+        Bound methods do not support arbitrary ``setattr``, so we create a
+        per-instance wrapper that carries ``_upsonic_tool_config`` and
+        ``_upsonic_is_tool``.
+        """
+        # Preserve __self__ from bound methods so unregister_tools
+        # can look up the owning instance for tracking cleanup.
+        bound_self = getattr(method, "__self__", None)
+
+        if inspect.iscoroutinefunction(method):
+            @functools.wraps(method)
+            async def _async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                return await method(*args, **kwargs)
+
+            _async_wrapper.__name__ = tool_name
+            _async_wrapper._upsonic_tool_config = config  # type: ignore[attr-defined]
+            _async_wrapper._upsonic_is_tool = True  # type: ignore[attr-defined]
+            if bound_self is not None:
+                _async_wrapper.__self__ = bound_self  # type: ignore[attr-defined]
+            return _async_wrapper
+        else:
+            @functools.wraps(method)
+            def _sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+                return method(*args, **kwargs)
+
+            _sync_wrapper.__name__ = tool_name
+            _sync_wrapper._upsonic_tool_config = config  # type: ignore[attr-defined]
+            _sync_wrapper._upsonic_is_tool = True  # type: ignore[attr-defined]
+            if bound_self is not None:
+                _sync_wrapper.__self__ = bound_self  # type: ignore[attr-defined]
+            return _sync_wrapper
+
+    def _apply_toolkit_config_overrides(
+        self,
+        toolkit: ToolKit,
+        decorator_config: ToolConfig,
+    ) -> ToolConfig:
+        """Build a merged ``ToolConfig``.
+
+        Priority (highest first):
+            1. Toolkit ``__init__`` defaults (toolkit-wide, set at instantiation)
+            2. ``@tool`` decorator values (per-method, set at class definition)
+
+        The decorator config is used as the base layer; then any
+        toolkit ``__init__`` value that was explicitly provided
+        (non-``None``) overwrites the decorator value.
+        """
+        from copy import deepcopy
+
+        tk_defaults: Dict[str, Any] = getattr(toolkit, '_toolkit_defaults', {})
+        if not tk_defaults:
+            return deepcopy(decorator_config)
+
+        merged: ToolConfig = deepcopy(decorator_config)
+
+        for field_name in ToolConfig.model_fields.keys():
+            tk_val: Any = tk_defaults.get(field_name)
+            if tk_val is not None:
+                setattr(merged, field_name, tk_val)
+
+        return merged
     
     def _process_class_tools(self, instance: Any) -> Dict[str, Tool]:
         """Process all public methods of a class instance as tools."""

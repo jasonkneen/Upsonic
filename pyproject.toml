@@ -270,6 +270,11 @@ langfuse = [
     "opentelemetry-exporter-otlp-proto-http>=1.39.1",
     "opentelemetry-sdk>=1.39.1",
 ]
+gmail-tool = [
+    "google-api-python-client>=2.188.0",
+    "google-auth-httplib2>=0.3.0",
+    "google-auth-oauthlib>=1.2.4",
+]
 
 [project.scripts]
 upsonic = "upsonic.cli.main:main"

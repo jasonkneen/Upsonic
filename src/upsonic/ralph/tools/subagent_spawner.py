@@ -14,7 +14,7 @@ According to the Ralph architecture:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Literal, Optional, TYPE_CHECKING
+from typing import Any, List, Literal, Optional, TYPE_CHECKING
 
 from upsonic.tools import ToolKit, tool
 
@@ -75,11 +75,12 @@ When writing Python files:
 """
     
     def __init__(
-        self, 
+        self,
         model: str,
         workspace: Path,
         state: Optional["RalphState"] = None,
         max_result_length: int = 1000,
+        **kwargs: Any,
     ):
         """
         Initialize SubagentSpawnerToolKit.
@@ -89,8 +90,9 @@ When writing Python files:
             workspace: Workspace directory
             state: Optional RalphState for context access
             max_result_length: Maximum length of result returned to primary agent
+            **kwargs: ToolKit params (include_tools, exclude_tools, timeout, etc.).
         """
-        super().__init__()
+        super().__init__(**kwargs)
         self.model = model
         self.workspace = Path(workspace)
         self.state = state
@@ -250,7 +252,6 @@ After writing, the code should be complete and runnable."""
         
         return ""
     
-    @tool(timeout=600.0)
     async def aspawn_subagent(
         self,
         task_description: str,

@@ -1643,6 +1643,17 @@ class Model(Runnable[Any, Any]):
         """The base URL for the provider API, if available."""
         return None
 
+    @property
+    def provider(self) -> Provider[Any] | None:
+        """The provider for this model, if any. Use for pricing (e.g. genai_prices provider_id) and API base URL."""
+        return None
+
+    @property
+    def provider_name(self) -> str | None:
+        """Get the provider name (e.g. for genai_prices). Uses provider.name when available."""
+        p = self.provider
+        return p.name if p is not None else None
+
     @staticmethod
     def _get_instructions(
         messages: Sequence[ModelMessage], model_request_parameters: ModelRequestParameters | None = None

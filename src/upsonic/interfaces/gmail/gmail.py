@@ -178,7 +178,7 @@ class GmailInterface(Interface):
 
         base_health["configuration"] = {
             "connected": is_connected,
-            "tools_enabled": len(self.gmail_tools.functions()),
+            "tools_enabled": len(self.gmail_tools.functions),
             "auth_configured": bool(self.api_secret),
             "mode": self.mode.value,
             "reset_command": self._reset_command.command if self._reset_enabled else None,
