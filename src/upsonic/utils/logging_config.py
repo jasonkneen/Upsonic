@@ -183,6 +183,10 @@ def setup_sentry() -> None:
     if the_dsn.lower() == "false":
         the_dsn = ""
 
+    if not the_dsn or not the_dsn.strip():
+        _SENTRY_CONFIGURED = True
+        return
+
     # Get version for release tag
     try:
         from upsonic.utils.package.get_version import get_library_version

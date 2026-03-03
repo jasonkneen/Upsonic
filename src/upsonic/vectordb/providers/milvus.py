@@ -23,7 +23,7 @@ try:
         WeightedRanker,
     )
     _MILVUS_AVAILABLE = True
-except ImportError:
+except (ImportError, AttributeError):
     AsyncMilvusClient = None  # type: ignore
     DataType = None  # type: ignore
     AnnSearchRequest = None  # type: ignore

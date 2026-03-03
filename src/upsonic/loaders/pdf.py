@@ -11,7 +11,7 @@ from upsonic.loaders.config import PdfLoaderConfig
 try:
     from pypdf import PdfReader, PageObject
     _PYPDF_AVAILABLE = True
-except ImportError:
+except (ImportError, AttributeError):
     PdfReader = None
     PageObject = None
     _PYPDF_AVAILABLE = False

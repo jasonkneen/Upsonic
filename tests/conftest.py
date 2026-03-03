@@ -1,4 +1,7 @@
 """Pytest configuration to handle DisallowedOperation exceptions gracefully."""
+import os
+os.environ.setdefault("UPSONIC_TELEMETRY", "false")
+
 import pytest
 import sys
 from pathlib import Path
