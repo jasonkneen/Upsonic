@@ -127,9 +127,6 @@ class GmailTools(ToolKit):
 
         self._validate_scopes_for_config()
 
-    # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
 
     def _validate_scopes_for_config(self) -> None:
         """Validate that required scopes match the tools selected via include/exclude."""
@@ -366,9 +363,6 @@ class GmailTools(ToolKit):
             if modify_scope not in self.scopes:
                 raise ValueError(f"The scope {modify_scope} is required for email modification operations")
 
-    # ------------------------------------------------------------------
-    # Non-tool public helpers (used by interfaces, not exposed to LLM)
-    # ------------------------------------------------------------------
 
     @authenticate
     def get_unread_messages_raw(self, count: int) -> List[dict]:
@@ -387,9 +381,6 @@ class GmailTools(ToolKit):
             print(f"Error retrieving unread emails raw: {error}")
             return []
 
-    # ------------------------------------------------------------------
-    # Tool methods
-    # ------------------------------------------------------------------
 
     @tool
     @authenticate

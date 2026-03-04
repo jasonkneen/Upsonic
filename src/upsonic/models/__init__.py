@@ -1890,26 +1890,14 @@ _OPENAI_CHAT_COMPATIBLE_PROVIDERS: frozenset[str] = frozenset(
     [
         'alibaba',
         'azure',
-        'cerebras',
         'deepseek',
         'fireworks',
-        'github',
         'grok',
-        'heroku',
         'litellm',
-        'lmstudio',
-        'moonshotai',
         'nebius',
-        'nvidia',
-        'ollama',
         'openai',
         'openai-chat',
         'openrouter',
-        'ovhcloud',
-        'sambanova',
-        'together',
-        'vercel',
-        'vllm',
     ]
 )
 
@@ -2212,6 +2200,55 @@ def infer_model(  # noqa: C901
 
         return OpenRouterModel(model_name, provider=provider)
 
+    if model_kind == 'vercel':
+        from .vercel import VercelModel
+
+        return VercelModel(model_name, provider=provider)
+    if model_kind == 'together':
+        from .together import TogetherModel
+
+        return TogetherModel(model_name, provider=provider)
+    if model_kind == 'sambanova':
+        from .sambanova import SambaNovaModel
+
+        return SambaNovaModel(model_name, provider=provider)
+    if model_kind == 'ovhcloud':
+        from .ovhcloud import OVHcloudModel
+
+        return OVHcloudModel(model_name, provider=provider)
+    if model_kind == 'moonshotai':
+        from .moonshotai import MoonshotAIModel
+
+        return MoonshotAIModel(model_name, provider=provider)
+    if model_kind == 'heroku':
+        from .heroku import HerokuModel
+
+        return HerokuModel(model_name, provider=provider)
+    if model_kind == 'github':
+        from .github import GitHubModel
+
+        return GitHubModel(model_name, provider=provider)
+    if model_kind == 'cerebras':
+        from .cerebras import CerebrasModel
+
+        return CerebrasModel(model_name, provider=provider)
+
+    if model_kind == 'vllm':
+        from .vllm import VLLMModel
+
+        return VLLMModel(model_name, provider=provider)
+    if model_kind == 'nvidia':
+        from .nvidia import NvidiaModel
+
+        return NvidiaModel(model_name, provider=provider)
+    if model_kind == 'ollama':
+        from .ollama import OllamaModel
+
+        return OllamaModel(model_name, provider=provider)
+    if model_kind == 'lmstudio':
+        from .lmstudio import LMStudioModel
+
+        return LMStudioModel(model_name, provider=provider)
 
     if model_kind == 'openai-chat':
         from .openai import OpenAIChatModel
