@@ -133,7 +133,7 @@ RetryMode = Literal["raise", "return_false"]
 class Agent(BaseAgent):
     """
     A comprehensive, high-level AI Agent that integrates all framework components.
-    
+
     This Agent class provides:
     - Complete model abstraction through Model/Provider/Profile system
     - Advanced tool handling with ToolManager and Orchestrator
@@ -4831,3 +4831,7 @@ class Agent(BaseAgent):
         if return_output:
             return result
         return result.output if hasattr(result, 'output') else result
+
+
+
+Clanker = Agent

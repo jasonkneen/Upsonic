@@ -5,7 +5,7 @@ This module provides agent classes for executing tasks and managing AI interacti
 from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
-    from .agent import Agent
+    from .agent import Agent, Clanker
     from .base import BaseAgent
     from .deepagent import DeepAgent
     from .autonomous_agent import (
@@ -53,11 +53,12 @@ if TYPE_CHECKING:
     )
 def _get_agent_classes():
     """Lazy import of agent classes."""
-    from .agent import Agent
+    from .agent import Agent, Clanker
     from .base import BaseAgent
     from .deepagent import DeepAgent
-    
+
     return {
+        'Clanker': Clanker,
         'Agent': Agent,
         'BaseAgent': BaseAgent,
         'DeepAgent': DeepAgent,
@@ -180,6 +181,7 @@ def __getattr__(name: str) -> Any:
     )
 __all__ = [
     # Agent classes
+    'Clanker',
     'Agent',
     'BaseAgent',
     'DeepAgent',
