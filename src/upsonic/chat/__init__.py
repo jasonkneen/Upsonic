@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from .chat import Chat
+    from .chat import Chat, InvokeResult
     from .message import ChatMessage, ChatAttachment
     from .session_manager import SessionManager, SessionState, SessionMetrics
     from .cost_calculator import CostTracker, format_cost, format_tokens
@@ -23,13 +23,14 @@ if TYPE_CHECKING:
 
 def _get_chat_classes() -> dict:
     """Lazy import of chat classes."""
-    from .chat import Chat
+    from .chat import Chat, InvokeResult
     from .message import ChatMessage, ChatAttachment
     from .session_manager import SessionManager, SessionState, SessionMetrics
     from .cost_calculator import CostTracker, format_cost, format_tokens
     
     return {
         'Chat': Chat,
+        'InvokeResult': InvokeResult,
         'ChatMessage': ChatMessage,
         'ChatAttachment': ChatAttachment,
         'SessionManager': SessionManager,
@@ -55,6 +56,7 @@ def __getattr__(name: str) -> Any:
 
 __all__ = [
     "Chat",
+    "InvokeResult",
     "ChatMessage",
     "ChatAttachment",
     "SessionManager",

@@ -273,12 +273,16 @@ class TaskUsage(UsageBase):
     model_execution_time: Optional[float] = None
     """Total time spent in LLM API calls (model.request()), in seconds."""
 
+    tool_execution_time: Optional[float] = None
+    """Total time spent executing tools (external API calls, etc.), in seconds."""
+
     @property
     def upsonic_execution_time(self) -> Optional[float]:
-        """Framework overhead time = duration - model_execution_time, in seconds."""
+        """Framework overhead time = duration - model_execution_time - tool_execution_time, in seconds."""
         if self.duration is None or self.model_execution_time is None:
             return None
-        return self.duration - self.model_execution_time
+        tool_time = self.tool_execution_time or 0.0
+        return max(0.0, self.duration - self.model_execution_time - tool_time)
 
     cost: Optional[float] = None
     """Estimated cost of the run (provider-specific)."""
@@ -317,6 +321,12 @@ class TaskUsage(UsageBase):
                     self.model_execution_time = incr_usage.model_execution_time
                 else:
                     self.model_execution_time += incr_usage.model_execution_time
+
+            if incr_usage.tool_execution_time is not None:
+                if self.tool_execution_time is None:
+                    self.tool_execution_time = incr_usage.tool_execution_time
+                else:
+                    self.tool_execution_time += incr_usage.tool_execution_time
 
             if incr_usage.time_to_first_token is not None:
                 if self.time_to_first_token is None:
@@ -368,15 +378,23 @@ class TaskUsage(UsageBase):
         self.timer.start()
 
     def stop_timer(self, set_duration: bool = True) -> None:
-        """Stop the internal timer and optionally set duration.
+        """Stop the internal timer and optionally accumulate duration.
+
+        Additive: if ``duration`` already holds a value from a prior run
+        (e.g. an initial HITL run), the new elapsed time is **added** so
+        the total reflects processing time across all runs.
 
         Args:
-            set_duration: If True, set self.duration from timer.elapsed
+            set_duration: If True, accumulate timer.elapsed into self.duration.
         """
         if self.timer is not None:
             self.timer.stop()
             if set_duration:
-                self.duration = self.timer.elapsed
+                elapsed: float = self.timer.elapsed
+                if self.duration is not None:
+                    self.duration += elapsed
+                else:
+                    self.duration = elapsed
 
     def set_time_to_first_token(self) -> None:
         """Record the time to first token from timer's elapsed time."""
@@ -393,6 +411,17 @@ class TaskUsage(UsageBase):
             self.model_execution_time = elapsed
         else:
             self.model_execution_time += elapsed
+
+    def add_tool_execution_time(self, elapsed: float) -> None:
+        """Accumulate tool execution time.
+
+        Args:
+            elapsed: Time in seconds spent in a single tool execution.
+        """
+        if self.tool_execution_time is None:
+            self.tool_execution_time = elapsed
+        else:
+            self.tool_execution_time += elapsed
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization.
@@ -421,6 +450,8 @@ class TaskUsage(UsageBase):
             result["duration"] = self.duration
         if self.model_execution_time is not None:
             result["model_execution_time"] = self.model_execution_time
+        if self.tool_execution_time is not None:
+            result["tool_execution_time"] = self.tool_execution_time
         if self.upsonic_execution_time is not None:
             result["upsonic_execution_time"] = self.upsonic_execution_time
         if self.time_to_first_token is not None:
@@ -462,6 +493,7 @@ class TaskUsage(UsageBase):
             cost=data.get("cost"),
             duration=data.get("duration"),
             model_execution_time=data.get("model_execution_time"),
+            tool_execution_time=data.get("tool_execution_time"),
             time_to_first_token=data.get("time_to_first_token"),
             provider_metrics=data.get("provider_metrics"),
             additional_metrics=data.get("additional_metrics"),
@@ -508,12 +540,16 @@ class AgentUsage(UsageBase):
     model_execution_time: Optional[float] = None
     """Total time spent in LLM API calls across all tasks, in seconds."""
 
+    tool_execution_time: Optional[float] = None
+    """Total time spent executing tools across all tasks, in seconds."""
+
     @property
     def upsonic_execution_time(self) -> Optional[float]:
-        """Framework overhead time = duration - model_execution_time, in seconds."""
+        """Framework overhead time = duration - model_execution_time - tool_execution_time, in seconds."""
         if self.duration is None or self.model_execution_time is None:
             return None
-        return self.duration - self.model_execution_time
+        tool_time = self.tool_execution_time or 0.0
+        return max(0.0, self.duration - self.model_execution_time - tool_time)
 
     cost: Optional[float] = None
     """Total estimated cost across all tasks."""
@@ -546,6 +582,12 @@ class AgentUsage(UsageBase):
                     self.model_execution_time = incr_usage.model_execution_time
                 else:
                     self.model_execution_time += incr_usage.model_execution_time
+
+            if getattr(incr_usage, "tool_execution_time", None) is not None:
+                if self.tool_execution_time is None:
+                    self.tool_execution_time = incr_usage.tool_execution_time
+                else:
+                    self.tool_execution_time += incr_usage.tool_execution_time
 
             details = getattr(incr_usage, "details", None)
             if isinstance(details, dict) and details:
@@ -581,6 +623,8 @@ class AgentUsage(UsageBase):
             result["duration"] = self.duration
         if self.model_execution_time is not None:
             result["model_execution_time"] = self.model_execution_time
+        if self.tool_execution_time is not None:
+            result["tool_execution_time"] = self.tool_execution_time
         if self.upsonic_execution_time is not None:
             result["upsonic_execution_time"] = self.upsonic_execution_time
 
@@ -616,6 +660,7 @@ class AgentUsage(UsageBase):
             cost=data.get("cost"),
             duration=data.get("duration"),
             model_execution_time=data.get("model_execution_time"),
+            tool_execution_time=data.get("tool_execution_time"),
         )
 
 

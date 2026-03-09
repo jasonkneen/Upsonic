@@ -232,11 +232,11 @@ class SlackInterface(Interface):
             
             # If thread_ts is None, post directly to channel
             if thread_ts:
-                self.slack_tools.send_message_thread(
+                await self.slack_tools.asend_message_thread(
                     channel=channel, text=text_to_send, thread_ts=thread_ts
                 )
             else:
-                self.slack_tools.send_message(
+                await self.slack_tools.asend_message(
                     channel=channel, text=text_to_send
                 )
             return
@@ -250,11 +250,11 @@ class SlackInterface(Interface):
                 batch_message = "\n".join([f"_{line}_" for line in batch_message.split("\n")])
             
             if thread_ts:
-                self.slack_tools.send_message_thread(
+                await self.slack_tools.asend_message_thread(
                     channel=channel, text=batch_message, thread_ts=thread_ts
                 )
             else:
-                self.slack_tools.send_message(
+                await self.slack_tools.asend_message(
                     channel=channel, text=batch_message
                 )
 
@@ -288,11 +288,11 @@ class SlackInterface(Interface):
 
             if message_ts is None:
                 if thread_ts:
-                    response_str = self.slack_tools.send_message_thread(
+                    response_str = await self.slack_tools.asend_message_thread(
                         channel=channel, text=accumulated_text, thread_ts=thread_ts
                     )
                 else:
-                    response_str = self.slack_tools.send_message(
+                    response_str = await self.slack_tools.asend_message(
                         channel=channel, text=accumulated_text
                     )
                 try:
@@ -303,14 +303,20 @@ class SlackInterface(Interface):
                 last_update_time = now
             elif now - last_update_time >= update_interval:
                 if message_ts:
-                    self.slack_tools.update_message(
-                        channel=channel, ts=message_ts, text=accumulated_text
+                    await asyncio.to_thread(
+                        self.slack_tools.update_message,
+                        channel=channel,
+                        ts=message_ts,
+                        text=accumulated_text,
                     )
                 last_update_time = now
 
         if message_ts and accumulated_text:
-            self.slack_tools.update_message(
-                channel=channel, ts=message_ts, text=accumulated_text
+            await asyncio.to_thread(
+                self.slack_tools.update_message,
+                channel=channel,
+                ts=message_ts,
+                text=accumulated_text,
             )
         elif not message_ts and accumulated_text:
             await self._send_slack_message(

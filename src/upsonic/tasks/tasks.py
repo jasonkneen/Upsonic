@@ -399,6 +399,12 @@ class Task(BaseModel):
         return None
 
     @property
+    def tool_execution_time(self) -> Optional[float]:
+        if self._usage is not None:
+            return self._usage.tool_execution_time
+        return None
+
+    @property
     def upsonic_execution_time(self) -> Optional[float]:
         if self._usage is not None:
             return self._usage.upsonic_execution_time
@@ -1040,6 +1046,7 @@ class Task(BaseModel):
             } if self.registered_task_tools else {}
             result["task_builtin_tools"] = [Task._pickle(t) for t in self.task_builtin_tools] if self.task_builtin_tools else []
             result["guardrail"] = Task._pickle(self.guardrail)
+            result["_tool_manager"] = Task._pickle(self._tool_manager)
         else:
             # Convert types to JSON-serializable format when not using cloudpickle
             # response_format handling (type to dict)
@@ -1071,6 +1078,7 @@ class Task(BaseModel):
             result["registered_task_tools"] = None
             result["task_builtin_tools"] = None
             result["guardrail"] = None
+            result["_tool_manager"] = None
         
         # Handle agent, cache_embedding_provider, _cache_manager
         # These should NOT be serialized - include as-is when not serializing
@@ -1236,6 +1244,13 @@ class Task(BaseModel):
             else:
                 task.task_builtin_tools = task_builtin_tools
         
+        tool_manager = data.get("_tool_manager")
+        if tool_manager is not None:
+            if deserialize_flag:
+                task._tool_manager = Task._unpickle(tool_manager)
+            else:
+                task._tool_manager = tool_manager
+
         # Restore simple private fields
         if data.get("_response") is not None:
             task._response = data["_response"]
@@ -1257,7 +1272,7 @@ class Task(BaseModel):
             task._anonymization_map = data["_anonymization_map"]
         
         usage_data: Optional[Dict[str, Any]] = data.get("_usage")
-        if usage_data is not None:
+        if usage_data is not None and isinstance(usage_data, dict):
             from upsonic.usage import TaskUsage
             task._usage = TaskUsage.from_dict(usage_data)
         

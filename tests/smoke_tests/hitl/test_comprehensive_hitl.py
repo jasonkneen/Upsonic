@@ -1,8 +1,9 @@
 """
 Comprehensive HITL Test - Full Attribute and Content Verification
 
-Tests External Tool, Cancel Run, and Durable Execution with comprehensive
-verification of all attributes in:
+Tests External Tool, Cancel Run, Durable Execution, User Confirmation,
+User Input, and Dynamic User Input with comprehensive verification of
+all attributes in:
 - AgentSession
 - AgentRunOutput
 - RunRequirement
@@ -19,6 +20,7 @@ import time
 from typing import Any, Dict, List
 from upsonic import Agent, Task
 from upsonic.tools import tool
+from upsonic.tools.user_input import UserControlFlowTools
 from upsonic.run.base import RunStatus
 from upsonic.run.cancel import cancel_run
 from upsonic.db.database import SqliteDatabase
@@ -62,6 +64,80 @@ def long_running_task(seconds: int) -> str:
 def simple_math(a: int, b: int) -> int:
     """Perform simple math addition."""
     return a + b
+
+
+# --- Confirmation tools ---
+
+@tool(requires_confirmation=True)
+def sensitive_operation(data: str) -> str:
+    """Perform a sensitive operation that requires user confirmation."""
+    return f"Sensitive operation completed on: {data}"
+
+
+@tool(requires_confirmation=True)
+def delete_records(table: str, condition: str) -> str:
+    """Delete records from a database table - requires user confirmation."""
+    return f"Deleted records from {table} where {condition}"
+
+
+@tool(requires_confirmation=True)
+def deploy_to_production(version: str, environment: str) -> str:
+    """Deploy application to production - requires user confirmation."""
+    return f"Deployed version {version} to {environment}"
+
+
+# --- User input tools ---
+
+@tool(requires_user_input=True, user_input_fields=["to_address"])
+def send_email_with_input(subject: str, body: str, to_address: str) -> str:
+    """Send an email. Agent provides subject/body, user provides address."""
+    return f"Email sent to {to_address} with subject '{subject}' and body '{body}'"
+
+
+@tool(requires_user_input=True, user_input_fields=["priority", "assignee"])
+def create_ticket(title: str, description: str, priority: str, assignee: str) -> str:
+    """Create a support ticket. Agent provides title/description, user provides priority/assignee."""
+    return f"Ticket '{title}' created with priority={priority}, assignee={assignee}"
+
+
+@tool(requires_user_input=True, user_input_fields=["date", "attendees"])
+def schedule_meeting(topic: str, date: str, attendees: str) -> str:
+    """Schedule a meeting. Agent provides topic, user provides date and attendees."""
+    return f"Meeting '{topic}' scheduled for {date} with attendees: {attendees}"
+
+
+# --- Dynamic user input tools (regular tools, agent uses UserControlFlowTools) ---
+
+@tool
+def dynamic_send_email(subject: str, body: str, to_address: str) -> str:
+    """Send an email to the given address."""
+    return f"Email sent to {to_address} with subject '{subject}' and body '{body}'"
+
+
+# --- User input helpers ---
+
+_USER_INPUT_VALUES: Dict[str, str] = {
+    "to_address": "user@example.com",
+    "priority": "high",
+    "assignee": "john.doe",
+    "date": "2026-04-01",
+    "attendees": "alice, bob, charlie",
+    "subject": "Dynamic Subject",
+    "body": "Dynamic body content",
+    "recipient": "recipient@example.com",
+    "email_address": "dynamic@example.com",
+}
+
+
+def _fill_user_input(requirement) -> None:
+    """Fill all user input fields on a requirement with predefined values."""
+    if not requirement.user_input_schema:
+        return
+    for field_dict in requirement.user_input_schema:
+        if isinstance(field_dict, dict) and field_dict.get("value") is None:
+            name = field_dict["name"]
+            field_dict["value"] = _USER_INPUT_VALUES.get(name, f"test_{name}")
+    requirement.tool_execution.answered = True
 
 
 def execute_tool_externally(requirement: RunRequirement) -> str:
@@ -2115,22 +2191,1026 @@ async def test_message_build_step_boundary():
 
 
 # =============================================================================
+# TEST: USER CONFIRMATION - APPROVE
+# =============================================================================
+
+@pytest.mark.asyncio
+async def test_confirmation_approve_comprehensive():
+    """Comprehensive User Confirmation (approve) test with full attribute verification."""
+    print("\n" + "="*80)
+    print("TEST: User Confirmation Approve - Full Attribute Verification")
+    print("="*80)
+
+    cleanup()
+
+    db = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user", full_session_memory=True)
+    agent1 = Agent("openai/gpt-4o-mini", name="agent1", db=db, debug=DEBUG)
+    task = Task(
+        description="Perform a sensitive operation on the data 'user_records_2024'.",
+        tools=[sensitive_operation]
+    )
+
+    # =========================================================================
+    # STEP 1: Initial run - should pause for confirmation
+    # =========================================================================
+    print("\n[STEP 1] Running do_async (expecting confirmation pause)...")
+    output = await agent1.do_async(task, return_output=True)
+    run_id = output.run_id
+
+    verify_agent_run_output(
+        output, "After Confirmation Pause",
+        expected_status=RunStatus.paused,
+        expected_run_id=run_id,
+        min_step_results=5,
+        min_requirements=1
+    )
+
+    assert output.is_paused, f"Expected paused, got {output.status}"
+    assert output.pause_reason == "confirmation", f"Expected confirmation pause, got {output.pause_reason}"
+    assert len(output.active_requirements) == 1, "Should have 1 active requirement"
+
+    req = output.active_requirements[0]
+    verify_run_requirement(
+        req, "Confirmation Requirement",
+        expected_resolved=False,
+        expected_tool_name="sensitive_operation"
+    )
+    assert req.needs_confirmation, "Requirement should need confirmation"
+
+    print("\n[STEP 1] PASSED")
+
+    # =========================================================================
+    # STEP 2: Verify storage after pause
+    # =========================================================================
+    print("\n[STEP 2] Verifying storage after confirmation pause...")
+
+    session = db.storage.get_session(session_id="test_session")
+    verify_agent_session(session, "After Confirmation Pause", expected_run_id=run_id, expected_run_count=1)
+
+    stored_output = session.runs[run_id].output
+    verify_agent_run_output(
+        stored_output, "Stored After Confirmation Pause",
+        expected_status=RunStatus.paused,
+        expected_run_id=run_id
+    )
+
+    compare_outputs(output, stored_output, "In-Memory vs Stored (Confirmation Pause)")
+    verify_session_messages_consistency(session, stored_output, "After Confirmation Pause - Storage")
+
+    print("\n[STEP 2] PASSED")
+
+    # =========================================================================
+    # STEP 3: Confirm the requirement
+    # =========================================================================
+    print("\n[STEP 3] Confirming the requirement...")
+
+    req.confirm()
+    assert req.is_resolved, "Requirement should be resolved after confirm"
+
+    print("\n[STEP 3] PASSED")
+
+    # =========================================================================
+    # STEP 4: Resume with NEW agent
+    # =========================================================================
+    print("\n[STEP 4] Resuming with new agent...")
+
+    db2 = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user", full_session_memory=True)
+    agent2 = Agent("openai/gpt-4o-mini", name="agent2", db=db2, debug=DEBUG)
+
+    result = await agent2.continue_run_async(
+        run_id=run_id,
+        return_output=True,
+        requirements=output.requirements
+    )
+
+    verify_agent_run_output(
+        result, "After Confirmation Completion",
+        expected_status=RunStatus.completed,
+        expected_run_id=run_id,
+        min_step_results=10
+    )
+
+    assert result.output is not None, "Output content should exist"
+    assert result.is_complete, f"Expected complete, got {result.status}"
+
+    print(f"  Result content: {result.output}")
+    print("\n[STEP 4] PASSED")
+
+    # =========================================================================
+    # STEP 5: Verify final storage
+    # =========================================================================
+    print("\n[STEP 5] Verifying final storage...")
+
+    before_session = session
+    before_output = stored_output
+
+    final_session = db2.storage.get_session(session_id="test_session")
+    verify_agent_session(final_session, "Final Confirmation", expected_run_id=run_id)
+
+    final_output = final_session.runs[run_id].output
+    verify_agent_run_output(
+        final_output, "Final Stored Confirmation",
+        expected_status=RunStatus.completed,
+        expected_run_id=run_id
+    )
+
+    verify_storage_consistency(
+        before_session, final_session,
+        before_output, final_output,
+        "Confirmation - Pause to Completion"
+    )
+    verify_session_messages_consistency(final_session, final_output, "Confirmation Final - Storage")
+
+    print("\n[STEP 5] PASSED")
+
+    cleanup()
+    print("\n" + "="*80)
+    print("ALL TESTS PASSED: User Confirmation Approve - Full Attribute Verification")
+    print("="*80)
+
+
+# =============================================================================
+# TEST: USER CONFIRMATION - REJECT
+# =============================================================================
+
+@pytest.mark.asyncio
+async def test_confirmation_reject_comprehensive():
+    """Comprehensive User Confirmation (reject) test with full attribute verification."""
+    print("\n" + "="*80)
+    print("TEST: User Confirmation Reject - Full Attribute Verification")
+    print("="*80)
+
+    cleanup()
+
+    db = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user", full_session_memory=True)
+    agent1 = Agent("openai/gpt-4o-mini", name="agent1", db=db, debug=DEBUG)
+    task = Task(
+        description="Perform a sensitive operation on the data 'user_records_2024'.",
+        tools=[sensitive_operation]
+    )
+
+    # =========================================================================
+    # STEP 1: Initial run - should pause for confirmation
+    # =========================================================================
+    print("\n[STEP 1] Running do_async (expecting confirmation pause)...")
+    output = await agent1.do_async(task, return_output=True)
+    run_id = output.run_id
+
+    assert output.is_paused, f"Expected paused, got {output.status}"
+    assert output.pause_reason == "confirmation"
+    assert len(output.active_requirements) >= 1
+
+    req = output.active_requirements[0]
+    assert req.needs_confirmation, "Should need confirmation"
+
+    print("\n[STEP 1] PASSED")
+
+    # =========================================================================
+    # STEP 2: Reject the requirement
+    # =========================================================================
+    print("\n[STEP 2] Rejecting the requirement...")
+
+    req.reject(note="Not authorized to run this operation")
+    assert req.is_resolved, "Requirement should be resolved after reject"
+
+    print("\n[STEP 2] PASSED")
+
+    # =========================================================================
+    # STEP 3: Resume - agent should complete without executing the tool
+    # =========================================================================
+    print("\n[STEP 3] Resuming after rejection...")
+
+    result = await agent1.continue_run_async(
+        run_id=run_id,
+        return_output=True
+    )
+
+    verify_agent_run_output(
+        result, "After Rejection Completion",
+        expected_status=RunStatus.completed,
+        expected_run_id=run_id,
+        min_step_results=10
+    )
+
+    assert result.is_complete, f"Expected complete, got {result.status}"
+
+    print(f"  Result content: {result.output}")
+    print("\n[STEP 3] PASSED")
+
+    # =========================================================================
+    # STEP 4: Verify final storage
+    # =========================================================================
+    print("\n[STEP 4] Verifying final storage...")
+
+    final_session = db.storage.get_session(session_id="test_session")
+    verify_agent_session(final_session, "Final Rejection", expected_run_id=run_id)
+
+    final_output = final_session.runs[run_id].output
+    verify_agent_run_output(
+        final_output, "Final Stored Rejection",
+        expected_status=RunStatus.completed,
+        expected_run_id=run_id
+    )
+
+    verify_session_messages_consistency(final_session, final_output, "Rejection Final - Storage")
+
+    print("\n[STEP 4] PASSED")
+
+    cleanup()
+    print("\n" + "="*80)
+    print("ALL TESTS PASSED: User Confirmation Reject - Full Attribute Verification")
+    print("="*80)
+
+
+# =============================================================================
+# TEST: USER CONFIRMATION - CROSS-PROCESS
+# =============================================================================
+
+@pytest.mark.asyncio
+async def test_confirmation_cross_process_comprehensive():
+    """Cross-process confirmation with new agent and full verification."""
+    print("\n" + "="*80)
+    print("TEST: User Confirmation Cross-Process - Full Verification")
+    print("="*80)
+
+    cleanup()
+
+    db = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user", full_session_memory=True)
+    agent1 = Agent("openai/gpt-4o-mini", name="agent1", db=db, debug=DEBUG)
+    task = Task(
+        description="Perform a sensitive operation on the data 'audit_logs'.",
+        tools=[sensitive_operation]
+    )
+
+    # =========================================================================
+    # STEP 1: Initial run pauses for confirmation
+    # =========================================================================
+    print("\n[STEP 1] Running with agent1 (expecting confirmation pause)...")
+    output = await agent1.do_async(task, return_output=True)
+    run_id = output.run_id
+
+    assert output.is_paused, f"Expected paused, got {output.status}"
+    assert output.pause_reason == "confirmation"
+
+    print(f"  Run ID: {run_id}")
+    print("\n[STEP 1] PASSED")
+
+    # =========================================================================
+    # STEP 2: Verify storage
+    # =========================================================================
+    print("\n[STEP 2] Verifying storage...")
+
+    session = db.storage.get_session(session_id="test_session")
+    stored_output = session.runs[run_id].output
+    verify_agent_run_output(stored_output, "Stored Confirmation Pause", expected_status=RunStatus.paused)
+    verify_session_messages_consistency(session, stored_output, "After Confirmation Pause - Storage")
+
+    print("\n[STEP 2] PASSED")
+
+    # =========================================================================
+    # STEP 3: Confirm and resume with NEW agent (cross-process)
+    # =========================================================================
+    print("\n[STEP 3] Confirming and resuming with NEW agent...")
+
+    for req in output.active_requirements:
+        if req.needs_confirmation:
+            req.confirm()
+
+    db2 = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user", full_session_memory=True)
+    agent2 = Agent("openai/gpt-4o-mini", name="agent2", db=db2, debug=DEBUG)
+
+    assert agent2.agent_id != agent1.agent_id, "Should be different agent"
+
+    result = await agent2.continue_run_async(
+        run_id=run_id,
+        requirements=output.requirements,
+        return_output=True
+    )
+
+    verify_agent_run_output(
+        result, "Completed by agent2",
+        expected_status=RunStatus.completed,
+        expected_run_id=run_id
+    )
+
+    print(f"  Result: {result.output}")
+    print("\n[STEP 3] PASSED")
+
+    # =========================================================================
+    # STEP 4: Verify cross-process consistency
+    # =========================================================================
+    print("\n[STEP 4] Verifying cross-process consistency...")
+
+    before_session = session
+    before_output = stored_output
+
+    final_session = db2.storage.get_session(session_id="test_session")
+    final_output = final_session.runs[run_id].output
+
+    compare_outputs(stored_output, final_output, "Cross-Process Confirmation Pause vs Completed")
+
+    verify_storage_consistency(
+        before_session, final_session,
+        before_output, final_output,
+        "Cross-Process Confirmation - Pause to Completion"
+    )
+    verify_session_messages_consistency(final_session, final_output, "Confirmation Cross-Process Final - Storage")
+
+    print("\n[STEP 4] PASSED")
+
+    cleanup()
+    print("\n" + "="*80)
+    print("ALL TESTS PASSED: User Confirmation Cross-Process")
+    print("="*80)
+
+
+# =============================================================================
+# TEST: USER CONFIRMATION - MULTIPLE TOOLS (LOOP)
+# =============================================================================
+
+@pytest.mark.asyncio
+async def test_confirmation_multiple_tools_comprehensive():
+    """Multiple confirmation tools using a while-loop with full verification."""
+    print("\n" + "="*80)
+    print("TEST: User Confirmation Multiple Tools - Full Verification")
+    print("="*80)
+
+    cleanup()
+
+    db = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user", full_session_memory=True)
+    agent = Agent("openai/gpt-4o-mini", name="agent1", db=db, debug=DEBUG)
+    task = Task(
+        description=(
+            "First, delete records from the 'users' table where status='inactive'. "
+            "Then deploy version '2.1.0' to the 'production' environment."
+        ),
+        tools=[delete_records, deploy_to_production]
+    )
+
+    # =========================================================================
+    # STEP 1: Run and loop through confirmations
+    # =========================================================================
+    print("\n[STEP 1] Running do_async (expecting multiple confirmation pauses)...")
+    output = await agent.do_async(task, return_output=True)
+    run_id = output.run_id
+
+    loop_count = 0
+    while output.active_requirements:
+        loop_count += 1
+        print(f"\n  --- Confirmation loop {loop_count} ---")
+        print(f"  Active requirements: {len(output.active_requirements)}")
+
+        assert output.is_paused, f"Expected paused in loop {loop_count}, got {output.status}"
+        assert output.pause_reason == "confirmation", f"Expected confirmation pause in loop {loop_count}"
+
+        for req in output.active_requirements:
+            if req.needs_confirmation:
+                verify_run_requirement(req, f"Loop {loop_count} Requirement", expected_resolved=False)
+                req.confirm()
+                print(f"  Confirmed: {req.tool_execution.tool_name}")
+
+        output = await agent.continue_run_async(run_id=output.run_id, return_output=True)
+
+        if loop_count > 5:
+            assert False, "Too many confirmation loops - possible infinite loop"
+
+    print(f"\n  Total confirmation loops: {loop_count}")
+    assert loop_count >= 1, "Should have had at least 1 confirmation loop"
+
+    verify_agent_run_output(
+        output, "After All Confirmations",
+        expected_status=RunStatus.completed,
+        expected_run_id=run_id,
+        min_step_results=10
+    )
+
+    assert output.is_complete, f"Expected complete, got {output.status}"
+    print(f"  Result: {output.output}")
+    print("\n[STEP 1] PASSED")
+
+    # =========================================================================
+    # STEP 2: Verify final storage
+    # =========================================================================
+    print("\n[STEP 2] Verifying final storage...")
+
+    final_session = db.storage.get_session(session_id="test_session")
+    verify_agent_session(final_session, "Final Multi-Confirmation", expected_run_id=run_id)
+
+    final_output = final_session.runs[run_id].output
+    verify_agent_run_output(
+        final_output, "Final Stored Multi-Confirmation",
+        expected_status=RunStatus.completed,
+        expected_run_id=run_id
+    )
+
+    verify_session_messages_consistency(final_session, final_output, "Multi-Confirmation Final - Storage")
+
+    print("\n[STEP 2] PASSED")
+
+    cleanup()
+    print("\n" + "="*80)
+    print("ALL TESTS PASSED: User Confirmation Multiple Tools")
+    print("="*80)
+
+
+# =============================================================================
+# TEST: USER INPUT - COMPREHENSIVE
+# =============================================================================
+
+@pytest.mark.asyncio
+async def test_user_input_comprehensive():
+    """Comprehensive User Input test with full attribute verification."""
+    print("\n" + "="*80)
+    print("TEST: User Input - Full Attribute Verification")
+    print("="*80)
+
+    cleanup()
+
+    db = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user", full_session_memory=True)
+    agent1 = Agent("openai/gpt-4o-mini", name="agent1", db=db, debug=DEBUG)
+    task = Task(
+        description="Send an email with subject 'Hello' and body 'Hello, world!'.",
+        tools=[send_email_with_input]
+    )
+
+    # =========================================================================
+    # STEP 1: Initial run - should pause for user input
+    # =========================================================================
+    print("\n[STEP 1] Running do_async (expecting user input pause)...")
+    output = await agent1.do_async(task, return_output=True)
+    run_id = output.run_id
+
+    verify_agent_run_output(
+        output, "After User Input Pause",
+        expected_status=RunStatus.paused,
+        expected_run_id=run_id,
+        min_step_results=5,
+        min_requirements=1
+    )
+
+    assert output.is_paused, f"Expected paused, got {output.status}"
+    assert output.pause_reason == "user_input", f"Expected user_input pause, got {output.pause_reason}"
+    assert len(output.active_requirements) >= 1, "Should have at least 1 active requirement"
+
+    req = output.active_requirements[0]
+    verify_run_requirement(
+        req, "User Input Requirement",
+        expected_resolved=False,
+        expected_tool_name="send_email_with_input"
+    )
+    assert req.needs_user_input, "Requirement should need user input"
+    assert req.user_input_schema is not None, "Should have user_input_schema"
+
+    # Verify the schema has the expected fields
+    field_names = [f["name"] for f in req.user_input_schema if isinstance(f, dict)]
+    assert "to_address" in field_names, f"Schema should include 'to_address', got {field_names}"
+    print(f"  User input fields: {field_names}")
+
+    print("\n[STEP 1] PASSED")
+
+    # =========================================================================
+    # STEP 2: Verify storage after pause
+    # =========================================================================
+    print("\n[STEP 2] Verifying storage after user input pause...")
+
+    session = db.storage.get_session(session_id="test_session")
+    verify_agent_session(session, "After User Input Pause", expected_run_id=run_id, expected_run_count=1)
+
+    stored_output = session.runs[run_id].output
+    verify_agent_run_output(
+        stored_output, "Stored After User Input Pause",
+        expected_status=RunStatus.paused,
+        expected_run_id=run_id
+    )
+
+    compare_outputs(output, stored_output, "In-Memory vs Stored (User Input Pause)")
+    verify_session_messages_consistency(session, stored_output, "After User Input Pause - Storage")
+
+    print("\n[STEP 2] PASSED")
+
+    # =========================================================================
+    # STEP 3: Fill user input fields
+    # =========================================================================
+    print("\n[STEP 3] Filling user input fields...")
+
+    for r in output.active_requirements:
+        if r.needs_user_input:
+            _fill_user_input(r)
+
+    assert req.is_resolved, "Requirement should be resolved after filling input"
+    print(f"  Filled values for requirement")
+
+    print("\n[STEP 3] PASSED")
+
+    # =========================================================================
+    # STEP 4: Resume with NEW agent
+    # =========================================================================
+    print("\n[STEP 4] Resuming with new agent...")
+
+    db2 = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user", full_session_memory=True)
+    agent2 = Agent("openai/gpt-4o-mini", name="agent2", db=db2, debug=DEBUG)
+
+    result = await agent2.continue_run_async(
+        run_id=run_id,
+        return_output=True,
+        requirements=output.requirements
+    )
+
+    verify_agent_run_output(
+        result, "After User Input Completion",
+        expected_status=RunStatus.completed,
+        expected_run_id=run_id,
+        min_step_results=10
+    )
+
+    assert result.output is not None, "Output content should exist"
+    assert result.is_complete, f"Expected complete, got {result.status}"
+
+    print(f"  Result content: {result.output}")
+    print("\n[STEP 4] PASSED")
+
+    # =========================================================================
+    # STEP 5: Verify final storage
+    # =========================================================================
+    print("\n[STEP 5] Verifying final storage...")
+
+    before_session = session
+    before_output = stored_output
+
+    final_session = db2.storage.get_session(session_id="test_session")
+    verify_agent_session(final_session, "Final User Input", expected_run_id=run_id)
+
+    final_output = final_session.runs[run_id].output
+    verify_agent_run_output(
+        final_output, "Final Stored User Input",
+        expected_status=RunStatus.completed,
+        expected_run_id=run_id
+    )
+
+    verify_storage_consistency(
+        before_session, final_session,
+        before_output, final_output,
+        "User Input - Pause to Completion"
+    )
+    verify_session_messages_consistency(final_session, final_output, "User Input Final - Storage")
+
+    print("\n[STEP 5] PASSED")
+
+    cleanup()
+    print("\n" + "="*80)
+    print("ALL TESTS PASSED: User Input - Full Attribute Verification")
+    print("="*80)
+
+
+# =============================================================================
+# TEST: USER INPUT - CROSS-PROCESS
+# =============================================================================
+
+@pytest.mark.asyncio
+async def test_user_input_cross_process_comprehensive():
+    """Cross-process user input with new agent and full verification."""
+    print("\n" + "="*80)
+    print("TEST: User Input Cross-Process - Full Verification")
+    print("="*80)
+
+    cleanup()
+
+    db = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user", full_session_memory=True)
+    agent1 = Agent("openai/gpt-4o-mini", name="agent1", db=db, debug=DEBUG)
+    task = Task(
+        description="Send an email with subject 'Report' and body 'Monthly report attached'.",
+        tools=[send_email_with_input]
+    )
+
+    # =========================================================================
+    # STEP 1: Run with agent1 - pauses for user input
+    # =========================================================================
+    print("\n[STEP 1] Running with agent1 (expecting user input pause)...")
+    output = await agent1.do_async(task, return_output=True)
+    run_id = output.run_id
+
+    assert output.is_paused, f"Expected paused, got {output.status}"
+    assert output.pause_reason == "user_input"
+
+    print(f"  Run ID: {run_id}")
+    print("\n[STEP 1] PASSED")
+
+    # =========================================================================
+    # STEP 2: Verify storage
+    # =========================================================================
+    print("\n[STEP 2] Verifying storage...")
+
+    session = db.storage.get_session(session_id="test_session")
+    stored_output = session.runs[run_id].output
+    verify_agent_run_output(stored_output, "Stored User Input Pause", expected_status=RunStatus.paused)
+    verify_session_messages_consistency(session, stored_output, "After User Input Pause - Storage")
+
+    print("\n[STEP 2] PASSED")
+
+    # =========================================================================
+    # STEP 3: Fill input and resume with NEW agent
+    # =========================================================================
+    print("\n[STEP 3] Filling input and resuming with NEW agent...")
+
+    for req in output.active_requirements:
+        if req.needs_user_input:
+            _fill_user_input(req)
+
+    db2 = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user", full_session_memory=True)
+    agent2 = Agent("openai/gpt-4o-mini", name="agent2", db=db2, debug=DEBUG)
+
+    assert agent2.agent_id != agent1.agent_id, "Should be different agent"
+
+    result = await agent2.continue_run_async(
+        run_id=run_id,
+        requirements=output.requirements,
+        return_output=True
+    )
+
+    verify_agent_run_output(
+        result, "Completed by agent2",
+        expected_status=RunStatus.completed,
+        expected_run_id=run_id
+    )
+
+    print(f"  Result: {result.output}")
+    print("\n[STEP 3] PASSED")
+
+    # =========================================================================
+    # STEP 4: Verify cross-process consistency
+    # =========================================================================
+    print("\n[STEP 4] Verifying cross-process consistency...")
+
+    before_session = session
+    before_output = stored_output
+
+    final_session = db2.storage.get_session(session_id="test_session")
+    final_output = final_session.runs[run_id].output
+
+    compare_outputs(stored_output, final_output, "Cross-Process User Input Pause vs Completed")
+
+    verify_storage_consistency(
+        before_session, final_session,
+        before_output, final_output,
+        "Cross-Process User Input - Pause to Completion"
+    )
+    verify_session_messages_consistency(final_session, final_output, "User Input Cross-Process Final - Storage")
+
+    print("\n[STEP 4] PASSED")
+
+    cleanup()
+    print("\n" + "="*80)
+    print("ALL TESTS PASSED: User Input Cross-Process")
+    print("="*80)
+
+
+# =============================================================================
+# TEST: USER INPUT - MULTIPLE TOOLS (LOOP)
+# =============================================================================
+
+@pytest.mark.asyncio
+async def test_user_input_multiple_tools_comprehensive():
+    """Multiple user input tools using a while-loop with full verification."""
+    print("\n" + "="*80)
+    print("TEST: User Input Multiple Tools - Full Verification")
+    print("="*80)
+
+    cleanup()
+
+    db = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user", full_session_memory=True)
+    agent = Agent("openai/gpt-4o-mini", name="agent1", db=db, debug=DEBUG)
+    task = Task(
+        description=(
+            "First, create a support ticket titled 'Bug Report' with description 'App crashes on login'. "
+            "Then schedule a meeting about 'Bug Triage'."
+        ),
+        tools=[create_ticket, schedule_meeting]
+    )
+
+    # =========================================================================
+    # STEP 1: Run and loop through user input pauses
+    # =========================================================================
+    print("\n[STEP 1] Running do_async (expecting multiple user input pauses)...")
+    output = await agent.do_async(task, return_output=True)
+    run_id = output.run_id
+
+    loop_count = 0
+    while output.active_requirements:
+        loop_count += 1
+        print(f"\n  --- User input loop {loop_count} ---")
+        print(f"  Active requirements: {len(output.active_requirements)}")
+
+        assert output.is_paused, f"Expected paused in loop {loop_count}, got {output.status}"
+        assert output.pause_reason == "user_input", f"Expected user_input pause in loop {loop_count}"
+
+        for req in output.active_requirements:
+            if req.needs_user_input:
+                verify_run_requirement(req, f"Loop {loop_count} User Input Requirement", expected_resolved=False)
+                _fill_user_input(req)
+                print(f"  Filled input for: {req.tool_execution.tool_name}")
+
+        output = await agent.continue_run_async(run_id=output.run_id, return_output=True)
+
+        if loop_count > 5:
+            assert False, "Too many user input loops - possible infinite loop"
+
+    print(f"\n  Total user input loops: {loop_count}")
+    assert loop_count >= 1, "Should have had at least 1 user input loop"
+
+    verify_agent_run_output(
+        output, "After All User Inputs",
+        expected_status=RunStatus.completed,
+        expected_run_id=run_id,
+        min_step_results=10
+    )
+
+    assert output.is_complete, f"Expected complete, got {output.status}"
+    print(f"  Result: {output.output}")
+    print("\n[STEP 1] PASSED")
+
+    # =========================================================================
+    # STEP 2: Verify final storage
+    # =========================================================================
+    print("\n[STEP 2] Verifying final storage...")
+
+    final_session = db.storage.get_session(session_id="test_session")
+    verify_agent_session(final_session, "Final Multi-User-Input", expected_run_id=run_id)
+
+    final_output = final_session.runs[run_id].output
+    verify_agent_run_output(
+        final_output, "Final Stored Multi-User-Input",
+        expected_status=RunStatus.completed,
+        expected_run_id=run_id
+    )
+
+    verify_session_messages_consistency(final_session, final_output, "Multi-User-Input Final - Storage")
+
+    print("\n[STEP 2] PASSED")
+
+    cleanup()
+    print("\n" + "="*80)
+    print("ALL TESTS PASSED: User Input Multiple Tools")
+    print("="*80)
+
+
+# =============================================================================
+# TEST: DYNAMIC USER INPUT - COMPREHENSIVE
+# =============================================================================
+
+@pytest.mark.asyncio
+async def test_dynamic_user_input_comprehensive():
+    """Comprehensive Dynamic User Input test with full attribute verification."""
+    print("\n" + "="*80)
+    print("TEST: Dynamic User Input - Full Attribute Verification")
+    print("="*80)
+
+    cleanup()
+
+    db = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user", full_session_memory=True)
+    agent1 = Agent("openai/gpt-4o-mini", name="agent1", db=db, debug=DEBUG)
+    task = Task(
+        description="Send an email with the body 'What is the weather in Tokyo?'",
+        tools=[dynamic_send_email, UserControlFlowTools()]
+    )
+
+    # =========================================================================
+    # STEP 1: Initial run - should pause for dynamic user input
+    # =========================================================================
+    print("\n[STEP 1] Running do_async (expecting dynamic user input pause)...")
+    output = await agent1.do_async(task, return_output=True)
+    run_id = output.run_id
+
+    # The agent may or may not pause depending on whether it calls get_user_input
+    if output.is_paused and output.active_requirements:
+        print(f"  Paused with {len(output.active_requirements)} active requirements")
+        assert output.pause_reason == "user_input", f"Expected user_input pause, got {output.pause_reason}"
+
+        for req in output.active_requirements:
+            if req.needs_user_input:
+                assert req.user_input_schema is not None, "Should have user_input_schema"
+                field_names = [f["name"] for f in req.user_input_schema if isinstance(f, dict)]
+                print(f"  Dynamic input fields: {field_names}")
+    else:
+        # Agent completed without needing input - this is acceptable
+        print("  Agent completed without dynamic input pause")
+        assert output.is_complete, f"Expected complete or paused, got {output.status}"
+
+    print("\n[STEP 1] PASSED")
+
+    # =========================================================================
+    # STEP 2: Loop through dynamic input pauses
+    # =========================================================================
+    print("\n[STEP 2] Processing dynamic user input loop...")
+
+    loop_count = 0
+    while output.is_paused and output.active_requirements:
+        loop_count += 1
+        print(f"\n  --- Dynamic input loop {loop_count} ---")
+
+        # Verify storage at each pause
+        session = db.storage.get_session(session_id="test_session")
+        stored_output = session.runs[run_id].output
+        assert stored_output.status == RunStatus.paused, f"Stored should be paused, got {stored_output.status}"
+        verify_session_messages_consistency(session, stored_output, f"Dynamic Input Loop {loop_count} - Storage")
+
+        for req in output.active_requirements:
+            if req.needs_user_input:
+                _fill_user_input(req)
+                print(f"  Filled dynamic input for requirement")
+
+        output = await agent1.continue_run_async(run_id=output.run_id, return_output=True)
+
+        if loop_count > 5:
+            assert False, "Too many dynamic input loops - possible infinite loop"
+
+    print(f"\n  Total dynamic input loops: {loop_count}")
+
+    verify_agent_run_output(
+        output, "After Dynamic User Input",
+        expected_status=RunStatus.completed,
+        expected_run_id=run_id,
+        min_step_results=10
+    )
+
+    assert output.is_complete, f"Expected complete, got {output.status}"
+    print(f"  Result: {output.output}")
+
+    print("\n[STEP 2] PASSED")
+
+    # =========================================================================
+    # STEP 3: Verify final storage
+    # =========================================================================
+    print("\n[STEP 3] Verifying final storage...")
+
+    final_session = db.storage.get_session(session_id="test_session")
+    verify_agent_session(final_session, "Final Dynamic Input", expected_run_id=run_id)
+
+    final_output = final_session.runs[run_id].output
+    verify_agent_run_output(
+        final_output, "Final Stored Dynamic Input",
+        expected_status=RunStatus.completed,
+        expected_run_id=run_id
+    )
+
+    verify_session_messages_consistency(final_session, final_output, "Dynamic Input Final - Storage")
+
+    print("\n[STEP 3] PASSED")
+
+    cleanup()
+    print("\n" + "="*80)
+    print("ALL TESTS PASSED: Dynamic User Input - Full Attribute Verification")
+    print("="*80)
+
+
+# =============================================================================
+# TEST: DYNAMIC USER INPUT - CROSS-PROCESS
+# =============================================================================
+
+@pytest.mark.asyncio
+async def test_dynamic_user_input_cross_process_comprehensive():
+    """Cross-process dynamic user input with new agent and full verification."""
+    print("\n" + "="*80)
+    print("TEST: Dynamic User Input Cross-Process - Full Verification")
+    print("="*80)
+
+    cleanup()
+
+    db = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user", full_session_memory=True)
+    agent1 = Agent("openai/gpt-4o-mini", name="agent1", db=db, debug=DEBUG)
+    task = Task(
+        description="Send an email with the body 'What is the weather in Tokyo?'",
+        tools=[dynamic_send_email, UserControlFlowTools()]
+    )
+
+    # =========================================================================
+    # STEP 1: Run with agent1 - may pause for dynamic input
+    # =========================================================================
+    print("\n[STEP 1] Running with agent1...")
+    output = await agent1.do_async(task, return_output=True)
+    run_id = output.run_id
+
+    if not output.is_paused:
+        # Agent completed without input - verify and return
+        print("  Agent completed without dynamic input pause")
+        verify_agent_run_output(output, "Completed Without Pause", expected_status=RunStatus.completed)
+        cleanup()
+        print("\n" + "="*80)
+        print("ALL TESTS PASSED: Dynamic User Input Cross-Process (no pause needed)")
+        print("="*80)
+        return
+
+    assert output.pause_reason == "user_input"
+    print(f"  Run ID: {run_id}")
+    print("\n[STEP 1] PASSED")
+
+    # =========================================================================
+    # STEP 2: Verify storage
+    # =========================================================================
+    print("\n[STEP 2] Verifying storage...")
+
+    session = db.storage.get_session(session_id="test_session")
+    stored_output = session.runs[run_id].output
+    verify_agent_run_output(stored_output, "Stored Dynamic Input Pause", expected_status=RunStatus.paused)
+    verify_session_messages_consistency(session, stored_output, "After Dynamic Input Pause - Storage")
+
+    print("\n[STEP 2] PASSED")
+
+    # =========================================================================
+    # STEP 3: Fill input and resume with NEW agent, looping if needed
+    # =========================================================================
+    print("\n[STEP 3] Filling input and resuming with NEW agent...")
+
+    for req in output.active_requirements:
+        if req.needs_user_input:
+            _fill_user_input(req)
+
+    db2 = SqliteDatabase(db_file=DB_FILE, session_id="test_session", user_id="test_user", full_session_memory=True)
+    agent2 = Agent("openai/gpt-4o-mini", name="agent2", db=db2, debug=DEBUG)
+
+    result = await agent2.continue_run_async(
+        run_id=run_id,
+        requirements=output.requirements,
+        return_output=True
+    )
+
+    # May need more loops for dynamic input
+    loop_count = 0
+    while result.is_paused and result.active_requirements:
+        loop_count += 1
+        print(f"\n  --- Cross-process dynamic input loop {loop_count} ---")
+
+        for req in result.active_requirements:
+            if req.needs_user_input:
+                _fill_user_input(req)
+
+        result = await agent2.continue_run_async(
+            run_id=run_id,
+            return_output=True
+        )
+
+        if loop_count > 5:
+            assert False, "Too many loops"
+
+    verify_agent_run_output(
+        result, "Completed by agent2",
+        expected_status=RunStatus.completed,
+        expected_run_id=run_id
+    )
+
+    print(f"  Result: {result.output}")
+    print("\n[STEP 3] PASSED")
+
+    # =========================================================================
+    # STEP 4: Verify cross-process consistency
+    # =========================================================================
+    print("\n[STEP 4] Verifying cross-process consistency...")
+
+    before_session = session
+    before_output = stored_output
+
+    final_session = db2.storage.get_session(session_id="test_session")
+    final_output = final_session.runs[run_id].output
+
+    compare_outputs(stored_output, final_output, "Cross-Process Dynamic Input Pause vs Completed")
+
+    verify_storage_consistency(
+        before_session, final_session,
+        before_output, final_output,
+        "Cross-Process Dynamic Input - Pause to Completion"
+    )
+    verify_session_messages_consistency(final_session, final_output, "Dynamic Input Cross-Process Final - Storage")
+
+    print("\n[STEP 4] PASSED")
+
+    cleanup()
+    print("\n" + "="*80)
+    print("ALL TESTS PASSED: Dynamic User Input Cross-Process")
+    print("="*80)
+
+
+# =============================================================================
 # MAIN (for manual execution)
 # =============================================================================
 
 async def main():
     """Run all comprehensive tests manually."""
-    
     await test_external_tool_comprehensive()
     await test_cancel_run_comprehensive()
     await test_durable_execution_comprehensive()
     await test_durable_cross_process_comprehensive()
-    
-    # New early step tests
     await test_durable_execution_early_steps()
     await test_cancel_run_early_steps()
     await test_message_build_step_boundary()
-    
+    await test_confirmation_approve_comprehensive()
+    await test_confirmation_reject_comprehensive()
+    await test_confirmation_cross_process_comprehensive()
+    await test_confirmation_multiple_tools_comprehensive()
+    await test_user_input_comprehensive()
+    await test_user_input_cross_process_comprehensive()
+    await test_user_input_multiple_tools_comprehensive()
+    await test_dynamic_user_input_comprehensive()
+    await test_dynamic_user_input_cross_process_comprehensive()
+
     print("\n" + "="*80)
     print("ALL COMPREHENSIVE TESTS PASSED!")
     print("  - External Tool: PASSED")
@@ -2140,6 +3220,15 @@ async def main():
     print("  - Durable Execution Early Steps: PASSED")
     print("  - Cancel Run Early Steps: PASSED")
     print("  - MessageBuildStep Boundary: PASSED")
+    print("  - Confirmation Approve: PASSED")
+    print("  - Confirmation Reject: PASSED")
+    print("  - Confirmation Cross-Process: PASSED")
+    print("  - Confirmation Multiple Tools: PASSED")
+    print("  - User Input: PASSED")
+    print("  - User Input Cross-Process: PASSED")
+    print("  - User Input Multiple Tools: PASSED")
+    print("  - Dynamic User Input: PASSED")
+    print("  - Dynamic User Input Cross-Process: PASSED")
     print("="*80)
 
 

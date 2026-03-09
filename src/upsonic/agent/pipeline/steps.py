@@ -61,6 +61,7 @@ class InitializationStep(Step):
                 raise_if_cancelled(agent.run_id)
             
             task.task_start(agent)
+            context.usage = task._usage
             
             # Check print flag from context (thread-safe, set per-run)
             should_print = context.print_flag
@@ -70,9 +71,6 @@ class InitializationStep(Step):
 
             context.tool_call_count = 0
             agent.current_task = context.task
-            
-            # Start usage timer for tracking run duration
-            context.start_usage_timer()
             
             if context.is_streaming:
                 from upsonic.utils.agent.events import ayield_agent_initialized_event
@@ -975,7 +973,7 @@ class ModelExecutionStep(Step):
         """Execute model request with guardrail support and memory manager."""
         from upsonic.run.cancel import raise_if_cancelled
         from upsonic.exceptions import RunCancelledException
-        from upsonic.tools.processor import ExternalExecutionPause
+        from upsonic.tools.processor import ExternalExecutionPause, ConfirmationPause, UserInputPause
         
         start_time = time.time()
         step_result: Optional[StepResult] = None
@@ -1106,8 +1104,6 @@ class ModelExecutionStep(Step):
                     )
                     model_execution_time: float = time.time() - model_start_time
                     context.add_model_execution_time(model_execution_time)
-                    if task._usage is not None:
-                        task._usage.add_model_execution_time(model_execution_time)
                 finally:
                     await call_manager.afinalize()
                 
@@ -1180,12 +1176,18 @@ class ModelExecutionStep(Step):
             )
             return step_result
         
-        except ExternalExecutionPause as e:
+        except (ExternalExecutionPause, ConfirmationPause, UserInputPause) as e:
+            if isinstance(e, ConfirmationPause):
+                pause_msg = "Paused for user confirmation"
+            elif isinstance(e, UserInputPause):
+                pause_msg = "Paused for user input"
+            else:
+                pause_msg = "Paused for external tool execution"
             step_result = StepResult(
                 name=self.name,
                 step_number=step_number,
                 status=StepStatus.PAUSED,
-                message="Paused for external tool execution",
+                message=pause_msg,
                 execution_time=time.time() - start_time,
             )
             raise
@@ -1215,8 +1217,6 @@ class ModelExecutionStep(Step):
             if response is not None and hasattr(response, 'usage') and response.usage:
                 try:
                     context._ensure_usage().incr(response.usage)
-                    if task._usage is not None:
-                        task._usage.incr(response.usage)
                     
                     from upsonic.utils.usage import calculate_cost_from_usage
                     cost_value = calculate_cost_from_usage(response.usage, model)
@@ -1301,9 +1301,32 @@ class ResponseProcessingStep(Step):
                 if images:
                     context.images = images
             
-            # Note: Message finalization is deferred to MemorySaveStep
-            # This ensures all steps (including AgentPolicyStep feedback loop) 
-            # can add their messages to chat_history before we extract new messages
+            if task and hasattr(task, '_anonymization_map') and task._anonymization_map:
+                from upsonic.safety_engine.anonymization import deanonymize_content
+                
+                if context.output is not None:
+                    if isinstance(context.output, str):
+                        context.output = deanonymize_content(context.output, task._anonymization_map)
+                    elif hasattr(context.output, 'model_dump_json'):
+                        try:
+                            json_str = context.output.model_dump_json()
+                            deanonymized_json = deanonymize_content(json_str, task._anonymization_map)
+                            context.output = type(context.output).model_validate_json(deanonymized_json)
+                        except Exception:
+                            pass
+                
+                if hasattr(task, '_response') and task._response:
+                    if isinstance(task._response, str):
+                        task._response = deanonymize_content(task._response, task._anonymization_map)
+                
+                if agent.debug:
+                    from upsonic.utils.printing import debug_log
+                    debug_log(
+                        f"De-anonymized response using {len(task._anonymization_map)} mappings",
+                        "ResponseProcessingStep"
+                    )
+                
+                task._anonymization_map = None
             
             step_result = StepResult(
                 name=self.name,
@@ -1569,46 +1592,28 @@ class CallManagementStep(Step):
             if context.output is None and task:
                 context.output = task.response
             
-            # De-anonymize response BEFORE printing (if anonymization was applied)
-            # This ensures print_do shows original values, not anonymized ones
-            if task and hasattr(task, '_anonymization_map') and task._anonymization_map:
-                from upsonic.safety_engine.anonymization import deanonymize_content
-                
-                if context.output is not None:
-                    if isinstance(context.output, str):
-                        context.output = deanonymize_content(context.output, task._anonymization_map)
-                    elif hasattr(context.output, 'model_dump_json'):
-                        # For Pydantic models, de-anonymize the JSON representation
-                        try:
-                            import json
-                            json_str = context.output.model_dump_json()
-                            deanonymized_json = deanonymize_content(json_str, task._anonymization_map)
-                            context.output = type(context.output).model_validate_json(deanonymized_json)
-                        except Exception:
-                            pass  # If it fails, keep original output
-                
-                # Also de-anonymize task._response if set
-                if hasattr(task, '_response') and task._response:
-                    if isinstance(task._response, str):
-                        task._response = deanonymize_content(task._response, task._anonymization_map)
-                
-                if agent.debug:
-                    from upsonic.utils.printing import debug_log
-                    debug_log(
-                        f"De-anonymized response using {len(task._anonymization_map)} mappings",
-                        "CallManagementStep"
-                    )
-                
-                # Clear the map to prevent double de-anonymization in FinalizationStep
-                task._anonymization_map = None
+            _usage = getattr(task, '_usage', None)
+            _timer = getattr(_usage, 'timer', None) if _usage else None
+            if _timer is None or getattr(_timer, 'end_time', None) is None:
+                task.task_end()
             
-            # Retrieve CallManager from pipeline registry
+            # Retrieve CallManager from pipeline registry and delegate all printing
             if pipeline_manager:
                 call_manager = pipeline_manager.get_manager('call_manager')
-            
+
+            if call_manager is None and context:
+                from upsonic.agent.context_managers import CallManager
+                call_manager = CallManager(
+                    model,
+                    task,
+                    debug=agent.debug,
+                    print_output=context.print_flag,
+                    show_tool_calls=agent.show_tool_calls and context.print_flag,
+                )
+
             if call_manager:
                 await call_manager.alog_completion(context)
-                
+
                 if agent.debug and agent.debug_level >= 2:
                     from upsonic.utils.printing import debug_log_level2
                     from upsonic.utils.tool_usage import tool_usage
@@ -1624,7 +1629,7 @@ class CallManagementStep(Step):
                         usage = llm_usage(context) if context else None
 
                     tool_usage_result = tool_usage(context, task) if agent.show_tool_calls and context else None
-                    
+
                     debug_log_level2(
                         "Call management processed",
                         "CallManagementStep",
@@ -1638,39 +1643,6 @@ class CallManagementStep(Step):
                         response_format=str(task.response_format) if hasattr(task, 'response_format') and task.response_format else None,
                         total_cost=getattr(task, 'total_cost', None)
                     )
-            elif context and context.output is not None:
-                from upsonic.utils.printing import call_end
-                from upsonic.utils.tool_usage import tool_usage as get_tool_usage
-
-                task_usage = getattr(task, '_usage', None)
-                if task_usage is not None:
-                    usage: dict[str, int] = {
-                        "input_tokens": task_usage.input_tokens,
-                        "output_tokens": task_usage.output_tokens,
-                    }
-                else:
-                    from upsonic.utils.llm_usage import llm_usage
-                    usage = llm_usage(context)
-
-                tool_usage_result = get_tool_usage(context, task) if agent.show_tool_calls else None
-
-                context_end_time: float = time.time()
-                task_duration: float | None = getattr(task_usage, 'duration', None) if task_usage else None
-                context_start_time: float = (context_end_time - task_duration) if task_duration else context_end_time
-
-                call_end(
-                    context.output,
-                    model,
-                    task.response_format if hasattr(task, 'response_format') else str,
-                    context_start_time,
-                    context_end_time,
-                    usage,
-                    tool_usage_result,
-                    agent.debug,
-                    getattr(task, 'price_id', None),
-                    print_output=context.print_flag,
-                    show_tool_calls=agent.show_tool_calls and context.print_flag,
-                )
             
             step_result = StepResult(
                 name=self.name,
@@ -1805,9 +1777,6 @@ class MemorySaveStep(Step):
             # This extracts new messages from chat_history (using _run_boundaries)
             # and sets them to context.messages
             context.finalize_run_messages()
-            
-            # Stop usage timer and finalize run-level usage
-            context.stop_usage_timer()
             
             # Note: Session-level usage is updated in AgentSessionMemory.asave()
             # when the session is saved to storage
@@ -2268,13 +2237,9 @@ class AgentPolicyStep(Step):
         )
         _policy_model_elapsed: float = time.time() - _policy_model_start
         context.add_model_execution_time(_policy_model_elapsed)
-        if task._usage is not None:
-            task._usage.add_model_execution_time(_policy_model_elapsed)
         
         if hasattr(response, 'usage') and response.usage:
             context._ensure_usage().incr(response.usage)
-            if task._usage is not None:
-                task._usage.incr(response.usage)
             try:
                 from upsonic.utils.usage import calculate_cost_from_usage
                 cost_value: float = calculate_cost_from_usage(response.usage, model)
@@ -2668,8 +2633,6 @@ class StreamModelExecutionStep(Step):
                     yield agent_event
         _stream_model_elapsed: float = time.time() - _stream_model_start
         context.add_model_execution_time(_stream_model_elapsed)
-        if task._usage is not None:
-            task._usage.add_model_execution_time(_stream_model_elapsed)
         
         # Get the final response from the stream
         final_response = stream.get()
@@ -2681,8 +2644,6 @@ class StreamModelExecutionStep(Step):
         
         if hasattr(final_response, 'usage') and final_response.usage:
             context._ensure_usage().incr(final_response.usage)
-            if task._usage is not None:
-                task._usage.incr(final_response.usage)
             
             try:
                 from upsonic.utils.usage import calculate_cost_from_usage
@@ -2862,9 +2823,6 @@ class StreamMemoryMessageTrackingStep(Step):
             # and sets them to context.messages
             context.finalize_run_messages()
             
-            # Stop usage timer and finalize run-level usage
-            context.stop_usage_timer()
-            
             # Note: Session-level usage is updated in AgentSessionMemory.asave()
             # when the session is saved to storage
             
@@ -2982,7 +2940,8 @@ class StreamFinalizationStep(Step):
             if agent and hasattr(agent, 'run_id') and agent.run_id:
                 raise_if_cancelled(agent.run_id)
             
-            # Ensure final_output is set from task response if not already set
+            task.task_end()
+            
             if context.output is None and task:
                 context.output = task.response
             
@@ -2994,8 +2953,6 @@ class StreamFinalizationStep(Step):
                 output_type = 'blocked'
             elif context.output and not isinstance(context.output, str):
                 output_type = 'structured'
-            # End the task
-            task.task_end()
 
             if context.is_streaming:
                 output_preview = str(context.output)[:100] if context.output else None
@@ -3071,11 +3028,6 @@ class FinalizationStep(Step):
             if context.output is None and task:
                 context.output = task.response
             
-            # Note: De-anonymization is now handled in CallManagementStep (before print_do)
-            # to ensure printed output shows original values, not anonymized ones
-            
-            task.task_end()
-
             output_type = 'text'
             if hasattr(task, '_cached_result') and task._cached_result:
                 output_type = 'cached'
@@ -3097,15 +3049,6 @@ class FinalizationStep(Step):
                     total_duration=total_duration
                 ):
                     context.events.append(event)
-
-            if task and not task.not_main_task:
-                from upsonic.utils.printing import print_price_id_summary, price_id_summary
-                if task.price_id in price_id_summary:
-                    print_price_id_summary(
-                        task.price_id,
-                        task,
-                        print_output=context.print_flag,
-                    )
 
             try:
                 from upsonic.tools.mcp import MCPHandler, MultiMCPHandler

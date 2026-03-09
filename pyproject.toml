@@ -239,9 +239,13 @@ ocr = [
 ]
 
 custom-tools = [
+    "apify-client>=1.8.1",
     "firecrawl-py>=4.14.1",
     "slack-sdk>=3.38.0",
     "crawlee[beautifulsoup]>=1.4.0",
+]
+apify-tool = [
+    "apify-client>=1.8.1",
 ]
 crawlee-browser = [
     "crawlee[playwright]>=1.4.0",

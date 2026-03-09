@@ -6,7 +6,7 @@ from typing import Dict, Any
 
 from upsonic.tools.deferred import (
     DeferredExecutionManager,
-    ExternalToolCall,
+    PausedToolCall,
 )
 from upsonic.tools.base import ToolResult
 
@@ -27,7 +27,7 @@ class TestDeferredTools:
             tool_call_id="123",
         )
 
-        assert isinstance(external_call, ExternalToolCall)
+        assert isinstance(external_call, PausedToolCall)
         assert external_call.tool_name == "test_tool"
         assert external_call.tool_args == {"param": "value"}
         assert external_call.tool_call_id == "123"

@@ -294,8 +294,38 @@ class SystemPromptManager:
         if found_agent_context:
             agent_context_str += "\n</YourCharacter>"
             prompt_parts.append(agent_context_str)
+
+        tool_instructions = self._collect_tool_instructions()
+        if tool_instructions:
+            prompt_parts.append(tool_instructions)
+
         return "\n\n".join(prompt_parts)
-    
+
+    def _collect_tool_instructions(self) -> Optional[str]:
+        """Gather instructions from agent-level and task-level tool managers.
+
+        Returns:
+            A formatted string block of tool/toolkit instructions, or None.
+        """
+        all_instructions: List[str] = []
+
+        if hasattr(self.agent, "tool_manager") and self.agent.tool_manager is not None:
+            all_instructions.extend(self.agent.tool_manager.collect_instructions())
+
+        if self.task is not None and hasattr(self.task, "tool_manager") and self.task.tool_manager is not None:
+            for instr in self.task.tool_manager.collect_instructions():
+                if instr not in all_instructions:
+                    all_instructions.append(instr)
+
+        if not all_instructions:
+            return None
+
+        parts: List[str] = ["<ToolInstructions>"]
+        for instr in all_instructions:
+            parts.append(instr.strip())
+        parts.append("</ToolInstructions>")
+        return "\n\n".join(parts)
+
     def get_system_prompt(self) -> str:
         """
         Public getter to retrieve the constructed system prompt.

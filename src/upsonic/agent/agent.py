@@ -66,7 +66,7 @@ from upsonic.run.base import RunStatus
 
 from upsonic._utils import now_utc
 from upsonic.utils.retry import retryable
-from upsonic.tools.processor import ExternalExecutionPause
+from upsonic.tools.processor import ExternalExecutionPause, ConfirmationPause, UserInputPause
 from upsonic.run.cancel import register_run, cleanup_run, raise_if_cancelled, cancel_run as cancel_run_func, is_cancelled
 from upsonic.session.base import SessionType
 from upsonic.output import DEFAULT_OUTPUT_TOOL_NAME
@@ -82,6 +82,8 @@ if TYPE_CHECKING:
     from upsonic.reflection import ReflectionConfig
     from upsonic.safety_engine.base import Policy
     from upsonic.tools import ToolDefinition, ToolManager
+    from upsonic.run.tools.tools import ToolExecution
+    from upsonic.run.requirements import RunRequirement
     from upsonic.usage import RequestUsage, TaskUsage, AgentUsage
     from upsonic.agent.context_managers import (
         MemoryManager
@@ -92,7 +94,6 @@ if TYPE_CHECKING:
     from upsonic.models.model_selector import ModelRecommendation
     from upsonic.culture.culture import Culture
     from upsonic.culture.manager import CultureManager
-    from upsonic.run.requirements import RunRequirement
     from upsonic.session.agent import RunData
     from upsonic.models.instrumented import InstrumentationSettings
     from upsonic.integrations.tracing import TracingProvider
@@ -2008,7 +2009,10 @@ class Agent(BaseAgent):
                         tool_call_id=tool_call.tool_call_id
                     )
                     tool_execution_time = time.time() - tool_start_time
-                    
+
+                    if hasattr(self, '_agent_run_output') and self._agent_run_output:
+                        self._agent_run_output.add_tool_execution_time(tool_execution_time)
+
                     self._tool_call_count += 1
                     if hasattr(self, '_tool_metrics') and self._tool_metrics:
                         self._tool_metrics.tool_call_count = self._tool_call_count
@@ -2060,12 +2064,15 @@ class Agent(BaseAgent):
                             tool_sequential=tool_def.sequential if tool_def else False
                         )
                     
-                except ExternalExecutionPause as e:
+                except (ExternalExecutionPause, ConfirmationPause, UserInputPause) as e:
                     raise e
                 except Exception as e:
                     tool_execution_time = time.time() - tool_start_time
                     self._otel.set_tool_result(otel_tool_span, tool_execution_time, success=False, error=e)
-                    
+
+                    if hasattr(self, '_agent_run_output') and self._agent_run_output:
+                        self._agent_run_output.add_tool_execution_time(tool_execution_time)
+
                     error_return = ToolReturnPart(
                         tool_name=tool_call.tool_name,
                         content=f"Error executing tool: {str(e)}",
@@ -2145,7 +2152,10 @@ class Agent(BaseAgent):
                             tool_call_id=tool_call.tool_call_id
                         )
                         _tool_elapsed = _time.time() - _tool_start
-                        
+
+                        if hasattr(self, '_agent_run_output') and self._agent_run_output:
+                            self._agent_run_output.add_tool_execution_time(_tool_elapsed)
+
                         if hasattr(self, '_agent_run_output') and self._agent_run_output:
                             from upsonic.run.tools.tools import ToolExecution
                             tool_exec = ToolExecution(
@@ -2170,11 +2180,13 @@ class Agent(BaseAgent):
                             timestamp=now_utc()
                         )
                     
-                    except ExternalExecutionPause:
+                    except (ExternalExecutionPause, ConfirmationPause, UserInputPause):
                         raise
                     except Exception as e:
                         _tool_elapsed = _time.time() - _tool_start
                         self._otel.set_tool_result(otel_tool_span, _tool_elapsed, success=False, error=e)
+                        if hasattr(self, '_agent_run_output') and self._agent_run_output:
+                            self._agent_run_output.add_tool_execution_time(_tool_elapsed)
                         return ToolReturnPart(
                             tool_name=tool_call.tool_name,
                             content=f"Error executing tool: {str(e)}",
@@ -2185,19 +2197,24 @@ class Agent(BaseAgent):
             # Execute all tools in parallel, capturing exceptions
             parallel_results = await asyncio.gather(
                 *[execute_single_tool(tc) for tc in parallel_calls],
-                return_exceptions=True  # Capture ALL exceptions including ExternalExecutionPause
+                return_exceptions=True
             )
             
-            # Separate successful results from external execution pauses
+            # Separate successful results from HITL pauses
             external_pauses: List[ExternalExecutionPause] = []
+            confirmation_pauses: List[ConfirmationPause] = []
+            user_input_pauses: List[UserInputPause] = []
             successful_results: List["ToolReturnPart"] = []
             other_errors: List[Exception] = []
             
             for tc, result in zip(parallel_calls, parallel_results):
-                if isinstance(result, ExternalExecutionPause):
+                if isinstance(result, ConfirmationPause):
+                    confirmation_pauses.append(result)
+                elif isinstance(result, UserInputPause):
+                    user_input_pauses.append(result)
+                elif isinstance(result, ExternalExecutionPause):
                     external_pauses.append(result)
                 elif isinstance(result, Exception):
-                    # Other exceptions - convert to error result
                     other_errors.append(result)
                     successful_results.append(ToolReturnPart(
                         tool_name=tc.tool_name,
@@ -2208,17 +2225,29 @@ class Agent(BaseAgent):
                 else:
                     successful_results.append(result)
             
-            # If ANY tools need external execution, combine them into ONE exception
+            if confirmation_pauses:
+                all_calls = []
+                for pause in confirmation_pauses:
+                    if pause.paused_calls:
+                        all_calls.extend(pause.paused_calls)
+                raise ConfirmationPause(paused_calls=all_calls)
+
+            if user_input_pauses:
+                all_calls = []
+                all_schema = []
+                for pause in user_input_pauses:
+                    if pause.paused_calls:
+                        all_calls.extend(pause.paused_calls)
+                    if pause.user_input_schema:
+                        all_schema.extend(pause.user_input_schema)
+                raise UserInputPause(paused_calls=all_calls, user_input_schema=all_schema)
+
             if external_pauses:
-                # Collect all external_calls from all pauses (standardized on external_calls list)
-                all_external_calls = []
+                all_paused_calls = []
                 for pause in external_pauses:
-                    if pause.external_calls:
-                        all_external_calls.extend(pause.external_calls)
-                
-                # Raise a single exception with ALL external calls
-                combined_pause = ExternalExecutionPause(external_calls=all_external_calls)
-                raise combined_pause
+                    if pause.paused_calls:
+                        all_paused_calls.extend(pause.paused_calls)
+                raise ExternalExecutionPause(paused_calls=all_paused_calls)
             
             self._tool_call_count += len(parallel_calls)
             if hasattr(self, '_tool_metrics') and self._tool_metrics:
@@ -2336,13 +2365,6 @@ class Agent(BaseAgent):
             )
             _retry_model_elapsed: float = time.time() - _retry_model_start
             
-            _current_task = getattr(self, 'current_task', None)
-            if _current_task is not None and _current_task._usage is not None:
-                _current_task._usage.add_model_execution_time(_retry_model_elapsed)
-            
-            if _current_task is not None and _current_task._usage is not None and hasattr(retry_response, 'usage') and retry_response.usage:
-                _current_task._usage.incr(retry_response.usage)
-            
             if hasattr(self, '_agent_run_output') and self._agent_run_output:
                 self._agent_run_output.add_model_execution_time(_retry_model_elapsed)
                 if hasattr(retry_response, 'usage') and retry_response.usage:
@@ -2392,12 +2414,6 @@ class Agent(BaseAgent):
                     model_request_parameters=model_params
                 )
                 _limit_model_elapsed: float = time.time() - _limit_model_start
-                
-                _current_task = getattr(self, 'current_task', None)
-                if _current_task is not None and _current_task._usage is not None:
-                    _current_task._usage.add_model_execution_time(_limit_model_elapsed)
-                    if hasattr(final_response, 'usage') and final_response.usage:
-                        _current_task._usage.incr(final_response.usage)
                 
                 if hasattr(self, '_agent_run_output') and self._agent_run_output:
                     self._agent_run_output.add_model_execution_time(_limit_model_elapsed)
@@ -2471,12 +2487,6 @@ class Agent(BaseAgent):
                 model_request_parameters=model_params
             )
             _followup_model_elapsed: float = time.time() - _followup_model_start
-            
-            _current_task = getattr(self, 'current_task', None)
-            if _current_task is not None and _current_task._usage is not None:
-                _current_task._usage.add_model_execution_time(_followup_model_elapsed)
-                if hasattr(follow_up_response, 'usage') and follow_up_response.usage:
-                    _current_task._usage.incr(follow_up_response.usage)
             
             if hasattr(self, '_agent_run_output') and self._agent_run_output:
                 self._agent_run_output.add_model_execution_time(_followup_model_elapsed)
@@ -2779,11 +2789,6 @@ class Agent(BaseAgent):
                 model_request_parameters=model_params
             )
             _guardrail_model_elapsed: float = time.time() - _guardrail_model_start
-            
-            if task._usage is not None:
-                task._usage.add_model_execution_time(_guardrail_model_elapsed)
-                if hasattr(response, 'usage') and response.usage:
-                    task._usage.incr(response.usage)
             
             if hasattr(self, '_agent_run_output') and self._agent_run_output:
                 self._agent_run_output.add_model_execution_time(_guardrail_model_elapsed)
@@ -3485,6 +3490,11 @@ class Agent(BaseAgent):
         """Accumulate current run usage into agent-level usage and optionally print agent metrics.
         
         Should be called at the end of every do_async / astream execution.
+        Skips both accumulation AND printing when the task is paused (waiting
+        for HITL) because the TaskUsage object persists across rounds and
+        accumulates model_execution_time cumulatively.  Accumulating while
+        paused would double-count the initial round's metrics once the
+        continuation completes and accumulates the full cumulative TaskUsage.
         
         Args:
             print_flag: Whether printing is enabled for this execution.
@@ -3493,10 +3503,13 @@ class Agent(BaseAgent):
         if output is None:
             return
         
-        self._accumulate_run_usage(output.usage)
-        
         task = output.task
-        if print_flag and task and not getattr(task, 'not_main_task', False):
+        is_paused: bool = getattr(task, 'is_paused', False) if task else False
+        
+        if not is_paused:
+            self._accumulate_run_usage(output.usage)
+        
+        if print_flag and task and not getattr(task, 'not_main_task', False) and not is_paused:
             from upsonic.utils.printing import print_agent_metrics
             print_agent_metrics(self, print_output=print_flag)
 
@@ -4089,13 +4102,13 @@ class Agent(BaseAgent):
             ModelExecutionStep(),          # 8 <-- External tool resumes here
             ResponseProcessingStep(),      # 9 <-- Tracks messages to AgentRunOutput
             ReflectionStep(),              # 10
-            CallManagementStep(),          # 11 <-- Displays tool calls & usage
-            TaskManagementStep(),          # 12
-            ReliabilityStep(),             # 13
-            AgentPolicyStep(),             # 14
-            CacheStorageStep(),            # 15
-            FinalizationStep(),            # 16
-            MemorySaveStep(),              # 17 <-- LAST: Saves AgentSession to storage
+            TaskManagementStep(),          # 11
+            ReliabilityStep(),             # 12
+            AgentPolicyStep(),             # 13
+            CacheStorageStep(),            # 14
+            FinalizationStep(),            # 15
+            MemorySaveStep(),              # 16
+            CallManagementStep(),          # 17 <-- LAST: calls task_end() & prints metrics
         ]
     
     def _get_step_index_by_name(self, step_name: str, is_streaming: bool = False) -> int:
@@ -4176,53 +4189,174 @@ class Agent(BaseAgent):
         output: AgentRunOutput, 
         requirements: list
     ) -> None:
+        """Inject external tool results into output chat_history."""
+        await self._inject_hitl_results(output, requirements)
+
+    async def _inject_hitl_results(
+        self,
+        output: AgentRunOutput,
+        requirements: list,
+    ) -> None:
         """
-        Inject external tool results from ALL ToolExecutions into output chat_history.
-        
-        The chat_history is already preserved in output. We just need to add the 
-        response with tool calls (if there) and then the tool return parts.
-        
-        Also adds ToolExecution objects to output.tools for proper tool_usage tracking
-        so that call_end can display the tool calls table.
-        
-        Args:
-            output: The agent run output (single source of truth)
-            requirements: List of RunRequirements with ToolExecution containing results
+        Inject resolved HITL requirement results into output chat_history.
+
+        Handles external execution, confirmation, and user input requirements.
+        For confirmation (rejected), injects a rejection message.
+        For confirmation (approved) and user input, executes the tool and injects the result.
         """
         from upsonic.messages import ModelRequest, ToolReturnPart
         from upsonic._utils import now_utc
-        
+
         if not requirements:
             return
-        
-        # Add response with tool calls if present and not already in chat_history
+
         if output.response:
-            # Check if response is already the last message
             if not output.chat_history or output.chat_history[-1] != output.response:
                 output.chat_history.append(output.response)
-        
-        # Initialize output.tools if needed
+
         if output.tools is None:
             output.tools = []
-        
-        # Inject tool results for ALL requirements
-        tool_return_parts = []
+
+        tool_return_parts: list = []
         for requirement in requirements:
-            if requirement.tool_execution and requirement.tool_execution.result:
-                te = requirement.tool_execution
+            te = requirement.tool_execution
+            if not te:
+                continue
+            if te.result_injected:
+                continue
+
+            result_content: Optional[str] = None
+
+            # --- External execution: result already set by user ---
+            if te.external_execution_required and te.result is not None:
+                result_content = te.result
+
+            # --- Confirmation ---
+            elif te.requires_confirmation and requirement.confirmation is not None:
+                if requirement.confirmation:
+                    result_content = await self._execute_confirmed_tool(te)
+                else:
+                    note = requirement.confirmation_note or "Tool execution rejected by user."
+                    result_content = f"Tool execution rejected: {note}"
+
+            # --- User input ---
+            elif te.requires_user_input and te.answered:
+                result_content = await self._execute_user_input_tool(te, requirement)
+
+            if result_content is not None:
+                te.result = result_content
+                te.result_injected = True
                 tool_return_parts.append(ToolReturnPart(
                     tool_name=te.tool_name,
-                    content=te.result,
+                    content=result_content,
                     tool_call_id=te.tool_call_id,
-                    timestamp=now_utc()
+                    timestamp=now_utc(),
                 ))
                 output.tools.append(te)
-        
-        # Add all tool returns in a single ModelRequest
+                self._tool_call_count += 1
+                output.increment_tool_calls(1)
+
         if tool_return_parts:
             output.chat_history.append(ModelRequest(parts=tool_return_parts))
+
+    async def _execute_hitl_tool_directly(
+        self,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+    ) -> str:
+        """Execute a tool bypassing HITL checks (for confirmed/user-input-answered tools).
+        
+        Calls the underlying function directly to avoid re-triggering pause exceptions.
+        HITL pause exceptions are NOT caught — they propagate to the caller.
+        """
+        import asyncio
+        from upsonic.tools.processor import (
+            ExternalExecutionPause as _hitl_ExternalExecutionPause,
+            ConfirmationPause as _hitl_ConfirmationPause,
+            UserInputPause as _hitl_UserInputPause,
+        )
+
+        try:
+            manager = self._resolve_tool_manager(tool_name)
+        except ValueError:
+            return f"Error: Tool '{tool_name}' not found in any ToolManager"
+
+        tool_obj = manager.processor.registered_tools.get(tool_name)
+        if not tool_obj:
+            return f"Error: Tool '{tool_name}' not registered"
+
+        try:
+            if hasattr(tool_obj, 'function'):
+                func = tool_obj.function
+                if asyncio.iscoroutinefunction(func):
+                    result = await func(**tool_args)
+                else:
+                    loop = asyncio.get_running_loop()
+                    result = await loop.run_in_executor(None, lambda: func(**tool_args))
+            else:
+                result = await tool_obj.execute(**tool_args)
+            return str(result) if result is not None else ""
+        except (
+            _hitl_ExternalExecutionPause,
+            _hitl_ConfirmationPause,
+            _hitl_UserInputPause,
+            TypeError,
+        ):
+            raise
+        except Exception as exc:
+            return f"Error executing tool {tool_name}: {exc}"
+
+    async def _execute_confirmed_tool(
+        self,
+        te: "ToolExecution",
+    ) -> str:
+        """Execute a tool that was confirmed by the user."""
+        if not te.tool_name or te.tool_args is None:
+            return "Error: Missing tool name or arguments for confirmed tool"
+        return await self._execute_hitl_tool_directly(te.tool_name, te.tool_args)
+
+    async def _execute_user_input_tool(
+        self,
+        te: "ToolExecution",
+        requirement: "RunRequirement",
+    ) -> str:
+        """Execute a tool after user has provided input values.
+
+        For static user-input tools (``@tool(requires_user_input=True)``),
+        the underlying function is re-executed with the merged arguments
+        (agent-provided + user-provided).
+
+        For dynamic user-input tools (e.g. ``get_user_input`` from
+        ``UserControlFlowTools``), re-executing would raise ``UserInputPause``
+        again.  In that case the user's answers are formatted and returned
+        directly as the tool result so the agent can proceed.
+        """
+        if not te.tool_name:
+            return "Error: Missing tool name for user input tool"
+
+        merged_args: Dict[str, Any] = dict(te.tool_args or {})
+        user_provided: Dict[str, str] = {}
+        if requirement.user_input_schema:
+            for field_dict in requirement.user_input_schema:
+                if isinstance(field_dict, dict) and field_dict.get("value") is not None:
+                    user_provided[field_dict["name"]] = field_dict["value"]
+            merged_args.update(user_provided)
+
+        from upsonic.tools.processor import UserInputPause
+        try:
+            return await self._execute_hitl_tool_directly(te.tool_name, merged_args)
+        except (UserInputPause, TypeError):
+            return self._format_user_input_result(user_provided)
+
+    @staticmethod
+    def _format_user_input_result(user_provided: Dict[str, str]) -> str:
+        """Format user-provided field values into a tool-result string."""
+        if not user_provided:
+            return "User input received."
+        parts: list = [f"{k}: {v}" for k, v in user_provided.items()]
+        return "User provided input — " + ", ".join(parts)
     
-    # External execution support
+    # HITL continuation support
     
     def continue_run(
         self,
@@ -4236,7 +4370,7 @@ class Agent(BaseAgent):
         *,
         streaming: Optional[bool] = None,
         event: bool = False,
-        external_tool_executor: Optional[Callable[["RunRequirement"], str]] = None
+        hitl_handler: Optional[Callable[["RunRequirement"], None]] = None,
     ) -> Any:
         """
         Continue a paused agent run (synchronous wrapper).
@@ -4246,12 +4380,15 @@ class Agent(BaseAgent):
         
         Supports all HITL continuation scenarios:
         1. External tool execution: Pass task object with external results filled
-        2. Durable execution (error recovery): Pass run_id to load from storage
-        3. Cancel run resumption: Pass run_id to load from storage
+        2. User confirmation: Approve or reject tool calls
+        3. User input: Provide field values for tool calls
+        4. Durable execution (error recovery): Pass run_id to load from storage
+        5. Cancel run resumption: Pass run_id to load from storage
         
         Args:
-            task: Task object (for external tool execution with results)
+            task: Task object (for HITL continuation with results)
             run_id: Run ID to load from storage (for durable/cancel)
+            requirements: Resolved requirements from a previous pause
             model: Override model
             debug: Enable debug mode
             retry: Number of retries
@@ -4260,12 +4397,13 @@ class Agent(BaseAgent):
                       If None (default), auto-detect from original run.
             event: If True (with streaming), return list of AgentEvent objects.
                    If False (with streaming), return list of text chunks.
-                external tool resumption.
-            external_tool_executor: Optional function that executes external tools.
-                When provided, if the agent pauses again with NEW external tool requirements,
-                the executor is called automatically for each requirement.
-                Signature: (requirement: RunRequirement) -> str
-                This allows handling of sequential tool calls without a while loop.
+            hitl_handler: Unified HITL handler that resolves any paused requirement.
+                Called for each active RunRequirement when the agent pauses again.
+                The handler must mutate the requirement in-place:
+                - External execution: set requirement.tool_execution.result
+                - Confirmation: call requirement.confirm() or requirement.reject()
+                - User input: fill requirement.user_input_schema field values
+                Signature: (requirement: RunRequirement) -> None
             
         Returns:
             - For direct mode: Task content if return_output=False, AgentRunOutput if return_output=True
@@ -4275,33 +4413,36 @@ class Agent(BaseAgent):
             # Force direct mode
             result = agent.continue_run(run_id=result.run_id, streaming=False, return_output=True)
             
-            # With external tool executor (handles sequential tool calls automatically)
-            def my_executor(req):
-                return execute_my_tool(req.tool_execution.tool_args)
-            result = agent.continue_run(run_id=result.run_id, external_tool_executor=my_executor)
+            # With unified HITL handler
+            def my_handler(req):
+                if req.needs_external_execution:
+                    req.tool_execution.result = execute_my_tool(req.tool_execution.tool_args)
+                elif req.needs_confirmation:
+                    req.confirm()
+                elif req.needs_user_input:
+                    for field in req.user_input_schema:
+                        field["value"] = get_value_for(field["name"])
+            result = agent.continue_run(run_id=result.run_id, hitl_handler=my_handler)
         """
         if not task and not run_id:
             raise ValueError("Either 'task' or 'run_id' must be provided")
         
-        # Check if we need to auto-detect streaming mode
         use_streaming = streaming
         if use_streaming is None:
-            # Auto-detect from in-memory output
             _output = getattr(self, '_agent_run_output', None)
             if _output:
                 use_streaming = _output.is_streaming
             else:
-                use_streaming = False  # Default to direct mode
+                use_streaming = False
         
         if use_streaming:
-            # Streaming mode: collect all items (events or text) into a list
             async def collect_stream():
                 results = []
                 async_gen = await self.continue_run_async(
                     task, run_id, requirements, model, debug, retry, return_output,
                     streaming=True,
                     event=event,
-                    external_tool_executor=external_tool_executor
+                    hitl_handler=hitl_handler,
                 )
                 async for item in async_gen:
                     results.append(item)
@@ -4309,13 +4450,12 @@ class Agent(BaseAgent):
             
             return _run_in_bg_loop(collect_stream())
         else:
-            # Direct mode
             return _run_in_bg_loop(
                 self.continue_run_async(
                     task, run_id, requirements, model, debug, retry, return_output,
                     streaming=False,
                     event=event,
-                    external_tool_executor=external_tool_executor
+                    hitl_handler=hitl_handler,
                 )
             )
     
@@ -4407,20 +4547,40 @@ class Agent(BaseAgent):
             self._agent_run_output = run_data.output
             output = self._agent_run_output
             
-            # Step 2b: Copy tool results from passed requirements to loaded output
+            # Step 2b: Copy HITL state from passed requirements to loaded output
             # This is needed for new agents - they load state from storage (without results)
-            # and the user passes requirements (with results) to inject
+            # and the user passes requirements (with resolved state) to inject
             if requirements:
-                # Build a map of tool_call_id -> result from passed requirements
-                results_map = {}
+                passed_map: Dict[str, "RunRequirement"] = {}
                 for req in requirements:
-                    if req.tool_execution and req.tool_execution.result:
-                        results_map[req.tool_execution.tool_call_id] = req.tool_execution.result
+                    if req.tool_execution and req.tool_execution.tool_call_id:
+                        passed_map[req.tool_execution.tool_call_id] = req
                 
-                # Copy results to loaded output's requirements using set_external_execution_result
-                for req in output.requirements or []:
-                    if req.tool_execution and req.tool_execution.tool_call_id in results_map:
-                        req.set_external_execution_result(results_map[req.tool_execution.tool_call_id])
+                for loaded_req in output.requirements or []:
+                    if not loaded_req.tool_execution or not loaded_req.tool_execution.tool_call_id:
+                        continue
+                    tcid = loaded_req.tool_execution.tool_call_id
+                    passed_req = passed_map.get(tcid)
+                    if not passed_req:
+                        continue
+
+                    # External execution result
+                    if passed_req.tool_execution and passed_req.tool_execution.result is not None:
+                        loaded_req.tool_execution.result = passed_req.tool_execution.result
+
+                    # Confirmation state
+                    if passed_req.confirmation is not None:
+                        loaded_req.confirmation = passed_req.confirmation
+                        loaded_req.confirmation_note = passed_req.confirmation_note
+                        if loaded_req.tool_execution:
+                            loaded_req.tool_execution.confirmed = passed_req.confirmation
+
+                    # User input state
+                    if passed_req.user_input_schema is not None:
+                        loaded_req.user_input_schema = passed_req.user_input_schema
+                    if passed_req.tool_execution and passed_req.tool_execution.answered:
+                        if loaded_req.tool_execution:
+                            loaded_req.tool_execution.answered = True
             
         # Step 3: Validate we have what we need
         if output is None:
@@ -4435,7 +4595,12 @@ class Agent(BaseAgent):
         self.current_task = task
         if task is None:
             raise ValueError("Cannot extract task from checkpoint")
-        
+
+        from upsonic.usage import TaskUsage
+        if getattr(task, "_usage", None) is None:
+            task._usage = TaskUsage()
+        output.usage = task._usage
+
         run_status = output.status
         
         # Centralized: All problematic runs use get_problematic_step() to find resume point
@@ -4465,18 +4630,23 @@ class Agent(BaseAgent):
             # including injected tool results.
             output.start_new_run()
         
-        # For paused runs (external tool execution), inject tool results
+        # For paused runs, inject HITL results (external tool, confirmation, user input)
         if run_status == RunStatus.paused:
-            external_tool_reqs = output.get_external_tool_requirements_with_results()
+            resolved_reqs = [
+                r for r in (output.requirements or [])
+                if r.is_resolved and r.tool_execution is not None
+            ]
             
-            if not external_tool_reqs:
+            if not resolved_reqs:
                 raise ValueError(
-                    "Run is paused but no external tool requirements with results found. "
-                    "Set tool results using requirement.set_external_execution_result(result)."
+                    "Run is paused but no resolved requirements found. "
+                    "For external tools: set result via requirement.tool_execution.result = ... "
+                    "For confirmation: call requirement.confirm() or requirement.reject(). "
+                    "For user input: fill requirement.user_input_schema field values and set "
+                    "requirement.tool_execution.answered = True."
                 )
             
-            # Inject tool results (chat_history already preserved in output)
-            await self._inject_external_tool_results(output, external_tool_reqs)
+            await self._inject_hitl_results(output, resolved_reqs)
         
         # Clear paused state and set up for continuation
         task.is_paused = False
@@ -4500,7 +4670,7 @@ class Agent(BaseAgent):
         *,
         streaming: bool = False,
         event: bool = False,
-        external_tool_executor: Optional[Callable[["RunRequirement"], str]] = None,
+        hitl_handler: Optional[Callable[["RunRequirement"], None]] = None,
         graph_execution_id: Optional[str] = None
     ) -> Any:
         """
@@ -4508,35 +4678,16 @@ class Agent(BaseAgent):
         
         Note: HITL continuation is only supported in direct call mode (streaming=False).
         
-        Supports HITL continuation for external tool execution:
-        - PAUSED status: External tool execution - inject tool results and resume
+        Supports HITL continuation for:
+        - External tool execution: inject tool results and resume
+        - User confirmation: inject confirmed/rejected status and resume
+        - User input: inject user-provided field values and resume
         - ERROR/CANCELLED status: Resume from the problematic step
         
-        If the run is NOT problematic (not paused, cancelled, or error), this method
-        will log an informative message and call do_async to start a fresh run.
-        
         Args:
-            task: Task object with external results (for external tool continuation)
-            run_id: Run ID to load from storage (for durable/cancel continuation)
-            model: Override model
-            debug: Enable debug mode
-            retry: Number of retries
-            return_output: If True, return full AgentRunOutput. If False, return content only.
-            state: Graph execution state
-            streaming: Must be False. Streaming mode not supported for HITL continuation.
-            event: Ignored (streaming not supported)
-            external_tool_executor: Optional function that executes external tools.
-                When provided, if the agent pauses again with NEW external tool requirements,
-                the executor is called automatically for each requirement.
-                Signature: (requirement: RunRequirement) -> str
-                This allows handling of sequential tool calls without a while loop.
-            graph_execution_id: Graph execution identifier
-            
-        Returns:
-            Task content or AgentRunOutput (if return_output=True)
-            
-        Raises:
-            ValueError: If streaming=True is passed
+            hitl_handler: Unified HITL handler that resolves any paused requirement.
+                Called for each active RunRequirement when the agent pauses again.
+                The handler must mutate the requirement in-place.
         """
         from upsonic.utils.printing import info_log, warning_log
         
@@ -4594,9 +4745,8 @@ class Agent(BaseAgent):
             task, run_id, model, debug, requirements
         )
         
-        # Execute and handle any subsequent external tool calls automatically
         return await self._continue_run_direct_impl(
-            task, model, debug, retry, return_output, output, resume_step_index, external_tool_executor
+            task, model, debug, retry, return_output, output, resume_step_index, hitl_handler
         )
     
     async def _continue_run_direct_impl(
@@ -4608,26 +4758,25 @@ class Agent(BaseAgent):
         return_output: bool,
         output: AgentRunOutput,
         resume_step_index: int,
-        external_tool_executor: Optional[Callable[["RunRequirement"], str]] = None,
+        hitl_handler: Optional[Callable[["RunRequirement"], None]] = None,
     ) -> Any:
         """
         Internal direct call implementation for continue_run_async.
         
-        Handles the loop for sequential external tool calls automatically when
-        external_tool_executor is provided.
-        
-        For durable execution and cancel run, marks requirements as resolved when
-        the whole run completes successfully. For cancelled runs, calls cleanup_run
-        on successful completion.
+        Handles the loop for sequential HITL interactions (external tools,
+        confirmation, user input) automatically when a hitl_handler is provided.
+        The handler is called for every active requirement regardless of type.
         """
-        max_rounds = 10  # Safety limit
+        max_rounds = 10
         rounds = 0
         result = None
+        original_print_flag: bool = getattr(output, 'print_flag', False)
+
+        task._usage.start_timer()
         
         while rounds < max_rounds:
             rounds += 1
             
-            # Execute the agent
             result = await self.do_async(
                 task,
                 model=model,
@@ -4636,53 +4785,49 @@ class Agent(BaseAgent):
                 return_output=True,
                 _resume_output=output,
                 _resume_step_index=resume_step_index,
+                _print_method_default=original_print_flag,
             )
             
-            # Check if run completed successfully
-            # Note: MemorySaveStep marks durable/cancel requirements as resolved and saves session
             if result.is_complete:
                 if return_output:
                     return result
                 return result.output if hasattr(result, 'output') else result
             
-            # Check if there are external tool requirements that need handling
-            external_tool_active = [r for r in result.active_requirements if r.needs_external_execution]
-            
-            if not external_tool_active:
-                # No external tools - return result (might be error or paused for other reasons)
+            active_reqs = result.active_requirements
+            if not active_reqs:
                 if return_output:
                     return result
                 return result.output if hasattr(result, 'output') else result
-            
-            # If no executor provided, return paused result with external tool requirements
-            if not external_tool_executor:
+
+            if not hitl_handler:
                 if return_output:
                     return result
                 return result.output if hasattr(result, 'output') else result
-            
-            # Execute ALL new external tools using the provided executor
-            for requirement in result.active_requirements:
-                if requirement.is_external_tool_execution:
-                    tool_result = external_tool_executor(requirement)
-                    requirement.tool_execution.result = tool_result
-            
-            # Prepare output for next round - use get_problematic_step() for resume point
+
+            for requirement in active_reqs:
+                hitl_handler(requirement)
+
             output = getattr(self, '_agent_run_output', None)
             problematic_step = output.get_problematic_step()
             if problematic_step:
                 resume_step_index = problematic_step.step_number
             
-            # Clear task.is_paused so ResponseProcessingStep extracts output properly
             task.is_paused = False
             
-            # Inject the new external tool results into output
-            external_tool_reqs = output.get_external_tool_requirements_with_results()
-            if external_tool_reqs:
-                await self._inject_external_tool_results(output, external_tool_reqs)
-            
-            # Loop continues to execute the next round with the injected results
+            resolved_reqs = [
+                r for r in (output.requirements or [])
+                if r.tool_execution and r.tool_execution.result is not None
+            ]
+            confirmed_or_input_reqs = [
+                r for r in (output.requirements or [])
+                if (r.tool_execution and r.tool_execution.requires_confirmation and r.confirmation is not None)
+                or (r.tool_execution and r.tool_execution.requires_user_input and r.tool_execution.answered)
+            ]
+            all_to_inject = resolved_reqs + [r for r in confirmed_or_input_reqs if r not in resolved_reqs]
+
+            if all_to_inject:
+                await self._inject_hitl_results(output, all_to_inject)
         
-        # If we hit max_rounds, return what we have
         if return_output:
             return result
         return result.output if hasattr(result, 'output') else result

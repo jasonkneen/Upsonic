@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from upsonic.tasks.tasks import Task
     from upsonic.models import Model
     from upsonic.agent.agent import Agent
-    from upsonic.tools.processor import ExternalExecutionPause
+    from upsonic.tools.processor import ExternalExecutionPause, ConfirmationPause, UserInputPause
     from upsonic.run.events.events import AgentEvent
     from upsonic.agent.otel_manager import AgentOTelManager
 else:
@@ -29,6 +29,9 @@ else:
     Agent = "Agent"
     AgentEvent = "AgentEvent"
     AgentOTelManager = "AgentOTelManager"
+    ExternalExecutionPause = "ExternalExecutionPause"
+    ConfirmationPause = "ConfirmationPause"
+    UserInputPause = "UserInputPause"
 
 from upsonic.utils.logging_config import sentry_sdk, get_logger
 
@@ -387,8 +390,18 @@ class PipelineManager:
 
             except Exception as e:
                 from upsonic.exceptions import RunCancelledException
-                from upsonic.tools.processor import ExternalExecutionPause
+                from upsonic.tools.processor import ExternalExecutionPause, ConfirmationPause, UserInputPause
                 
+                # Confirmation pause - return normally with paused status
+                if isinstance(e, ConfirmationPause):
+                    await self._handle_confirmation_pause(context, e)
+                    return context
+
+                # User input pause - return normally with paused status
+                if isinstance(e, UserInputPause):
+                    await self._handle_user_input_pause(context, e)
+                    return context
+
                 # External tool pause - return normally with paused status
                 if isinstance(e, ExternalExecutionPause):
                     await self._handle_external_tool_pause(context, e)
@@ -718,7 +731,7 @@ class PipelineManager:
             if step.name == step_name:
                 return i
         raise ValueError(f"Step '{step_name}' not found in pipeline")
-    
+
     async def _handle_external_tool_pause(
         self, 
         output: "AgentRunOutput", 
@@ -734,18 +747,20 @@ class PipelineManager:
         
         if self.task:
             self.task.is_paused = True
+            if hasattr(self.task, '_usage') and self.task._usage is not None:
+                self.task._usage.stop_timer()
         
-        external_calls = e.external_calls or []
+        paused_calls = e.paused_calls or []
         
-        if not external_calls:
-            raise RuntimeError("ExternalExecutionPause must have external_calls attached by ToolManager")
+        if not paused_calls:
+            raise RuntimeError("ExternalExecutionPause must have paused_calls attached by ToolManager")
 
-        for external_call in external_calls:
+        for paused_call in paused_calls:
             tool_execution = ToolExecution(
-                tool_call_id=external_call.tool_call_id,
-                tool_name=external_call.tool_name,
-                tool_args=external_call.tool_args,
-                result=external_call.result,
+                tool_call_id=paused_call.tool_call_id,
+                tool_name=paused_call.tool_name,
+                tool_args=paused_call.tool_args,
+                result=paused_call.result,
                 external_execution_required=True,
             )
             
@@ -758,8 +773,87 @@ class PipelineManager:
         
         if self.debug:
             from upsonic.utils.printing import info_log
-            info_log(f"External tool pause: {len(external_calls)} tool(s) waiting", "PipelineManager")
-    
+            info_log(f"External tool pause: {len(paused_calls)} tool(s) waiting", "PipelineManager")
+
+    async def _handle_confirmation_pause(
+        self,
+        output: "AgentRunOutput",
+        e: "ConfirmationPause",
+    ) -> None:
+        """Handle ConfirmationPause exception.
+        
+        Creates RunRequirement with requires_confirmation for each tool call
+        that needs user approval.
+        """
+        from upsonic.run.requirements import RunRequirement
+        from upsonic.run.tools.tools import ToolExecution
+
+        if self.task:
+            self.task.is_paused = True
+            if hasattr(self.task, '_usage') and self.task._usage is not None:
+                self.task._usage.stop_timer()
+
+        paused_calls = e.paused_calls or []
+        if not paused_calls:
+            raise RuntimeError("ConfirmationPause must have paused_calls attached by ToolManager")
+
+        for paused_call in paused_calls:
+            tool_execution = ToolExecution(
+                tool_call_id=paused_call.tool_call_id,
+                tool_name=paused_call.tool_name,
+                tool_args=paused_call.tool_args,
+                requires_confirmation=True,
+            )
+            requirement = RunRequirement(tool_execution=tool_execution)
+            output.add_requirement(requirement)
+
+        output.mark_paused("confirmation")
+        await self._save_session(output)
+
+        if self.debug:
+            from upsonic.utils.printing import info_log
+            info_log(f"Confirmation pause: {len(paused_calls)} tool(s) awaiting approval", "PipelineManager")
+
+    async def _handle_user_input_pause(
+        self,
+        output: "AgentRunOutput",
+        e: "UserInputPause",
+    ) -> None:
+        """Handle UserInputPause exception.
+        
+        Creates RunRequirement with requires_user_input and user_input_schema
+        for each tool call that needs user-provided values.
+        """
+        from upsonic.run.requirements import RunRequirement
+        from upsonic.run.tools.tools import ToolExecution
+
+        if self.task:
+            self.task.is_paused = True
+            if hasattr(self.task, '_usage') and self.task._usage is not None:
+                self.task._usage.stop_timer()
+
+        paused_calls = e.paused_calls or []
+        if not paused_calls:
+            raise RuntimeError("UserInputPause must have paused_calls attached by ToolManager")
+
+        for paused_call in paused_calls:
+            tool_execution = ToolExecution(
+                tool_call_id=paused_call.tool_call_id,
+                tool_name=paused_call.tool_name,
+                tool_args=paused_call.tool_args,
+                requires_user_input=True,
+                user_input_schema=paused_call.user_input_schema,
+            )
+            requirement = RunRequirement(tool_execution=tool_execution)
+            output.add_requirement(requirement)
+
+        output.mark_paused("user_input")
+        await self._save_session(output)
+
+        if self.debug:
+            from upsonic.utils.printing import info_log
+            info_log(f"User input pause: {len(paused_calls)} tool(s) awaiting input", "PipelineManager")
+
     def set_manager(self, name: str, manager: Any) -> None:
         """
         Register a manager in the pipeline registry.

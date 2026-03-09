@@ -152,7 +152,7 @@ class AgentRunOutput:
     current_step_result: Optional["StepResult"] = None
     
     # --- User-facing pause information ---
-    pause_reason: Optional[Literal["external_tool"]] = None  # "external_tool" only now
+    pause_reason: Optional[Literal["external_tool", "confirmation", "user_input"]] = None
     error_details: Optional[str] = None
     
     # --- Context management ---
@@ -195,24 +195,50 @@ class AgentRunOutput:
     
     @property
     def active_requirements(self) -> List["RunRequirement"]:
-        """Get unresolved external tool requirements."""
+        """Get all unresolved requirements (confirmation, user input, or external execution)."""
         if not self.requirements:
             return []
-        return [req for req in self.requirements if req.needs_external_execution]
+        return [req for req in self.requirements if not req.is_resolved]
     
     @property
     def tools_requiring_confirmation(self) -> List["ToolExecution"]:
         """Get tools that require user confirmation."""
-        if not self.tools:
-            return []
-        return [t for t in self.tools if t.requires_confirmation and not t.confirmed]
+        tools_list: List["ToolExecution"] = []
+        seen: set[str] = set()
+        if self.tools:
+            for t in self.tools:
+                if t.requires_confirmation and t.confirmed is None:
+                    if t.tool_call_id and t.tool_call_id not in seen:
+                        tools_list.append(t)
+                        seen.add(t.tool_call_id)
+        if self.requirements:
+            for req in self.requirements:
+                if req.needs_confirmation and req.tool_execution:
+                    te = req.tool_execution
+                    if te.tool_call_id and te.tool_call_id not in seen:
+                        tools_list.append(te)
+                        seen.add(te.tool_call_id)
+        return tools_list
     
     @property
     def tools_requiring_user_input(self) -> List["ToolExecution"]:
         """Get tools that require user input."""
-        if not self.tools:
-            return []
-        return [t for t in self.tools if t.requires_user_input and not t.answered]
+        tools_list: List["ToolExecution"] = []
+        seen: set[str] = set()
+        if self.tools:
+            for t in self.tools:
+                if t.requires_user_input and not t.answered:
+                    if t.tool_call_id and t.tool_call_id not in seen:
+                        tools_list.append(t)
+                        seen.add(t.tool_call_id)
+        if self.requirements:
+            for req in self.requirements:
+                if req.needs_user_input and req.tool_execution:
+                    te = req.tool_execution
+                    if te.tool_call_id and te.tool_call_id not in seen:
+                        tools_list.append(te)
+                        seen.add(te.tool_call_id)
+        return tools_list
     
     @property
     def tools_awaiting_external_execution(self) -> List["ToolExecution"]:
@@ -246,7 +272,7 @@ class AgentRunOutput:
         return tools_list
     
     # ========================================================================
-    # Requirement Methods (External Tool Only)
+    # Requirement Methods (HITL: External Tool, Confirmation, User Input)
     # ========================================================================
     
     def add_requirement(self, requirement: "RunRequirement") -> None:
@@ -457,8 +483,8 @@ class AgentRunOutput:
         if self.task is not None:
             self.task.status = self.status
     
-    def mark_paused(self, reason: Literal["external_tool"] = "external_tool") -> None:
-        """Mark the run as paused for external tool execution."""
+    def mark_paused(self, reason: Literal["external_tool", "confirmation", "user_input"] = "external_tool") -> None:
+        """Mark the run as paused for HITL interaction."""
         self.status = RunStatus.paused
         self.pause_reason = reason
         self.updated_at = int(current_time())
@@ -546,12 +572,21 @@ class AgentRunOutput:
     
     def add_model_execution_time(self, elapsed: float) -> None:
         """Accumulate model (LLM API) execution time into usage.
-        
+
         Args:
             elapsed: Time in seconds spent in a single model.request() call.
         """
         usage = self._ensure_usage()
         usage.add_model_execution_time(elapsed)
+
+    def add_tool_execution_time(self, elapsed: float) -> None:
+        """Accumulate tool execution time into usage.
+
+        Args:
+            elapsed: Time in seconds spent in a single tool execution.
+        """
+        usage = self._ensure_usage()
+        usage.add_tool_execution_time(elapsed)
 
     def set_usage_cost(self, cost: float) -> None:
         """Set the cost in usage.
@@ -623,6 +658,7 @@ class AgentRunOutput:
             "output": self.output,
             "thinking_content": self.thinking_content,
             "_context_window_full": self._context_window_full,
+            "print_flag": self.print_flag,
         }
         
         # task: use to_dict with serialize_flag
@@ -1046,6 +1082,7 @@ class AgentRunOutput:
             pause_reason=data.get("pause_reason"),
             error_details=data.get("error_details"),
             _context_window_full=data.get("_context_window_full", False),
+            print_flag=data.get("print_flag", False),
         )
     
     def __str__(self) -> str:

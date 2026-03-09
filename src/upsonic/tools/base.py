@@ -219,9 +219,14 @@ class ToolKit:
         include_tools: Optional[List[str]] = None,
         exclude_tools: Optional[List[str]] = None,
         use_async: bool = False,
+        # --- Toolkit-level instructions ---
+        instructions: Optional[str] = None,
+        add_instructions: bool = False,
         # --- Toolkit-wide defaults (mirror every ToolConfig field) ---
         requires_confirmation: Optional[bool] = None,
+        requires_confirmation_tools: Optional[List[str]] = None,
         requires_user_input: Optional[bool] = None,
+        requires_user_input_tools: Optional[List[str]] = None,
         user_input_fields: Optional[List[str]] = None,
         external_execution: Optional[bool] = None,
         show_result: Optional[bool] = None,
@@ -240,6 +245,11 @@ class ToolKit:
         self._toolkit_include_tools: Optional[List[str]] = include_tools
         self._toolkit_exclude_tools: Optional[List[str]] = exclude_tools
         self._toolkit_use_async: bool = use_async
+        self.instructions: Optional[str] = instructions
+        self.add_instructions: bool = add_instructions
+
+        self._requires_confirmation_tools: Optional[List[str]] = requires_confirmation_tools
+        self._requires_user_input_tools: Optional[List[str]] = requires_user_input_tools
 
         self._toolkit_defaults: Dict[str, Any] = {
             "requires_confirmation": requires_confirmation,

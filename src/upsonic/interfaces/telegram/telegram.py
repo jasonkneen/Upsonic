@@ -18,7 +18,8 @@ Based on the official Telegram Bot API: https://core.telegram.org/bots/api
 import asyncio
 import os
 import time
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Set, Union
+import uuid
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Literal, Optional, Set, Union
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
 
@@ -35,6 +36,12 @@ from upsonic.utils.printing import debug_log, error_log, info_log
 if TYPE_CHECKING:
     from upsonic.agent import Agent
     from upsonic.storage.base import Storage
+
+
+def _format_confirmation_message(tool_name: str, tool_args: Optional[Dict[str, Any]]) -> str:
+    """Build a short human-readable line for a tool requiring confirmation."""
+    args_str = ", ".join(f"{k}={repr(v)[:30]}" for k, v in (tool_args or {}).items())[:120]
+    return f"Tool {tool_name}({args_str}) requires confirmation."
 
 
 class TelegramInterface(Interface):
@@ -169,6 +176,8 @@ class TelegramInterface(Interface):
         self._heartbeat_task: Optional[asyncio.Task[None]] = None
         self._auto_heartbeat_chat_id: Optional[int] = None
 
+        self._pending_confirmations: Dict[str, Dict[str, Any]] = {}
+
         info_log(f"Telegram interface initialized: mode={self.mode.value}, stream={self.stream}, agent={agent}")
     
     def is_user_allowed(self, user_id: int) -> bool:
@@ -184,6 +193,48 @@ class TelegramInterface(Interface):
         if self._allowed_user_ids is None:
             return True
         return user_id in self._allowed_user_ids
+
+    async def _send_confirmation_and_store(
+        self,
+        output: Any,
+        chat_id: int,
+        user_id: int,
+        message_thread_id: Optional[int],
+        mode: Literal["task", "chat"],
+    ) -> None:
+        """Send a confirmation message with Confirm/Reject buttons and store pending state."""
+        active = getattr(output, "active_requirements", None) or []
+        first_req = next((r for r in active if getattr(r, "needs_confirmation", False)), None)
+        if not first_req:
+            return
+        tool_exec = getattr(first_req, "tool_execution", None)
+        tool_name = getattr(tool_exec, "tool_name", "tool") if tool_exec else "tool"
+        tool_args = getattr(tool_exec, "tool_args", None) or {}
+        text = _format_confirmation_message(tool_name, tool_args)
+        pending_key = uuid.uuid4().hex[:12]
+        run_id = getattr(output, "run_id", None) or ""
+        self._pending_confirmations[pending_key] = {
+            "run_id": run_id,
+            "output": output,
+            "chat_id": chat_id,
+            "user_id": user_id,
+            "message_thread_id": message_thread_id,
+            "mode": mode,
+        }
+        reply_markup: Dict[str, Any] = {
+            "inline_keyboard": [
+                [
+                    {"text": "Confirm", "callback_data": f"cfm:{pending_key}:0:y"},
+                    {"text": "Reject", "callback_data": f"cfm:{pending_key}:0:n"},
+                ]
+            ]
+        }
+        await self.telegram_tools.asend_message(
+            chat_id=chat_id,
+            text=text,
+            reply_markup=reply_markup,
+            message_thread_id=message_thread_id,
+        )
     
     async def health_check(self) -> Dict[str, Any]:
         """Check health status of the Telegram interface."""
@@ -193,7 +244,7 @@ class TelegramInterface(Interface):
         bot_info = None
         is_connected = False
         try:
-            bot_info = await self.telegram_tools.get_me()
+            bot_info = await self.telegram_tools.aget_me()
             is_connected = bot_info is not None
         except Exception as e:
             debug_log(f"Bot connectivity check failed: {e}")
@@ -285,7 +336,7 @@ class TelegramInterface(Interface):
             drop_pending_updates: bool = False,
         ):
             """Set the webhook URL for this bot."""
-            success = await self.telegram_tools.set_webhook(
+            success = await self.telegram_tools.aset_webhook(
                 url=url,
                 secret_token=secret_token or self.webhook_secret,
                 drop_pending_updates=drop_pending_updates,
@@ -295,13 +346,13 @@ class TelegramInterface(Interface):
         @router.post("/delete-webhook", summary="Delete Webhook")
         async def delete_webhook_endpoint(drop_pending_updates: bool = False):
             """Delete the current webhook."""
-            success = await self.telegram_tools.delete_webhook(drop_pending_updates=drop_pending_updates)
+            success = await self.telegram_tools.adelete_webhook(drop_pending_updates=drop_pending_updates)
             return {"success": success}
         
         @router.get("/webhook-info", summary="Get Webhook Info")
         async def webhook_info_endpoint():
             """Get current webhook status."""
-            return await self.telegram_tools.get_webhook_info()
+            return await self.telegram_tools.aget_webhook_info()
         
         @router.get("/health", summary="Health Check")
         async def health_check_endpoint():
@@ -331,7 +382,7 @@ class TelegramInterface(Interface):
             info_log(f"Auto-setting webhook to: {full_webhook_url}")
             
             try:
-                success = await self.telegram_tools.set_webhook(
+                success = await self.telegram_tools.aset_webhook(
                     url=full_webhook_url,
                     secret_token=self.webhook_secret,
                 )
@@ -417,7 +468,11 @@ class TelegramInterface(Interface):
         
         # Send typing indicator
         if self.typing_indicator:
-            await self.telegram_tools.send_chat_action(chat_id, "typing", message.message_thread_id)
+            await self.telegram_tools.asend_chat_action(
+                chat_id=chat_id,
+                action="typing",
+                message_thread_id=message.message_thread_id,
+            )
         
         # Determine message type and process accordingly
         if message.text:
@@ -470,7 +525,7 @@ class TelegramInterface(Interface):
         else:
             reply_text = "No active conversation found. Send me a message to start!"
         
-        await self.telegram_tools.send_message(
+        await self.telegram_tools.asend_message(
             chat_id=chat_id,
             text=reply_text,
             message_thread_id=message_thread_id,
@@ -510,7 +565,7 @@ class TelegramInterface(Interface):
             now = time.monotonic()
 
             if sent_message_id is None:
-                result = await self.telegram_tools.send_message(
+                result = await self.telegram_tools.asend_message(
                     chat_id=chat_id,
                     text=accumulated_text,
                     reply_to_message_id=reply_to_message_id,
@@ -522,7 +577,7 @@ class TelegramInterface(Interface):
                 last_update_time = now
             elif now - last_update_time >= update_interval:
                 if sent_message_id:
-                    await self.telegram_tools.edit_message_text(
+                    await self.telegram_tools.aedit_message_text(
                         text=accumulated_text,
                         chat_id=chat_id,
                         message_id=sent_message_id,
@@ -531,14 +586,14 @@ class TelegramInterface(Interface):
                 last_update_time = now
 
         if sent_message_id and accumulated_text:
-            await self.telegram_tools.edit_message_text(
+            await self.telegram_tools.aedit_message_text(
                 text=accumulated_text,
                 chat_id=chat_id,
                 message_id=sent_message_id,
                 parse_mode=None,
             )
         elif not sent_message_id and accumulated_text:
-            await self.telegram_tools.send_message(
+            await self.telegram_tools.asend_message(
                 chat_id=chat_id,
                 text=accumulated_text,
                 reply_to_message_id=reply_to_message_id,
@@ -589,7 +644,7 @@ class TelegramInterface(Interface):
             try:
                 result: Optional[str] = await self.agent.aexecute_heartbeat()
                 if result:
-                    await self.telegram_tools.send_message(
+                    await self.telegram_tools.asend_message(
                         chat_id=target_chat_id,
                         text=result,
                     )
@@ -652,8 +707,8 @@ class TelegramInterface(Interface):
         Process message in TASK mode.
         
         When streaming is enabled, uses agent.astream() and progressively
-        edits the Telegram message. Otherwise, uses agent.do_async() and
-        sends the complete response.
+        edits the Telegram message. Otherwise, uses agent.do_async(return_output=True)
+        and sends the complete response or confirmation UI when paused for HITL.
         """
         from upsonic.tasks.tasks import Task
         
@@ -669,25 +724,23 @@ class TelegramInterface(Interface):
             )
             return
 
-        await self.agent.print_do(task)
-        
-        run_result = self.agent.get_run_output()
-        if not run_result:
-            error_log("No run result from agent")
+        output = await self.agent.do_async(task, return_output=True)
+        if output.is_paused and getattr(output, "pause_reason", None) == "confirmation":
+            await self._send_confirmation_and_store(
+                output, chat_id, user_id, message.message_thread_id, "task"
+            )
             return
-        
-        response_text = None
-        model_response = run_result.get_last_model_response()
-        
+
+        response_text: Optional[str] = None
+        model_response = output.get_last_model_response() if hasattr(output, "get_last_model_response") else None
         if model_response:
             if hasattr(model_response, "thinking") and model_response.thinking:
                 pass
-            response_text = model_response.text
-        elif run_result.output:
-            response_text = str(run_result.output)
-        
+            response_text = getattr(model_response, "text", None)
+        if response_text is None and getattr(output, "output", None):
+            response_text = str(output.output)
         if response_text:
-            await self.telegram_tools.send_message(
+            await self.telegram_tools.asend_message(
                 chat_id=chat_id,
                 text=response_text,
                 reply_to_message_id=message.message_id,
@@ -705,8 +758,8 @@ class TelegramInterface(Interface):
         Process message in CHAT mode.
         
         When streaming is enabled, uses chat.stream() and progressively
-        edits the Telegram message. Otherwise, uses chat.invoke() and
-        sends the complete response.
+        edits the Telegram message. Otherwise, uses chat.invoke(text, return_run_output=True)
+        and sends the complete response or confirmation UI when paused for HITL.
         """
         try:
             chat = await self.aget_chat_session(str(user_id))
@@ -721,18 +774,29 @@ class TelegramInterface(Interface):
                 )
                 return
 
-            response_text = await chat.invoke(text)
-            
-            if response_text:
-                await self.telegram_tools.send_message(
+            result = await chat.invoke(text, return_run_output=True)
+            text_attr = getattr(result, "text", result) if not isinstance(result, str) else result
+            run_output = getattr(result, "run_output", None) if not isinstance(result, str) else None
+            if (
+                run_output is not None
+                and getattr(run_output, "is_paused", False)
+                and getattr(run_output, "pause_reason", None) == "confirmation"
+            ):
+                await self._send_confirmation_and_store(
+                    run_output, chat_id, user_id, message.message_thread_id, "chat"
+                )
+                return
+            reply_text = text_attr if isinstance(text_attr, str) else str(text_attr)
+            if reply_text:
+                await self.telegram_tools.asend_message(
                     chat_id=chat_id,
-                    text=response_text,
+                    text=reply_text,
                     reply_to_message_id=message.message_id,
                     message_thread_id=message.message_thread_id,
                 )
         except Exception as e:
             error_log(f"Error in chat mode: {e}")
-            await self.telegram_tools.send_message(
+            await self.telegram_tools.asend_message(
                 chat_id=chat_id,
                 text="Sorry, I encountered an error. Please try again.",
                 reply_to_message_id=message.message_id,
@@ -753,11 +817,11 @@ class TelegramInterface(Interface):
         caption = message.caption or "Describe this image"
         
         # Download the photo
-        file_info = await self.telegram_tools.get_file(photo.file_id)
+        file_info = await self.telegram_tools.aget_file(photo.file_id)
         if not file_info or "file_path" not in file_info:
             return
         
-        photo_bytes = await self.telegram_tools.download_file(file_info["file_path"])
+        photo_bytes = await self.telegram_tools.adownload_file(file_info["file_path"])
         if not photo_bytes:
             return
         
@@ -784,11 +848,11 @@ class TelegramInterface(Interface):
         caption = message.caption or "Process this document"
         mime_type = doc.mime_type or "application/octet-stream"
         
-        file_info = await self.telegram_tools.get_file(doc.file_id)
+        file_info = await self.telegram_tools.aget_file(doc.file_id)
         if not file_info or "file_path" not in file_info:
             return
         
-        doc_bytes = await self.telegram_tools.download_file(file_info["file_path"])
+        doc_bytes = await self.telegram_tools.adownload_file(file_info["file_path"])
         if not doc_bytes:
             return
         
@@ -819,11 +883,11 @@ class TelegramInterface(Interface):
         voice = message.voice
         mime_type = voice.mime_type or "audio/ogg"
         
-        file_info = await self.telegram_tools.get_file(voice.file_id)
+        file_info = await self.telegram_tools.aget_file(voice.file_id)
         if not file_info or "file_path" not in file_info:
             return
         
-        voice_bytes = await self.telegram_tools.download_file(file_info["file_path"])
+        voice_bytes = await self.telegram_tools.adownload_file(file_info["file_path"])
         if not voice_bytes:
             return
         
@@ -850,11 +914,11 @@ class TelegramInterface(Interface):
         caption = message.caption or "Process this audio file"
         mime_type = audio.mime_type or "audio/mpeg"
         
-        file_info = await self.telegram_tools.get_file(audio.file_id)
+        file_info = await self.telegram_tools.aget_file(audio.file_id)
         if not file_info or "file_path" not in file_info:
             return
         
-        audio_bytes = await self.telegram_tools.download_file(file_info["file_path"])
+        audio_bytes = await self.telegram_tools.adownload_file(file_info["file_path"])
         if not audio_bytes:
             return
         
@@ -881,11 +945,11 @@ class TelegramInterface(Interface):
         caption = message.caption or "Describe this video"
         mime_type = video.mime_type or "video/mp4"
         
-        file_info = await self.telegram_tools.get_file(video.file_id)
+        file_info = await self.telegram_tools.aget_file(video.file_id)
         if not file_info or "file_path" not in file_info:
             return
         
-        video_bytes = await self.telegram_tools.download_file(file_info["file_path"])
+        video_bytes = await self.telegram_tools.adownload_file(file_info["file_path"])
         if not video_bytes:
             return
         
@@ -910,11 +974,11 @@ class TelegramInterface(Interface):
         
         video_note = message.video_note
         
-        file_info = await self.telegram_tools.get_file(video_note.file_id)
+        file_info = await self.telegram_tools.aget_file(video_note.file_id)
         if not file_info or "file_path" not in file_info:
             return
         
-        video_bytes = await self.telegram_tools.download_file(file_info["file_path"])
+        video_bytes = await self.telegram_tools.adownload_file(file_info["file_path"])
         if not video_bytes:
             return
         
@@ -1168,20 +1232,20 @@ class TelegramInterface(Interface):
             
             if self.is_task_mode():
                 try:
-                    await self.agent.print_do(task)
-                    
-                    run_result = self.agent.get_run_output()
-                    if run_result:
+                    output = await self.agent.do_async(task, return_output=True)
+                    if output.is_paused and getattr(output, "pause_reason", None) == "confirmation":
+                        await self._send_confirmation_and_store(
+                            output, chat_id, user_id, message.message_thread_id, "task"
+                        )
+                    else:
                         response_text = None
-                        model_response = run_result.get_last_model_response()
-                        
+                        model_response = output.get_last_model_response()
                         if model_response:
                             response_text = model_response.text
-                        elif run_result.output:
-                            response_text = str(run_result.output)
-                        
+                        elif output.output:
+                            response_text = str(output.output)
                         if response_text:
-                            await self.telegram_tools.send_message(
+                            await self.telegram_tools.asend_message(
                                 chat_id=chat_id,
                                 text=response_text,
                                 reply_to_message_id=message.message_id,
@@ -1190,7 +1254,7 @@ class TelegramInterface(Interface):
                 except Exception as e:
                     error_log(f"Error processing {category} in task mode: {e}")
                     error_message = self._get_format_error_message(mime_type, e)
-                    await self.telegram_tools.send_message(
+                    await self.telegram_tools.asend_message(
                         chat_id=chat_id,
                         text=error_message,
                         reply_to_message_id=message.message_id,
@@ -1199,19 +1263,30 @@ class TelegramInterface(Interface):
             else:
                 try:
                     chat = await self.aget_chat_session(str(user_id))
-                    response_text = await chat.invoke(task)
-                    
-                    if response_text:
-                        await self.telegram_tools.send_message(
-                            chat_id=chat_id,
-                            text=response_text,
-                            reply_to_message_id=message.message_id,
-                            message_thread_id=message.message_thread_id,
+                    result = await chat.invoke(task, return_run_output=True)
+                    text_attr = getattr(result, "text", result) if not isinstance(result, str) else result
+                    run_output = getattr(result, "run_output", None) if not isinstance(result, str) else None
+                    if (
+                        run_output is not None
+                        and getattr(run_output, "is_paused", False)
+                        and getattr(run_output, "pause_reason", None) == "confirmation"
+                    ):
+                        await self._send_confirmation_and_store(
+                            run_output, chat_id, user_id, message.message_thread_id, "chat"
                         )
+                    else:
+                        reply_text = text_attr if isinstance(text_attr, str) else str(text_attr)
+                        if reply_text:
+                            await self.telegram_tools.asend_message(
+                                chat_id=chat_id,
+                                text=reply_text,
+                                reply_to_message_id=message.message_id,
+                                message_thread_id=message.message_thread_id,
+                            )
                 except Exception as e:
                     error_log(f"Error processing {category} in chat mode: {e}")
                     error_message = self._get_format_error_message(mime_type, e)
-                    await self.telegram_tools.send_message(
+                    await self.telegram_tools.asend_message(
                         chat_id=chat_id,
                         text=error_message,
                         reply_to_message_id=message.message_id,
@@ -1231,37 +1306,107 @@ class TelegramInterface(Interface):
         user = callback_query.from_user
         user_id = user.id
         
-        # Check whitelist
         if not self.is_user_allowed(user_id):
             info_log(self.get_unauthorized_message())
-            await self.telegram_tools.answer_callback_query(callback_query.id)
+            await self.telegram_tools.aanswer_callback_query(callback_query.id)
             return
         
         callback_data = callback_query.data or ""
         info_log(f"Processing callback query from {user_id}: {callback_data}")
         
-        # Answer the callback query to remove loading state
-        await self.telegram_tools.answer_callback_query(callback_query.id)
+        if callback_data.startswith("cfm:"):
+            await self.telegram_tools.aanswer_callback_query(callback_query.id)
+            parts = callback_data.split(":")
+            if len(parts) >= 4:
+                pending_key = parts[1]
+                confirmed = parts[3].lower() == "y"
+                state = self._pending_confirmations.pop(pending_key, None)
+                if state is None:
+                    chat_id = callback_query.message.chat.id if callback_query.message else None
+                    if chat_id:
+                        await self.telegram_tools.asend_message(
+                            chat_id=chat_id,
+                            text="Confirmation expired. Please start again.",
+                        )
+                    return
+                run_id = state["run_id"]
+                output = state["output"]
+                chat_id = state["chat_id"]
+                message_thread_id = state.get("message_thread_id")
+                mode = state.get("mode", "task")
+                active = getattr(output, "active_requirements", None) or []
+                first_req = next((r for r in active if getattr(r, "needs_confirmation", False)), None)
+                if first_req:
+                    if confirmed:
+                        first_req.confirm()
+                    else:
+                        first_req.reject()
+                requirements = getattr(output, "requirements", None) or []
+                result = await self.agent.continue_run_async(
+                    run_id=run_id,
+                    requirements=requirements,
+                    return_output=True,
+                )
+                if result.is_paused and getattr(result, "pause_reason", None) == "confirmation":
+                    await self._send_confirmation_and_store(
+                        result, chat_id, user_id, message_thread_id, mode
+                    )
+                else:
+                    response_text = None
+                    model_response = result.get_last_model_response() if hasattr(result, "get_last_model_response") else None
+                    if model_response:
+                        response_text = getattr(model_response, "text", None)
+                    if response_text is None and getattr(result, "output", None):
+                        response_text = str(result.output)
+                    if response_text:
+                        await self.telegram_tools.asend_message(
+                            chat_id=chat_id,
+                            text=response_text,
+                            message_thread_id=message_thread_id,
+                        )
+            return
         
-        # Process callback data with agent
+        await self.telegram_tools.aanswer_callback_query(callback_query.id)
         chat_id = callback_query.message.chat.id if callback_query.message else None
-        
         if chat_id:
             text = f"User clicked button with data: {callback_data}"
-            
             if self.is_task_mode():
                 from upsonic.tasks.tasks import Task
                 task = Task(text)
-                await self.agent.print_do(task)
-                
-                run_result = self.agent.get_run_output()
-                if run_result and run_result.output:
-                    await self.telegram_tools.send_message(chat_id=chat_id, text=str(run_result.output))
+                output = await self.agent.do_async(task, return_output=True)
+                if output.is_paused and getattr(output, "pause_reason", None) == "confirmation":
+                    await self._send_confirmation_and_store(
+                        output, chat_id, user_id,
+                        callback_query.message.message_thread_id if callback_query.message else None,
+                        "task",
+                    )
+                else:
+                    response_text = None
+                    model_response = output.get_last_model_response()
+                    if model_response:
+                        response_text = model_response.text
+                    elif output.output:
+                        response_text = str(output.output)
+                    if response_text:
+                        await self.telegram_tools.asend_message(chat_id=chat_id, text=response_text)
             else:
                 try:
                     chat = await self.aget_chat_session(str(user_id))
-                    response_text = await chat.invoke(text)
-                    if response_text:
-                        await self.telegram_tools.send_message(chat_id=chat_id, text=response_text)
+                    result = await chat.invoke(text, return_run_output=True)
+                    run_output = getattr(result, "run_output", None) if not isinstance(result, str) else None
+                    if (
+                        run_output is not None
+                        and getattr(run_output, "is_paused", False)
+                        and getattr(run_output, "pause_reason", None) == "confirmation"
+                    ):
+                        await self._send_confirmation_and_store(
+                            run_output, chat_id, user_id,
+                            callback_query.message.message_thread_id if callback_query.message else None,
+                            "chat",
+                        )
+                    else:
+                        reply_text = getattr(result, "text", result) if not isinstance(result, str) else result
+                        if reply_text:
+                            await self.telegram_tools.asend_message(chat_id=chat_id, text=str(reply_text))
                 except Exception as e:
                     error_log(f"Error processing callback in chat mode: {e}")

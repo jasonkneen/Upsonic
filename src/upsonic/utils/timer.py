@@ -16,6 +16,8 @@ class Timer:
 
     def start(self) -> float:
         self.start_time = perf_counter()
+        self.end_time = None
+        self.elapsed_time = None
         return self.start_time
 
     def stop(self) -> float:

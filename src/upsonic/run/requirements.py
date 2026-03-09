@@ -11,22 +11,21 @@ from upsonic.run.tools.tools import ToolExecution
 @dataclass
 class RunRequirement:
     """
-    Requirement for external tool execution (HITL flows).
+    Requirement for HITL (Human-In-The-Loop) flows.
     
-    This class ONLY handles external tool calls that require user execution
-    outside the agent framework. For error recovery (durable execution) and
-    cancel run resumption, use the AgentRunOutput status directly.
+    Handles three HITL patterns:
+    - External tool execution: tool runs outside the agent
+    - User confirmation: user approves/rejects a tool call
+    - User input: user provides field values for a tool call
     """
 
     id: str = field(default_factory=lambda: str(uuid4()))
     tool_execution: Optional[ToolExecution] = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
-    # User confirmation
     confirmation: Optional[bool] = None
     confirmation_note: Optional[str] = None
 
-    # User input
     user_input_schema: Optional[List[Dict[str, Any]]] = None
 
     def __init__(
@@ -49,8 +48,6 @@ class RunRequirement:
             return False
         if not self.tool_execution:
             return False
-        if self.tool_execution.confirmed is True:
-            return True
         return self.tool_execution.requires_confirmation or False
 
     @property
@@ -60,9 +57,14 @@ class RunRequirement:
             return False
         if self.tool_execution.answered is True:
             return False
-        if self.user_input_schema and not all(value is not None for value in self.user_input_schema.values()):
-            return True
-        return self.tool_execution.requires_user_input or False
+        if not (self.tool_execution.requires_user_input or False):
+            return False
+        if self.user_input_schema:
+            for field_dict in self.user_input_schema:
+                if isinstance(field_dict, dict) and field_dict.get("value") is None:
+                    return True
+            return False
+        return True
 
     @property
     def needs_external_execution(self) -> bool:
@@ -85,14 +87,7 @@ class RunRequirement:
 
     @property
     def is_resolved(self) -> bool:
-        """
-        Check if this requirement has been resolved.
-        
-        A requirement is resolved when:
-        - It no longer needs confirmation
-        - It no longer needs user input
-        - It no longer needs external execution (result has been provided)
-        """
+        """Check if this requirement has been fully resolved."""
         return not self.needs_confirmation and not self.needs_user_input and not self.needs_external_execution
 
     def confirm(self) -> None:
@@ -103,13 +98,14 @@ class RunRequirement:
         if self.tool_execution:
             self.tool_execution.confirmed = True
 
-    def reject(self) -> None:
-        """Reject the tool execution."""
-        if not self.needs_confirmation:
-            raise ValueError("This requirement does not require confirmation")
+    def reject(self, note: Optional[str] = None) -> None:
+        """Reject the tool execution with an optional note."""
         self.confirmation = False
+        self.confirmation_note = note
         if self.tool_execution:
             self.tool_execution.confirmed = False
+            if note:
+                self.tool_execution.confirmation_note = note
 
     def set_external_execution_result(self, result: str) -> None:
         """Set the result from external execution."""
@@ -147,13 +143,11 @@ class RunRequirement:
         if data is None:
             raise ValueError("RunRequirement.from_dict() requires a non-None dict")
 
-        # Handle tool_execution (dict only)
         tool_data = data.get("tool_execution")
         tool_execution: Optional[ToolExecution] = None
         if isinstance(tool_data, dict):
             tool_execution = ToolExecution.from_dict(tool_data)
 
-        # Handle created_at (ISO string from dict)
         created_at_raw = data.get("created_at")
         created_at: Optional[datetime] = None
         if isinstance(created_at_raw, str):
@@ -161,16 +155,15 @@ class RunRequirement:
         elif isinstance(created_at_raw, datetime):
             created_at = created_at_raw
 
-        # Build requirement
         requirement = cls(
             tool_execution=tool_execution,
             id=data.get("id"),
             created_at=created_at,
         )
         
-        # Set optional fields
         requirement.confirmation = data.get("confirmation")
         requirement.confirmation_note = data.get("confirmation_note")
-        requirement.user_input_schema = data.get("user_input_schema")
+        if data.get("user_input_schema") is not None:
+            requirement.user_input_schema = data["user_input_schema"]
 
         return requirement

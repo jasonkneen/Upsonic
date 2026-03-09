@@ -241,12 +241,12 @@ class WhatsAppInterface(Interface):
             if italics:
                 # Handle multi-line messages by making each line italic
                 formatted_message = "\n".join([f"_{line}_" for line in message.split("\n")])
-                await self.whatsapp_tools.send_text_message(
+                await self.whatsapp_tools.asend_text_message(
                     recipient=recipient,
                     text=formatted_message
                 )
             else:
-                await self.whatsapp_tools.send_text_message(
+                await self.whatsapp_tools.asend_text_message(
                     recipient=recipient,
                     text=message
                 )
@@ -261,12 +261,12 @@ class WhatsAppInterface(Interface):
             if italics:
                 # Handle multi-line messages by making each line italic
                 formatted_batch = "\n".join([f"_{line}_" for line in batch_message.split("\n")])
-                await self.whatsapp_tools.send_text_message(
+                await self.whatsapp_tools.asend_text_message(
                     recipient=recipient,
                     text=formatted_batch
                 )
             else:
-                await self.whatsapp_tools.send_text_message(
+                await self.whatsapp_tools.asend_text_message(
                     recipient=recipient,
                     text=batch_message
                 )

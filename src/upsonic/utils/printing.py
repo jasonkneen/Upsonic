@@ -384,16 +384,16 @@ def display_llm_result_table(
 
 def display_tool_calls_table(
     tool_usage: list,
-    debug: bool = False
+    debug: bool = False,
 ) -> None:
     """
     Display tool calls in a clear, readable format.
-    
+
     Uses vertical layout per tool for maximum readability:
     - Tool name and index as header
     - Parameters formatted as key: value pairs
     - Results displayed with full width
-    
+
     Args:
         tool_usage: List of tool usage dictionaries with tool_name, params, tool_result
                    tool_result follows func_dict structure from ToolProcessor
@@ -508,7 +508,7 @@ def display_tool_calls_table(
     
     # Combine all tool panels
     content = Group(*tool_sections)
-    
+
     # Create main panel
     main_panel = Panel(
         content,
@@ -1139,8 +1139,6 @@ def call_end(result: Any, model: Any, response_format: str, start_time: float, e
     )
 
 
-
-
 def agent_end(result: Any, model: Any, response_format: str, start_time: float, end_time: float, usage: dict, tool_usage: list, tool_count: int, context_count: int, debug: bool = False, price_id:str = None, print_output: bool = False):
     # Handle price_id tracking regardless of print_output
     if price_id:
@@ -1339,10 +1337,16 @@ def print_price_id_summary(
         table.add_row("[bold]Time Taken:[/bold]", f"[magenta]{_duration:.2f} seconds[/magenta]")
 
     _model_time: Optional[float] = getattr(task_usage, 'model_execution_time', None) if task_usage else None
-    _upsonic_time: Optional[float] = getattr(task_usage, 'upsonic_execution_time', None) if task_usage else None
+    _tool_time: Optional[float] = getattr(task_usage, 'tool_execution_time', None) if task_usage else None
+    _upsonic_time: Optional[float] = None
+    if _duration is not None and _model_time is not None:
+        _tool_deduct = _tool_time or 0.0
+        _upsonic_time = max(0.0, _duration - _model_time - _tool_deduct)
 
     if _model_time is not None:
         table.add_row("[bold]Model Execution Time:[/bold]", f"[magenta]{_model_time:.2f} seconds[/magenta]")
+    if _tool_time is not None:
+        table.add_row("[bold]Tool Execution Time:[/bold]", f"[magenta]{_tool_time:.2f} seconds[/magenta]")
     if _upsonic_time is not None:
         table.add_row("[bold]Framework Overhead:[/bold]", f"[magenta]{_upsonic_time:.2f} seconds[/magenta]")
 
@@ -1387,6 +1391,7 @@ def print_agent_metrics(agent: "Agent", print_output: bool = True) -> Optional[D
         "cost": usage.cost,
         "duration": usage.duration,
         "model_execution_time": usage.model_execution_time,
+        "tool_execution_time": usage.tool_execution_time,
         "upsonic_execution_time": usage.upsonic_execution_time,
     }
     
@@ -1415,6 +1420,8 @@ def print_agent_metrics(agent: "Agent", print_output: bool = True) -> Optional[D
     
     if usage.model_execution_time is not None:
         table.add_row("[bold]Model Execution Time:[/bold]", f"[cyan]{usage.model_execution_time:.2f} seconds[/cyan]")
+    if usage.tool_execution_time is not None:
+        table.add_row("[bold]Tool Execution Time:[/bold]", f"[cyan]{usage.tool_execution_time:.2f} seconds[/cyan]")
     if usage.upsonic_execution_time is not None:
         table.add_row("[bold]Framework Overhead:[/bold]", f"[cyan]{usage.upsonic_execution_time:.2f} seconds[/cyan]")
     
