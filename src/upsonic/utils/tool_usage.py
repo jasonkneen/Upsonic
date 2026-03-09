@@ -1,11 +1,9 @@
 def tool_usage(model_response, task):
 
-        # Extract tool calls from model_response.all_messages()
         tool_usage_value = []
-        all_messages = model_response.all_messages()
+        all_messages = model_response.new_messages()
         
-        # Process messages to extract tool calls and their results
-        tool_calls_map = {}  # Map tool_call_id to tool call info
+        tool_calls_map = {}
         
         for message in all_messages:
             if hasattr(message, 'parts'):

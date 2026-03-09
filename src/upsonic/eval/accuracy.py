@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio
-from typing import Union, Optional, List
+import time
+from typing import Union, Optional, List, Dict, Any, TYPE_CHECKING
 
 from rich.panel import Panel
 from rich.text import Text
@@ -10,7 +11,12 @@ from upsonic.graph.graph import Graph
 from upsonic.team.team import Team 
 from upsonic.tasks.tasks import Task
 from upsonic.eval.models import EvaluationScore, AccuracyEvaluationResult
+from upsonic.eval._pl_helpers import extract_model_parameters, accumulate_agent_usage
 from upsonic.utils.printing import console
+
+if TYPE_CHECKING:
+    from upsonic.integrations.promptlayer import PromptLayer
+
 
 class AccuracyEvaluator:
     """
@@ -25,7 +31,8 @@ class AccuracyEvaluator:
         query: str,
         expected_output: str,
         additional_guidelines: Optional[str] = None,
-        num_iterations: int = 1
+        num_iterations: int = 1,
+        promptlayer: Optional["PromptLayer"] = None,
     ):
         if not isinstance(judge_agent, Agent):
             raise TypeError("The `judge_agent` must be an instance of the `Agent` agent class.")
@@ -34,17 +41,22 @@ class AccuracyEvaluator:
         if not isinstance(num_iterations, int) or num_iterations < 1:
             raise ValueError("`num_iterations` must be a positive integer.")
 
-        self.judge_agent = judge_agent
-        self.agent_under_test = agent_under_test
-        self.query = query
-        self.expected_output = expected_output
-        self.additional_guidelines = additional_guidelines or "No additional guidelines provided."
-        self.num_iterations = num_iterations
+        self.judge_agent: Agent = judge_agent
+        self.agent_under_test: Union[Agent, Graph, Team] = agent_under_test
+        self.query: str = query
+        self.expected_output: str = expected_output
+        self.additional_guidelines: str = additional_guidelines or "No additional guidelines provided."
+        self.num_iterations: int = num_iterations
+        self.promptlayer: Optional["PromptLayer"] = promptlayer
         self._results: List[EvaluationScore] = []
-    
+
     async def run(self, print_results: bool = True) -> AccuracyEvaluationResult:
         self._results = []
-        last_generated_output = ""
+        last_generated_output: str = ""
+        eval_start_time: float = time.time()
+        total_input_tokens: int = 0
+        total_output_tokens: int = 0
+        total_price: float = 0.0
 
         for i in range(self.num_iterations):
             if self.num_iterations > 1:
@@ -56,6 +68,10 @@ class AccuracyEvaluator:
             if isinstance(self.agent_under_test, Agent):
                 await self.agent_under_test.do_async(task)
                 generated_output_obj = task.response
+                in_tok, out_tok, cost = accumulate_agent_usage(self.agent_under_test)
+                total_input_tokens += in_tok
+                total_output_tokens += out_tok
+                total_price += cost
             elif isinstance(self.agent_under_test, Graph):
                 state = await self.agent_under_test.run_async(verbose=False)
                 generated_output_obj = state.get_latest_output()
@@ -67,22 +83,118 @@ class AccuracyEvaluator:
             
             last_generated_output = str(generated_output_obj)
             
-            score_object = await self._get_judge_score(last_generated_output)
+            score_object: EvaluationScore = await self._get_judge_score(last_generated_output)
+            in_tok_j, out_tok_j, cost_j = accumulate_agent_usage(self.judge_agent)
+            total_input_tokens += in_tok_j
+            total_output_tokens += out_tok_j
+            total_price += cost_j
+
             self._results.append(score_object)
         
-        return self._aggregate_and_present_results(last_generated_output, print_results)
+        eval_end_time: float = time.time()
+        final_result: AccuracyEvaluationResult = self._aggregate_and_present_results(last_generated_output, print_results)
+
+        if self.promptlayer is not None:
+            await self._log_eval_to_promptlayer(
+                final_result,
+                start_time=eval_start_time,
+                end_time=eval_end_time,
+                input_tokens=total_input_tokens,
+                output_tokens=total_output_tokens,
+                price=total_price,
+            )
+
+        return final_result
 
     async def run_with_output(self, output: str, print_results: bool = True) -> AccuracyEvaluationResult:
         self._results = [] 
-        
+        eval_start_time: float = time.time()
+        total_input_tokens: int = 0
+        total_output_tokens: int = 0
+        total_price: float = 0.0
+
         for i in range(self.num_iterations):
             if self.num_iterations > 1:
                 console.print(f"[bold blue]--- Scoring Pre-existing Output: Iteration {i + 1} of {self.num_iterations} ---[/bold blue]")
 
-            score_object = await self._get_judge_score(output)
+            score_object: EvaluationScore = await self._get_judge_score(output)
+            in_tok, out_tok, cost = accumulate_agent_usage(self.judge_agent)
+            total_input_tokens += in_tok
+            total_output_tokens += out_tok
+            total_price += cost
+
             self._results.append(score_object)
 
-        return self._aggregate_and_present_results(output, print_results)
+        eval_end_time: float = time.time()
+        final_result: AccuracyEvaluationResult = self._aggregate_and_present_results(output, print_results)
+
+        if self.promptlayer is not None:
+            await self._log_eval_to_promptlayer(
+                final_result,
+                start_time=eval_start_time,
+                end_time=eval_end_time,
+                input_tokens=total_input_tokens,
+                output_tokens=total_output_tokens,
+                price=total_price,
+            )
+
+        return final_result
+
+    async def _log_eval_to_promptlayer(
+        self,
+        final_result: AccuracyEvaluationResult,
+        *,
+        start_time: float,
+        end_time: float,
+        input_tokens: int,
+        output_tokens: int,
+        price: float,
+    ) -> None:
+        if self.promptlayer is None:
+            return
+
+        agent_model: str = getattr(self.agent_under_test, "model_name", "unknown")
+        provider: str
+        model: str
+        provider, model = self.promptlayer._parse_provider_model(str(agent_model))
+
+        avg_score_0_100: int = max(0, min(100, int(round(final_result.average_score * 10))))
+
+        per_iteration_scores: dict[str, int] = {}
+        for i, eval_score in enumerate(final_result.evaluation_scores):
+            per_iteration_scores[f"iteration_{i}_score"] = max(0, min(100, int(round(eval_score.score * 10))))
+            per_iteration_scores[f"iteration_{i}_passed"] = 100 if eval_score.is_met else 0
+
+        all_met: bool = all(s.is_met for s in final_result.evaluation_scores)
+
+        model_params: Optional[Dict[str, Any]] = None
+        if isinstance(self.agent_under_test, Agent):
+            model_params = extract_model_parameters(self.agent_under_test)
+
+        await self.promptlayer.alog(
+            provider=provider,
+            model=model,
+            input_text=final_result.user_query,
+            output_text=final_result.generated_output,
+            start_time=start_time,
+            end_time=end_time,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            price=price,
+            parameters=model_params,
+            tags=["upsonic-eval", "accuracy-eval"],
+            metadata={
+                "eval_type": "accuracy",
+                "expected_output": final_result.expected_output,
+                "num_iterations": len(final_result.evaluation_scores),
+                "average_score": final_result.average_score,
+                "all_met": all_met,
+            },
+            score=avg_score_0_100,
+            status="SUCCESS",
+            function_name=f"accuracy_eval:{agent_model}",
+            scores=per_iteration_scores,
+        )
 
     async def _get_judge_score(self, generated_output: str) -> EvaluationScore:
         judge_prompt = self._construct_judge_prompt(generated_output)
@@ -164,7 +276,7 @@ class AccuracyEvaluator:
             color, title = "red", "[bold red]❌ Evaluation Failed[/bold red]"
 
         summary_text = Text()
-        summary_text.append(f"Average Score: ", style="bold")
+        summary_text.append("Average Score: ", style="bold")
         summary_text.append(f"{result.average_score:.2f} / 10.0\n\n", style=f"bold {color}")
         summary_text.append("--- Last Run Details ---\n", style="dim")
         summary_text.append("User Query: ", style="bold")

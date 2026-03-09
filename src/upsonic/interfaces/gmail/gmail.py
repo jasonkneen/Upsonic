@@ -178,7 +178,7 @@ class GmailInterface(Interface):
 
         base_health["configuration"] = {
             "connected": is_connected,
-            "tools_enabled": len(self.gmail_tools.functions()),
+            "tools_enabled": len(self.gmail_tools.functions),
             "auth_configured": bool(self.api_secret),
             "mode": self.mode.value,
             "reset_command": self._reset_command.command if self._reset_enabled else None,
@@ -197,8 +197,7 @@ class GmailInterface(Interface):
             reply_text: The body of the reply
         """
         try:
-            await asyncio.to_thread(
-                self.gmail_tools.send_email_reply,
+            await self.gmail_tools.asend_email_reply(
                 thread_id=email_data.get("thread_id"),
                 message_id=email_data.get("id"),
                 to=email_data.get("from"),
@@ -259,9 +258,7 @@ class GmailInterface(Interface):
                 if not self.is_email_allowed(sender):
                     info_log(self.get_unauthorized_message())
                     # Mark as read to avoid reprocessing
-                    await asyncio.to_thread(
-                        self.gmail_tools.mark_email_as_read, msg_id
-                    )
+                    await self.gmail_tools.amark_email_as_read(msg_id)
                     continue
 
                 # Check for reset command in CHAT mode
@@ -277,9 +274,7 @@ class GmailInterface(Interface):
                     await self._process_email_chat_mode(msg_data)
                 
                 # Mark as read AFTER processing
-                await asyncio.to_thread(
-                    self.gmail_tools.mark_email_as_read, msg_id
-                )
+                await self.gmail_tools.amark_email_as_read(msg_id)
                 
                 processed_ids.append(msg_id)
 
@@ -343,9 +338,7 @@ class GmailInterface(Interface):
         await self._send_reply(msg_data, reply_text)
         
         # Mark as read
-        await asyncio.to_thread(
-            self.gmail_tools.mark_email_as_read, msg_id
-        )
+        await self.gmail_tools.amark_email_as_read(msg_id)
         
         info_log(f"Reset command processed for user {user_id}")
     

@@ -154,7 +154,9 @@ async def test_culture_format_for_system_prompt():
     assert formatted is not None, "Formatted string should not be None"
     assert "<CulturalKnowledge>" in formatted, "Should contain opening tag"
     assert "</CulturalKnowledge>" in formatted, "Should contain closing tag"
-    assert "Agent Culture Guidelines" in formatted, "Should contain header"
+    assert (
+        "Agent Culture Guidelines" in formatted or "AGENT CULTURE GUIDELINES" in formatted
+    ), "Should contain header"
     assert "Tone of Speech" in formatted, "Should contain Tone of Speech section"
     assert "Topics I Shouldn't Talk About" in formatted, "Should contain Topics to Avoid section"
     assert "Topics I Can Help With" in formatted, "Should contain Topics to Help section"

@@ -18,8 +18,9 @@ if TYPE_CHECKING:
     from upsonic.tasks.tasks import Task
     from upsonic.models import Model
     from upsonic.agent.agent import Agent
-    from upsonic.tools.processor import ExternalExecutionPause
+    from upsonic.tools.processor import ExternalExecutionPause, ConfirmationPause, UserInputPause
     from upsonic.run.events.events import AgentEvent
+    from upsonic.agent.otel_manager import AgentOTelManager
 else:
     AgentRunOutput = "AgentRunOutput"
     StepResult = "StepResult"
@@ -27,6 +28,10 @@ else:
     Model = "Model"
     Agent = "Agent"
     AgentEvent = "AgentEvent"
+    AgentOTelManager = "AgentOTelManager"
+    ExternalExecutionPause = "ExternalExecutionPause"
+    ConfirmationPause = "ConfirmationPause"
+    UserInputPause = "UserInputPause"
 
 from upsonic.utils.logging_config import sentry_sdk, get_logger
 
@@ -72,6 +77,16 @@ class PipelineManager:
         # Manager registry for sharing managers across steps
         self._managers: Dict[str, Any] = {}
     
+    @property
+    def _otel(self) -> "AgentOTelManager":
+        """Resolve the AgentOTelManager from the agent, with a no-op fallback."""
+        if self.agent is not None:
+            otel = getattr(self.agent, "_otel", None)
+            if otel is not None:
+                return otel
+        from upsonic.agent.otel_manager import AgentOTelManager as _Mgr
+        return _Mgr(None)
+
     def add_step(self, step: Step) -> None:
         """Add a step to the pipeline."""
         self.steps.append(step)
@@ -231,7 +246,11 @@ class PipelineManager:
                 step_name = self.steps[start_step_index].name if start_step_index < len(self.steps) else "unknown"
                 info_log(f"Resuming pipeline from step {start_step_index} ({step_name})", "PipelineManager")
         
-        with sentry_sdk.start_transaction(
+        with self._otel.pipeline_span(
+            total_steps=len(self.steps),
+            is_streaming=context.is_streaming if hasattr(context, 'is_streaming') else False,
+            debug=self.debug,
+        ) as otel_pipeline_span, sentry_sdk.start_transaction(
             op="agent.pipeline.execute",
             name=f"Agent Pipeline ({len(self.steps)} steps)"
         ) as transaction:
@@ -262,7 +281,7 @@ class PipelineManager:
                 for step_index in range(start_step_index, len(self.steps)):
                     step = self.steps[step_index]
                     
-                    with sentry_sdk.start_span(
+                    with self._otel.step_span(step.name, step.description) as otel_step_span, sentry_sdk.start_span(
                         op=f"pipeline.step.{step.name}",
                         name=step.description
                     ) as span:
@@ -290,9 +309,14 @@ class PipelineManager:
                                     is_streaming=context.is_streaming
                                 )
 
-                        # Execute step - run() now returns StepResult directly
                         result = await step.run(context, self.task, self.agent, self.model, step_index, pipeline_manager=self)
                         
+                        self._otel.set_step_result(
+                            otel_step_span,
+                            status=result.status.value,
+                            execution_time=result.execution_time,
+                            error_message=result.message if result.status == StepStatus.ERROR else None,
+                        )
 
                         span.set_tag("step.status", result.status.value)
                         span.set_data("step.message", result.message)
@@ -361,12 +385,23 @@ class PipelineManager:
                         step_results_dict,
                         total_time
                     )
+                self._otel.mark_success(otel_pipeline_span)
                 return context
 
             except Exception as e:
                 from upsonic.exceptions import RunCancelledException
-                from upsonic.tools.processor import ExternalExecutionPause
+                from upsonic.tools.processor import ExternalExecutionPause, ConfirmationPause, UserInputPause
                 
+                # Confirmation pause - return normally with paused status
+                if isinstance(e, ConfirmationPause):
+                    await self._handle_confirmation_pause(context, e)
+                    return context
+
+                # User input pause - return normally with paused status
+                if isinstance(e, UserInputPause):
+                    await self._handle_user_input_pause(context, e)
+                    return context
+
                 # External tool pause - return normally with paused status
                 if isinstance(e, ExternalExecutionPause):
                     await self._handle_external_tool_pause(context, e)
@@ -429,6 +464,8 @@ class PipelineManager:
                             model_name=getattr(self.model, 'model_name', 'Unknown') if self.model else None
                         )
                 
+                self._otel.record_error(otel_pipeline_span, e)
+
                 transaction.set_tag("pipeline.status", "error")
                 transaction.set_data("error.message", str(e))
                 transaction.set_data("error.type", type(e).__name__)
@@ -514,7 +551,10 @@ class PipelineManager:
         
         error_message = None
         
-        try:
+        with self._otel.pipeline_span(
+            total_steps=len(self.steps), is_streaming=True, debug=self.debug,
+        ) as otel_pipeline_span:
+          try:
             for step_index in range(start_step_index, len(self.steps)):
                 step = self.steps[step_index]
                 
@@ -524,47 +564,48 @@ class PipelineManager:
                 
                 step_start_time = time.time()
                 
-                # Clear events before step execution to track new events
                 events_before = len(context.events)
                 
-                # Use run_stream() for streaming execution - yields events including step start/end
-                if step.supports_streaming and context.is_streaming:
-                    async for event in step.run_stream(context, self.task, self.agent, self.model, step_index, pipeline_manager=self):
-                        yield event
-                        # Also collect in context.events if not already there
-                        if event not in context.events:
-                            context.events.append(event)
-                else:
-                    # Non-streaming step - run() returns StepResult directly
-                    # Emit StepStartEvent for non-streaming steps
-                    yield StepStartEvent(
-                        run_id=run_id or "",
-                        step_name=step.name,
-                        step_index=step_index,
-                        total_steps=len(self.steps),
-                        step_description=step.description
-                    )
+                with self._otel.step_span(step.name, step.description) as otel_step_span:
+                    if step.supports_streaming and context.is_streaming:
+                        async for event in step.run_stream(context, self.task, self.agent, self.model, step_index, pipeline_manager=self):
+                            yield event
+                            if event not in context.events:
+                                context.events.append(event)
+                    else:
+                        yield StepStartEvent(
+                            run_id=run_id or "",
+                            step_name=step.name,
+                            step_index=step_index,
+                            total_steps=len(self.steps),
+                            step_description=step.description
+                        )
+                        
+                        result = await step.run(context, self.task, self.agent, self.model, step_index, pipeline_manager=self)
+                        
+                        for event in context.events[events_before:]:
+                            yield event
+                        
+                        step_result = context.step_results[-1] if context.step_results else None
+                        yield StepEndEvent(
+                            run_id=run_id or "",
+                            step_name=step.name,
+                            step_index=step_index,
+                            status=step_result.status.value if step_result else "unknown",
+                            execution_time=step_result.execution_time if step_result else time.time() - step_start_time,
+                            message=step_result.message if step_result else None
+                        )
                     
-                    result = await step.run(context, self.task, self.agent, self.model, step_index, pipeline_manager=self)
-                    
-                    # Yield any events that were added to context during execution
-                    for event in context.events[events_before:]:
-                        yield event
-                    
-                    # Emit StepEndEvent for non-streaming steps
-                    step_result = context.step_results[-1] if context.step_results else None
-                    yield StepEndEvent(
-                        run_id=run_id or "",
-                        step_name=step.name,
-                        step_index=step_index,
-                        status=step_result.status.value if step_result else "unknown",
-                        execution_time=step_result.execution_time if step_result else time.time() - step_start_time,
-                        message=step_result.message if step_result else None
-                    )
+                    step_result_for_otel = context.step_results[-1] if context.step_results else None
+                    if step_result_for_otel:
+                        self._otel.set_step_result(
+                            otel_step_span,
+                            status=step_result_for_otel.status.value,
+                            execution_time=step_result_for_otel.execution_time,
+                            error_message=step_result_for_otel.message if step_result_for_otel.status == StepStatus.ERROR else None,
+                        )
                 
-                # Get result from context (last step result)
                 result = context.step_results[-1] if context.step_results else None
-                
                 
                 if self.debug and result:
                     from upsonic.utils.printing import pipeline_step_completed
@@ -575,7 +616,6 @@ class PipelineManager:
                         result.message
                     )
 
-            
             total_time = time.time() - pipeline_start_time
             
             last_step_status = context.step_results[-1].status if context.step_results else StepStatus.COMPLETED
@@ -596,9 +636,13 @@ class PipelineManager:
                 step_results_dict = {sr.name: {"status": sr.status.value, "message": sr.message, "execution_time": sr.execution_time} for sr in context.step_results}
                 pipeline_timeline(step_results_dict, total_time)
             
-        except Exception as e:
+            self._otel.mark_success(otel_pipeline_span)
+            
+          except Exception as e:
             from upsonic.exceptions import RunCancelledException
             from upsonic.run.events.events import RunCancelledEvent
+            
+            self._otel.record_error(otel_pipeline_span, e)
             
             if isinstance(e, RunCancelledException):
                 cancelled_step = context.get_cancelled_step()
@@ -632,13 +676,10 @@ class PipelineManager:
             
             raise
         
-        finally:
+          finally:
             total_time = time.time() - pipeline_start_time
             executed_steps = context.execution_stats.executed_steps if context.execution_stats else 0
 
-            # Emit pipeline end event
-            # Wrap in try-except: if the generator was cancelled by asyncio.wait_for,
-            # yielding here raises GeneratorExit which we must handle gracefully.
             try:
                 yield PipelineEndEvent(
                     run_id=run_id or "",
@@ -649,7 +690,6 @@ class PipelineManager:
                     error_message=error_message
                 )
 
-                # Emit RunCompletedEvent LAST - after pipeline (only on success/completion)
                 if context.step_results and context.step_results[-1].status == StepStatus.COMPLETED:
                     if self.agent and self.agent._agent_run_output:
                         self.agent._agent_run_output.mark_completed()
@@ -691,7 +731,7 @@ class PipelineManager:
             if step.name == step_name:
                 return i
         raise ValueError(f"Step '{step_name}' not found in pipeline")
-    
+
     async def _handle_external_tool_pause(
         self, 
         output: "AgentRunOutput", 
@@ -707,18 +747,20 @@ class PipelineManager:
         
         if self.task:
             self.task.is_paused = True
+            if hasattr(self.task, '_usage') and self.task._usage is not None:
+                self.task._usage.stop_timer()
         
-        external_calls = e.external_calls or []
+        paused_calls = e.paused_calls or []
         
-        if not external_calls:
-            raise RuntimeError("ExternalExecutionPause must have external_calls attached by ToolManager")
+        if not paused_calls:
+            raise RuntimeError("ExternalExecutionPause must have paused_calls attached by ToolManager")
 
-        for external_call in external_calls:
+        for paused_call in paused_calls:
             tool_execution = ToolExecution(
-                tool_call_id=external_call.tool_call_id,
-                tool_name=external_call.tool_name,
-                tool_args=external_call.tool_args,
-                result=external_call.result,
+                tool_call_id=paused_call.tool_call_id,
+                tool_name=paused_call.tool_name,
+                tool_args=paused_call.tool_args,
+                result=paused_call.result,
                 external_execution_required=True,
             )
             
@@ -731,8 +773,87 @@ class PipelineManager:
         
         if self.debug:
             from upsonic.utils.printing import info_log
-            info_log(f"External tool pause: {len(external_calls)} tool(s) waiting", "PipelineManager")
-    
+            info_log(f"External tool pause: {len(paused_calls)} tool(s) waiting", "PipelineManager")
+
+    async def _handle_confirmation_pause(
+        self,
+        output: "AgentRunOutput",
+        e: "ConfirmationPause",
+    ) -> None:
+        """Handle ConfirmationPause exception.
+        
+        Creates RunRequirement with requires_confirmation for each tool call
+        that needs user approval.
+        """
+        from upsonic.run.requirements import RunRequirement
+        from upsonic.run.tools.tools import ToolExecution
+
+        if self.task:
+            self.task.is_paused = True
+            if hasattr(self.task, '_usage') and self.task._usage is not None:
+                self.task._usage.stop_timer()
+
+        paused_calls = e.paused_calls or []
+        if not paused_calls:
+            raise RuntimeError("ConfirmationPause must have paused_calls attached by ToolManager")
+
+        for paused_call in paused_calls:
+            tool_execution = ToolExecution(
+                tool_call_id=paused_call.tool_call_id,
+                tool_name=paused_call.tool_name,
+                tool_args=paused_call.tool_args,
+                requires_confirmation=True,
+            )
+            requirement = RunRequirement(tool_execution=tool_execution)
+            output.add_requirement(requirement)
+
+        output.mark_paused("confirmation")
+        await self._save_session(output)
+
+        if self.debug:
+            from upsonic.utils.printing import info_log
+            info_log(f"Confirmation pause: {len(paused_calls)} tool(s) awaiting approval", "PipelineManager")
+
+    async def _handle_user_input_pause(
+        self,
+        output: "AgentRunOutput",
+        e: "UserInputPause",
+    ) -> None:
+        """Handle UserInputPause exception.
+        
+        Creates RunRequirement with requires_user_input and user_input_schema
+        for each tool call that needs user-provided values.
+        """
+        from upsonic.run.requirements import RunRequirement
+        from upsonic.run.tools.tools import ToolExecution
+
+        if self.task:
+            self.task.is_paused = True
+            if hasattr(self.task, '_usage') and self.task._usage is not None:
+                self.task._usage.stop_timer()
+
+        paused_calls = e.paused_calls or []
+        if not paused_calls:
+            raise RuntimeError("UserInputPause must have paused_calls attached by ToolManager")
+
+        for paused_call in paused_calls:
+            tool_execution = ToolExecution(
+                tool_call_id=paused_call.tool_call_id,
+                tool_name=paused_call.tool_name,
+                tool_args=paused_call.tool_args,
+                requires_user_input=True,
+                user_input_schema=paused_call.user_input_schema,
+            )
+            requirement = RunRequirement(tool_execution=tool_execution)
+            output.add_requirement(requirement)
+
+        output.mark_paused("user_input")
+        await self._save_session(output)
+
+        if self.debug:
+            from upsonic.utils.printing import info_log
+            info_log(f"User input pause: {len(paused_calls)} tool(s) awaiting input", "PipelineManager")
+
     def set_manager(self, name: str, manager: Any) -> None:
         """
         Register a manager in the pipeline registry.

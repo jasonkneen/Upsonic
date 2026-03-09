@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from upsonic.agent.deepagent.tools.planning_toolkit import TodoList
     from upsonic.tools import ToolManager
     from upsonic.tools.base import ToolDefinition
+    from upsonic.usage import TaskUsage
 
 
 CacheMethod = Literal["vector_search", "llm_call"]
@@ -38,6 +39,7 @@ class Task(BaseModel):
     enable_thinking_tool: Optional[bool] = None
     enable_reasoning_tool: Optional[bool] = None
     _tool_calls: List[Dict[str, Any]] = None
+    _promptlayer_request_id: Optional[int] = None
     guardrail: Optional[Callable] = None
     guardrail_retries: Optional[int] = None
     is_paused: bool = False
@@ -60,7 +62,7 @@ class Task(BaseModel):
     # Stores mappings: {idx: {"original": "...", "anonymous": "...", "pii_type": "..."}}
     # Used to de-anonymize LLM responses before returning to user
     _anonymization_map: Optional[Dict[int, Dict[str, str]]] = None
-    
+    _usage: Optional[TaskUsage] = None
     registered_task_tools: Dict[str, Any] = {}
     task_builtin_tools: List[Any] = []
     _tool_manager: Optional[Any] = None
@@ -379,10 +381,34 @@ class Task(BaseModel):
         self.validate_tools()
 
     @property
+    def usage(self) -> Optional["TaskUsage"]:
+        return self._usage
+
+    @property
     def duration(self) -> Optional[float]:
+        if self._usage is not None and self._usage.duration is not None:
+            return self._usage.duration
         if self.start_time is None or self.end_time is None:
             return None
         return self.end_time - self.start_time
+
+    @property
+    def model_execution_time(self) -> Optional[float]:
+        if self._usage is not None:
+            return self._usage.model_execution_time
+        return None
+
+    @property
+    def tool_execution_time(self) -> Optional[float]:
+        if self._usage is not None:
+            return self._usage.tool_execution_time
+        return None
+
+    @property
+    def upsonic_execution_time(self) -> Optional[float]:
+        if self._usage is not None:
+            return self._usage.upsonic_execution_time
+        return None
 
     @property
     def id(self) -> str:
@@ -797,14 +823,18 @@ class Task(BaseModel):
 
 
 
-    def task_start(self, agent):
+    def task_start(self, agent: Any) -> None:
         self.start_time = time.time()
+        from upsonic.usage import TaskUsage
+        self._usage = TaskUsage()
+        self._usage.start_timer()
         if agent.canvas:
             self.add_canvas(agent.canvas)
 
-
-    def task_end(self):
+    def task_end(self) -> None:
         self.end_time = time.time()
+        if self._usage is not None:
+            self._usage.stop_timer()
 
     def task_response(self, model_response):
         self._response = model_response.output
@@ -980,11 +1010,13 @@ class Task(BaseModel):
             "_response": self._response,
             "_context_formatted": self._context_formatted,
             "_tool_calls": self._tool_calls,
+            "_promptlayer_request_id": self._promptlayer_request_id,
             "_cache_hit": self._cache_hit,
             "_original_input": self._original_input,
             "_run_id": self._run_id,
             "_last_cache_entry": self._last_cache_entry,
             "_anonymization_map": self._anonymization_map,
+            "_usage": self._usage.to_dict() if self._usage is not None else None,
         }
         
         # Handle status (RunStatus enum)
@@ -1014,6 +1046,7 @@ class Task(BaseModel):
             } if self.registered_task_tools else {}
             result["task_builtin_tools"] = [Task._pickle(t) for t in self.task_builtin_tools] if self.task_builtin_tools else []
             result["guardrail"] = Task._pickle(self.guardrail)
+            result["_tool_manager"] = Task._pickle(self._tool_manager)
         else:
             # Convert types to JSON-serializable format when not using cloudpickle
             # response_format handling (type to dict)
@@ -1045,6 +1078,7 @@ class Task(BaseModel):
             result["registered_task_tools"] = None
             result["task_builtin_tools"] = None
             result["guardrail"] = None
+            result["_tool_manager"] = None
         
         # Handle agent, cache_embedding_provider, _cache_manager
         # These should NOT be serialized - include as-is when not serializing
@@ -1210,6 +1244,13 @@ class Task(BaseModel):
             else:
                 task.task_builtin_tools = task_builtin_tools
         
+        tool_manager = data.get("_tool_manager")
+        if tool_manager is not None:
+            if deserialize_flag:
+                task._tool_manager = Task._unpickle(tool_manager)
+            else:
+                task._tool_manager = tool_manager
+
         # Restore simple private fields
         if data.get("_response") is not None:
             task._response = data["_response"]
@@ -1217,6 +1258,8 @@ class Task(BaseModel):
             task._context_formatted = data["_context_formatted"]
         if data.get("_tool_calls") is not None:
             task._tool_calls = data["_tool_calls"]
+        if "_promptlayer_request_id" in data:
+            task._promptlayer_request_id = data["_promptlayer_request_id"]
         if data.get("_cache_hit") is not None:
             task._cache_hit = data["_cache_hit"]
         if data.get("_original_input") is not None:
@@ -1227,6 +1270,11 @@ class Task(BaseModel):
             task._last_cache_entry = data["_last_cache_entry"]
         if data.get("_anonymization_map") is not None:
             task._anonymization_map = data["_anonymization_map"]
+        
+        usage_data: Optional[Dict[str, Any]] = data.get("_usage")
+        if usage_data is not None and isinstance(usage_data, dict):
+            from upsonic.usage import TaskUsage
+            task._usage = TaskUsage.from_dict(usage_data)
         
         # Restore agent, cache_embedding_provider, _cache_manager if present
         if data.get("agent") is not None:

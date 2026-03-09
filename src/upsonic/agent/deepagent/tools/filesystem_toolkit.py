@@ -5,7 +5,7 @@ Provides all filesystem tools with proper backend integration,
 security validation, and comprehensive error handling.
 """
 
-from typing import Optional, Literal, Set
+from typing import Any, Literal, Optional, Set
 from upsonic.tools import tool, ToolKit
 from upsonic.agent.deepagent.backends import BackendProtocol
 from upsonic.agent.deepagent.constants import (
@@ -49,17 +49,19 @@ class FilesystemToolKit(ToolKit):
         ```
     """
     
-    def __init__(self, backend: BackendProtocol):
+    def __init__(self, backend: BackendProtocol, **kwargs: Any):
         """
         Initialize the filesystem toolkit.
         
         Args:
             backend: Backend implementing BackendProtocol for storage
+            **kwargs: ToolKit params (include_tools, exclude_tools, timeout, etc.).
         """
+        super().__init__(**kwargs)
         self.backend = backend
         # Track which files have been read for edit_file enforcement
         self._read_files: Set[str] = set()
-    
+
     @tool
     async def ls(self, path: str = "/") -> str:
         """Placeholder docstring - will be replaced."""

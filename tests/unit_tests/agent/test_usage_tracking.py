@@ -5,8 +5,9 @@ Tests verify usage accumulation and propagation logic without making real API ca
 All tests use mocks; no API key required.
 
 Covers:
-- RunUsage / RequestUsage incr and aggregation
-- AgentRunOutput.update_usage_from_response, set_usage_cost, _ensure_usage
+- TaskUsage / RequestUsage incr and aggregation
+- AgentUsage aggregation from TaskUsage
+- AgentRunOutput._ensure_usage, set_usage_cost
 - CultureManager _last_llm_usage accumulation and drain_accumulated_usage
 - Orchestrator _propagate_sub_agent_usage
 - AgentTool _accumulated_usage and drain_accumulated_usage
@@ -19,66 +20,122 @@ from __future__ import annotations
 import pytest
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
 
-from upsonic.usage import RunUsage, RequestUsage
+from upsonic.usage import TaskUsage, RequestUsage, AgentUsage
 from upsonic.run.agent.output import AgentRunOutput
 
 
 # ---------------------------------------------------------------------------
-# RunUsage and RequestUsage
+# TaskUsage and RequestUsage
 # ---------------------------------------------------------------------------
 
-class TestRunUsageRequestUsage:
-    """Unit tests for RunUsage and RequestUsage aggregation."""
+class TestTaskUsageRequestUsage:
+    """Unit tests for TaskUsage and RequestUsage aggregation."""
 
-    def test_run_usage_incr_request_usage(self) -> None:
-        """RunUsage.incr(RequestUsage) increments tokens and requests."""
-        run_usage = RunUsage()
+    def test_task_usage_incr_request_usage(self) -> None:
+        """TaskUsage.incr(RequestUsage) increments tokens and requests."""
+        task_usage = TaskUsage()
         req_usage = RequestUsage(input_tokens=100, output_tokens=50)
 
-        run_usage.incr(req_usage)
+        task_usage.incr(req_usage)
 
-        assert run_usage.requests == 1
-        assert run_usage.input_tokens == 100
-        assert run_usage.output_tokens == 50
+        assert task_usage.requests == 1
+        assert task_usage.input_tokens == 100
+        assert task_usage.output_tokens == 50
 
-    def test_run_usage_incr_request_usage_twice(self) -> None:
-        """RunUsage.incr(RequestUsage) twice accumulates correctly."""
-        run_usage = RunUsage()
+    def test_task_usage_incr_request_usage_twice(self) -> None:
+        """TaskUsage.incr(RequestUsage) twice accumulates correctly."""
+        task_usage = TaskUsage()
         req1 = RequestUsage(input_tokens=10, output_tokens=5)
         req2 = RequestUsage(input_tokens=20, output_tokens=15)
 
-        run_usage.incr(req1)
-        run_usage.incr(req2)
+        task_usage.incr(req1)
+        task_usage.incr(req2)
 
-        assert run_usage.requests == 2
-        assert run_usage.input_tokens == 30
-        assert run_usage.output_tokens == 20
+        assert task_usage.requests == 2
+        assert task_usage.input_tokens == 30
+        assert task_usage.output_tokens == 20
 
-    def test_run_usage_incr_run_usage(self) -> None:
-        """RunUsage.incr(RunUsage) merges requests, tokens, and cost."""
-        run_usage = RunUsage()
-        other = RunUsage(
+    def test_task_usage_incr_task_usage(self) -> None:
+        """TaskUsage.incr(TaskUsage) merges requests, tokens, and cost."""
+        task_usage = TaskUsage()
+        other = TaskUsage(
             requests=2,
             input_tokens=200,
             output_tokens=80,
             cost=0.001,
         )
 
-        run_usage.incr(other)
+        task_usage.incr(other)
 
-        assert run_usage.requests == 2
-        assert run_usage.input_tokens == 200
-        assert run_usage.output_tokens == 80
-        assert run_usage.cost == 0.001
+        assert task_usage.requests == 2
+        assert task_usage.input_tokens == 200
+        assert task_usage.output_tokens == 80
+        assert task_usage.cost == 0.001
 
-    def test_run_usage_incr_run_usage_cost_accumulates(self) -> None:
-        """RunUsage.incr(RunUsage) accumulates cost when both have cost."""
-        run_usage = RunUsage(cost=0.001)
-        other = RunUsage(cost=0.002, requests=1, input_tokens=1, output_tokens=1)
+    def test_task_usage_incr_task_usage_cost_accumulates(self) -> None:
+        """TaskUsage.incr(TaskUsage) accumulates cost when both have cost."""
+        task_usage = TaskUsage(cost=0.001)
+        other = TaskUsage(cost=0.002, requests=1, input_tokens=1, output_tokens=1)
 
-        run_usage.incr(other)
+        task_usage.incr(other)
 
-        assert run_usage.cost == 0.003
+        assert task_usage.cost == 0.003
+
+
+# ---------------------------------------------------------------------------
+# AgentUsage from TaskUsage aggregation
+# ---------------------------------------------------------------------------
+
+class TestAgentUsageAggregation:
+    """Unit tests for AgentUsage aggregation from TaskUsage."""
+
+    def test_agent_usage_incr_task_usage(self) -> None:
+        """AgentUsage.incr(TaskUsage) increments all fields."""
+        agent_usage = AgentUsage()
+        task_usage = TaskUsage(
+            requests=2,
+            input_tokens=200,
+            output_tokens=80,
+            cost=0.001,
+            duration=3.0,
+            model_execution_time=2.0,
+            tool_calls=1,
+        )
+
+        agent_usage.incr(task_usage)
+
+        assert agent_usage.requests == 2
+        assert agent_usage.input_tokens == 200
+        assert agent_usage.output_tokens == 80
+        assert agent_usage.cost == 0.001
+        assert agent_usage.duration == 3.0
+        assert agent_usage.model_execution_time == 2.0
+        assert agent_usage.tool_calls == 1
+
+    def test_agent_usage_incr_multiple_task_usages(self) -> None:
+        """AgentUsage accumulates across multiple TaskUsage increments."""
+        agent_usage = AgentUsage()
+
+        agent_usage.incr(TaskUsage(requests=1, input_tokens=100, output_tokens=50, cost=0.001))
+        agent_usage.incr(TaskUsage(requests=2, input_tokens=200, output_tokens=100, cost=0.002))
+
+        assert agent_usage.requests == 3
+        assert agent_usage.input_tokens == 300
+        assert agent_usage.output_tokens == 150
+        assert agent_usage.cost == pytest.approx(0.003)
+
+    def test_agent_usage_incr_agent_usage(self) -> None:
+        """AgentUsage.incr(AgentUsage) merges sub-agent totals."""
+        main = AgentUsage(requests=1, input_tokens=100, cost=0.001)
+        sub = AgentUsage(requests=2, input_tokens=200, cost=0.002, duration=5.0, model_execution_time=3.0)
+
+        main.incr(sub)
+
+        assert main.requests == 3
+        assert main.input_tokens == 300
+        assert main.cost == pytest.approx(0.003)
+        assert main.duration == 5.0
+        assert main.model_execution_time == 3.0
 
 
 # ---------------------------------------------------------------------------
@@ -88,8 +145,8 @@ class TestRunUsageRequestUsage:
 class TestAgentRunOutputUsage:
     """Unit tests for AgentRunOutput usage tracking methods."""
 
-    def test_ensure_usage_creates_run_usage(self) -> None:
-        """_ensure_usage() creates RunUsage when usage is None."""
+    def test_ensure_usage_creates_task_usage(self) -> None:
+        """_ensure_usage() creates TaskUsage when usage is None."""
         output = AgentRunOutput(
             run_id="r1",
             agent_id="a1",
@@ -102,11 +159,11 @@ class TestAgentRunOutputUsage:
         usage = output._ensure_usage()
 
         assert usage is not None
-        assert isinstance(usage, RunUsage)
+        assert isinstance(usage, TaskUsage)
         assert output.usage is usage
 
-    def test_update_usage_from_response_request_usage(self) -> None:
-        """update_usage_from_response(RequestUsage) increments usage."""
+    def test_ensure_usage_incr_request_usage(self) -> None:
+        """_ensure_usage().incr(RequestUsage) increments usage."""
         output = AgentRunOutput(
             run_id="r1",
             agent_id="a1",
@@ -116,14 +173,14 @@ class TestAgentRunOutputUsage:
         )
 
         req_usage = RequestUsage(input_tokens=50, output_tokens=25)
-        output.update_usage_from_response(req_usage)
+        output._ensure_usage().incr(req_usage)
 
         assert output.usage.requests == 1
         assert output.usage.input_tokens == 50
         assert output.usage.output_tokens == 25
 
-    def test_update_usage_from_response_dict(self) -> None:
-        """update_usage_from_response(dict) converts and increments."""
+    def test_ensure_usage_incr_multiple(self) -> None:
+        """Multiple _ensure_usage().incr() calls accumulate correctly."""
         output = AgentRunOutput(
             run_id="r1",
             agent_id="a1",
@@ -132,14 +189,12 @@ class TestAgentRunOutputUsage:
             user_id="u1",
         )
 
-        output.update_usage_from_response({
-            "input_tokens": 30,
-            "output_tokens": 10,
-        })
+        output._ensure_usage().incr(RequestUsage(input_tokens=30, output_tokens=10))
+        output._ensure_usage().incr(RequestUsage(input_tokens=20, output_tokens=15))
 
-        assert output.usage.requests == 1
-        assert output.usage.input_tokens == 30
-        assert output.usage.output_tokens == 10
+        assert output.usage.requests == 2
+        assert output.usage.input_tokens == 50
+        assert output.usage.output_tokens == 25
 
     def test_set_usage_cost_initial(self) -> None:
         """set_usage_cost sets cost when current cost is None."""
@@ -194,7 +249,7 @@ class TestCultureManagerUsageTracking:
         from upsonic.culture.manager import CultureManager
 
         manager = CultureManager(model="openai/gpt-4o")
-        stored = RunUsage(requests=1, input_tokens=100, output_tokens=50, cost=0.0001)
+        stored = TaskUsage(requests=1, input_tokens=100, output_tokens=50, cost=0.0001)
         manager._last_llm_usage = stored
 
         result = manager.drain_accumulated_usage()
@@ -207,7 +262,7 @@ class TestCultureManagerUsageTracking:
         from upsonic.culture.manager import CultureManager
 
         manager = CultureManager(model="openai/gpt-4o")
-        manager._last_llm_usage = RunUsage(requests=1)
+        manager._last_llm_usage = TaskUsage(requests=1)
 
         first = manager.drain_accumulated_usage()
         second = manager.drain_accumulated_usage()
@@ -229,11 +284,10 @@ class TestOrchestratorUsagePropagation:
 
         orch = Orchestrator(agent_instance=None, task=None, wrapped_tools={})
         sub_output = Mock()
-        sub_output.usage = RunUsage(requests=1, input_tokens=10, output_tokens=5)
+        sub_output.usage = TaskUsage(requests=1, input_tokens=10, output_tokens=5)
 
         orch._propagate_sub_agent_usage(sub_output)
 
-        # No exception; no parent to update
         assert True
 
     def test_propagate_sub_agent_usage_no_run_output(self) -> None:
@@ -244,7 +298,7 @@ class TestOrchestratorUsagePropagation:
         del parent._agent_run_output
         orch = Orchestrator(agent_instance=parent, task=None, wrapped_tools={})
         sub_output = Mock()
-        sub_output.usage = RunUsage(requests=1, input_tokens=10, output_tokens=5)
+        sub_output.usage = TaskUsage(requests=1, input_tokens=10, output_tokens=5)
 
         orch._propagate_sub_agent_usage(sub_output)
 
@@ -254,14 +308,14 @@ class TestOrchestratorUsagePropagation:
         """_propagate_sub_agent_usage increments parent agent's run output usage."""
         from upsonic.tools.orchestration import Orchestrator
 
-        parent_usage = RunUsage()
+        parent_usage = TaskUsage()
         parent_output = Mock()
         parent_output.usage = parent_usage
         parent = Mock(_agent_run_output=parent_output)
 
         orch = Orchestrator(agent_instance=parent, task=None, wrapped_tools={})
         sub_output = Mock()
-        sub_output.usage = RunUsage(requests=1, input_tokens=100, output_tokens=50, cost=0.001)
+        sub_output.usage = TaskUsage(requests=1, input_tokens=100, output_tokens=50, cost=0.001)
 
         orch._propagate_sub_agent_usage(sub_output)
 
@@ -274,13 +328,13 @@ class TestOrchestratorUsagePropagation:
         """_propagate_sub_agent_usage does nothing when sub output has no usage."""
         from upsonic.tools.orchestration import Orchestrator
 
-        parent_usage = RunUsage()
+        parent_usage = TaskUsage()
         parent_output = Mock()
         parent_output.usage = parent_usage
         parent = Mock(_agent_run_output=parent_output)
 
         orch = Orchestrator(agent_instance=parent, task=None, wrapped_tools={})
-        sub_output = Mock(spec=[])  # no usage attr
+        sub_output = Mock(spec=[])
         sub_output.usage = None
 
         orch._propagate_sub_agent_usage(sub_output)
@@ -327,7 +381,7 @@ class TestAgentToolUsageTracking:
         mock_agent = Mock()
         mock_agent.name = "Helper"
         tool = AgentTool(mock_agent)
-        stored = RunUsage(requests=1, input_tokens=50, output_tokens=20)
+        stored = TaskUsage(requests=1, input_tokens=50, output_tokens=20)
         tool._accumulated_usage = stored
 
         result = tool.drain_accumulated_usage()
@@ -357,12 +411,12 @@ class TestAgentDrainAgentToolUsage:
             session_id="s1",
             user_id="u1",
         )
-        run_output.usage = RunUsage()
+        run_output.usage = TaskUsage()
         agent._agent_run_output = run_output
         agent.tool_manager = Mock()
         agent.tool_manager.processor = Mock()
         agent.tool_manager.processor.registered_tools = {
-            "some_tool": Mock(),  # Not an AgentTool
+            "some_tool": Mock(),
         }
 
         agent._drain_agent_tool_usage("some_tool")
@@ -385,13 +439,13 @@ class TestAgentDrainAgentToolUsage:
             session_id="s1",
             user_id="u1",
         )
-        run_output.usage = RunUsage()
+        run_output.usage = TaskUsage()
         agent._agent_run_output = run_output
 
         mock_sub_agent = Mock()
         mock_sub_agent.name = "Sub"
         agent_tool = AgentTool(mock_sub_agent)
-        agent_tool._accumulated_usage = RunUsage(
+        agent_tool._accumulated_usage = TaskUsage(
             requests=1,
             input_tokens=60,
             output_tokens=30,
@@ -426,7 +480,7 @@ class TestAgentDrainAgentToolUsage:
             session_id="s1",
             user_id="u1",
         )
-        run_output.usage = RunUsage()
+        run_output.usage = TaskUsage()
         agent._agent_run_output = run_output
         agent.tool_manager = Mock()
         agent.tool_manager.processor = Mock()
@@ -454,7 +508,7 @@ class TestSystemPromptManagerCultureUsageDrain:
         mock_agent._culture_manager.enabled = True
         mock_agent._culture_manager.prepared = False
         mock_agent._culture_manager.drain_accumulated_usage = Mock(
-            return_value=RunUsage(requests=1, input_tokens=40, output_tokens=20, cost=0.0002)
+            return_value=TaskUsage(requests=1, input_tokens=40, output_tokens=20, cost=0.0002)
         )
         run_output = AgentRunOutput(
             run_id="r1",
@@ -463,7 +517,7 @@ class TestSystemPromptManagerCultureUsageDrain:
             session_id="s1",
             user_id="u1",
         )
-        run_output.usage = RunUsage()
+        run_output.usage = TaskUsage()
         mock_agent._agent_run_output = run_output
 
         mock_task = Mock()
@@ -496,7 +550,7 @@ class TestSystemPromptManagerCultureUsageDrain:
             session_id="s1",
             user_id="u1",
         )
-        run_output.usage = RunUsage()
+        run_output.usage = TaskUsage()
         mock_agent._agent_run_output = run_output
 
         mock_task = Mock()
@@ -512,26 +566,26 @@ class TestSystemPromptManagerCultureUsageDrain:
 
 
 # ---------------------------------------------------------------------------
-# RunUsage aggregation from multiple sources (sanity)
+# TaskUsage aggregation from multiple sources (sanity)
 # ---------------------------------------------------------------------------
 
-class TestRunUsageAggregation:
-    """Sanity tests for RunUsage aggregation from multiple sources."""
+class TestTaskUsageAggregation:
+    """Sanity tests for TaskUsage aggregation from multiple sources."""
 
-    def test_aggregate_direct_request_plus_sub_agent_run_usage(self) -> None:
-        """Simulate one direct RequestUsage + one sub-agent RunUsage."""
-        run_usage = RunUsage()
+    def test_aggregate_direct_request_plus_sub_agent_task_usage(self) -> None:
+        """Simulate one direct RequestUsage + one sub-agent TaskUsage."""
+        task_usage = TaskUsage()
 
-        run_usage.incr(RequestUsage(input_tokens=100, output_tokens=50))
-        run_usage.incr(RunUsage(requests=1, input_tokens=200, output_tokens=80, cost=0.001))
+        task_usage.incr(RequestUsage(input_tokens=100, output_tokens=50))
+        task_usage.incr(TaskUsage(requests=1, input_tokens=200, output_tokens=80, cost=0.001))
 
-        assert run_usage.requests == 2
-        assert run_usage.input_tokens == 300
-        assert run_usage.output_tokens == 130
-        assert run_usage.cost == 0.001
+        assert task_usage.requests == 2
+        assert task_usage.input_tokens == 300
+        assert task_usage.output_tokens == 130
+        assert task_usage.cost == 0.001
 
-    def test_agent_run_output_multiple_updates(self) -> None:
-        """AgentRunOutput can receive multiple update_usage_from_response and set_usage_cost."""
+    def test_agent_run_output_multiple_incr_and_set_cost(self) -> None:
+        """AgentRunOutput can receive multiple _ensure_usage().incr() and set_usage_cost."""
         output = AgentRunOutput(
             run_id="r1",
             agent_id="a1",
@@ -540,11 +594,11 @@ class TestRunUsageAggregation:
             user_id="u1",
         )
 
-        output.update_usage_from_response(RequestUsage(input_tokens=10, output_tokens=5))
+        output._ensure_usage().incr(RequestUsage(input_tokens=10, output_tokens=5))
         output.set_usage_cost(0.0001)
-        output.update_usage_from_response(RequestUsage(input_tokens=20, output_tokens=10))
+        output._ensure_usage().incr(RequestUsage(input_tokens=20, output_tokens=10))
         output.set_usage_cost(0.0002)
-        output.usage.incr(RunUsage(requests=1, input_tokens=30, output_tokens=15, cost=0.0003))
+        output.usage.incr(TaskUsage(requests=1, input_tokens=30, output_tokens=15, cost=0.0003))
 
         assert output.usage.requests == 3
         assert output.usage.input_tokens == 60

@@ -6,7 +6,7 @@ This is a "cognitive forcing function" - the act of calling the tool and
 structuring the plan induces more careful reasoning in the model.
 """
 
-from typing import List, Literal, Dict, Any, Optional
+from typing import Any, List, Literal, Dict, Optional
 from pydantic import BaseModel, Field, field_validator
 from upsonic.tools import tool, ToolKit
 from upsonic.agent.deepagent.constants import WRITE_TODOS_TOOL_DESCRIPTION
@@ -100,13 +100,17 @@ class PlanningToolKit(ToolKit):
         ```
     """
     
-    def __init__(self):
+    def __init__(self, **kwargs: Any):
         """
         Initialize the planning toolkit.
         
         Note: The toolkit will receive task reference dynamically
         during tool execution via the tool call context.
+        
+        Args:
+            **kwargs: ToolKit params (include_tools, exclude_tools, timeout, etc.).
         """
+        super().__init__(**kwargs)
         # The current task will be set dynamically during execution
         self._current_task = None
     

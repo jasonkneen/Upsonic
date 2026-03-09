@@ -60,7 +60,7 @@ if TYPE_CHECKING:
         Orchestrator,
     )
     from upsonic.tools.deferred import (
-        ExternalToolCall,
+        PausedToolCall,
         DeferredExecutionManager,
     )
     from upsonic.tools.mcp import (
@@ -186,12 +186,12 @@ def _get_orchestration_classes() -> Dict[str, Any]:
 def _get_deferred_classes() -> Dict[str, Any]:
     """Lazy import of deferred classes."""
     from upsonic.tools.deferred import (
-        ExternalToolCall,
+        PausedToolCall,
         DeferredExecutionManager,
     )
     
     return {
-        'ExternalToolCall': ExternalToolCall,
+        'PausedToolCall': PausedToolCall,
         'DeferredExecutionManager': DeferredExecutionManager,
     }
 
@@ -391,6 +391,14 @@ class ToolManager:
             }
         
         return newly_registered
+
+    def collect_instructions(self) -> List[str]:
+        """Collect all active instructions from toolkits and individual tools.
+
+        Returns:
+            Deduplicated, ordered list of instruction strings.
+        """
+        return self.processor.collect_instructions()
     
     def _validate_required_args(self, tool_name: str, args: Dict[str, Any]) -> Optional[str]:
         """Validate that all required arguments are present before executing a tool.
@@ -472,15 +480,57 @@ class ToolManager:
             )
             
         except Exception as e:
-            from upsonic.tools.processor import ExternalExecutionPause
+            from upsonic.tools.processor import ExternalExecutionPause, ConfirmationPause, UserInputPause
+
+            if isinstance(e, ConfirmationPause):
+                from upsonic.tools.deferred import PausedToolCall as _PCall
+                paused_call = _PCall(
+                    tool_name=tool_name,
+                    tool_args=args,
+                    tool_call_id=tool_call_id,
+                    requires_confirmation=True,
+                )
+                e.paused_calls = [paused_call]
+                raise e
+
+            if isinstance(e, UserInputPause):
+                if e.user_input_schema:
+                    schema_fields = e.user_input_schema
+                else:
+                    tool_obj = self.processor.registered_tools.get(tool_name)
+                    config = getattr(tool_obj, 'config', None)
+                    user_input_fields_list: List[str] = config.user_input_fields if config else []
+                    original_func = getattr(tool_obj, 'function', None)
+
+                    from upsonic.tools.user_input import _build_user_input_schema_from_tool
+                    schema_fields = _build_user_input_schema_from_tool(
+                        tool_name=tool_name,
+                        tool_args=args,
+                        func=original_func,
+                        user_input_fields=user_input_fields_list,
+                    )
+
+                schema_dicts = [f.to_dict() for f in schema_fields]
+
+                from upsonic.tools.deferred import PausedToolCall as _PCall
+                paused_call = _PCall(
+                    tool_name=tool_name,
+                    tool_args=args,
+                    tool_call_id=tool_call_id,
+                    requires_user_input=True,
+                    user_input_schema=schema_dicts,
+                )
+                e.paused_calls = [paused_call]
+                e.user_input_schema = schema_fields
+                raise e
+
             if isinstance(e, ExternalExecutionPause):
                 external_call = self.deferred_manager.create_external_call(
                     tool_name=tool_name,
                     args=args,
                     tool_call_id=tool_call_id
                 )
-                # Always use external_calls (list) for consistency
-                e.external_calls = [external_call]
+                e.paused_calls = [external_call]
                 raise e
             
             from upsonic.tools.base import ToolResult
@@ -751,7 +801,7 @@ __all__ = [
     'plan_and_execute',
     'Orchestrator',
     
-    'ExternalToolCall',
+    'PausedToolCall',
     'DeferredExecutionManager',
     
     'MCPTool',

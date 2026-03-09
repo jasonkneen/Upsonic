@@ -1,13 +1,20 @@
 from __future__ import annotations
-from typing import List, Union
+import time
+from typing import Any, Dict, List, Optional, Union, TYPE_CHECKING
 
+from upsonic.agent.agent import Agent
 from upsonic.tasks.tasks import Task
 from upsonic.graph.graph import Graph, TaskNode
 from upsonic.eval.models import ReliabilityEvaluationResult, ToolCallCheck
+from upsonic.eval._pl_helpers import extract_model_parameters
 from upsonic.utils.printing import console
 
 from rich.table import Table
 from rich.panel import Panel
+
+if TYPE_CHECKING:
+    from upsonic.integrations.promptlayer import PromptLayer
+
 
 class ReliabilityEvaluator:
     """
@@ -19,34 +26,26 @@ class ReliabilityEvaluator:
         expected_tool_calls: List[str],
         order_matters: bool = False,
         exact_match: bool = False,
+        promptlayer: Optional["PromptLayer"] = None,
+        agent_under_test: Optional[Agent] = None,
     ):
         if not isinstance(expected_tool_calls, list) or not all(isinstance(i, str) for i in expected_tool_calls):
             raise TypeError("`expected_tool_calls` must be a list of strings.")
         if not expected_tool_calls:
             raise ValueError("`expected_tool_calls` cannot be an empty list.")
 
-        self.expected_tool_calls = expected_tool_calls
-        self.order_matters = order_matters
-        self.exact_match = exact_match
+        self.expected_tool_calls: List[str] = expected_tool_calls
+        self.order_matters: bool = order_matters
+        self.exact_match: bool = exact_match
+        self.promptlayer: Optional["PromptLayer"] = promptlayer
+        self.agent_under_test: Optional[Agent] = agent_under_test
 
     def run(
         self, 
         run_result: Union[Task, List[Task], Graph],
         print_results: bool = True
     ) -> ReliabilityEvaluationResult:
-        """
-        Analyzes the result of an agent, team, or graph run and verifies its
-        tool-calling behavior against the configured rules.
-
-        Args:
-            run_result: The completed result object from an execution. This can be
-                        a single `Task`, a list of `Task`s (from a Team), or a
-                        `Graph` object after its `run()` method has completed.
-            print_results: If True, prints a formatted summary of the results.
-
-        Returns:
-            A `ReliabilityEvaluationResult` object with the detailed outcome.
-        """
+        eval_start_time: float = time.time()
         actual_tool_calls = self._normalize_tool_call_history(run_result)
 
         passed = True
@@ -84,7 +83,7 @@ class ReliabilityEvaluator:
         
         final_summary = " ".join(summary_messages)
 
-        final_result = ReliabilityEvaluationResult(
+        final_result: ReliabilityEvaluationResult = ReliabilityEvaluationResult(
             passed=passed,
             summary=final_summary,
             expected_tool_calls=self.expected_tool_calls,
@@ -96,8 +95,109 @@ class ReliabilityEvaluator:
 
         if print_results:
             self._print_formatted_results(final_result)
-        
+
+        eval_end_time: float = time.time()
+
+        if self.promptlayer is not None:
+            input_tokens: int
+            output_tokens: int
+            price: float
+            input_tokens, output_tokens, price = self._extract_task_usage(run_result)
+            self._log_eval_to_promptlayer(
+                final_result,
+                start_time=eval_start_time,
+                end_time=eval_end_time,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                price=price,
+            )
+
         return final_result
+
+    def _extract_task_usage(self, run_result: Union[Task, List[Task], Graph]) -> tuple[int, int, float]:
+        """Extract aggregated token usage and cost from Task objects in the run result."""
+        tasks: List[Task] = []
+
+        if isinstance(run_result, Task):
+            tasks.append(run_result)
+        elif isinstance(run_result, list):
+            tasks.extend(t for t in run_result if isinstance(t, Task))
+        elif isinstance(run_result, Graph):
+            executed_node_ids = set(run_result.state.task_outputs.keys())
+            for node in run_result.nodes:
+                if isinstance(node, TaskNode) and node.id in executed_node_ids:
+                    tasks.append(node.task)
+
+        total_input: int = 0
+        total_output: int = 0
+        total_cost: float = 0.0
+
+        for task in tasks:
+            in_tok: Optional[int] = task.total_input_token
+            if in_tok is not None:
+                total_input += in_tok
+            out_tok: Optional[int] = task.total_output_token
+            if out_tok is not None:
+                total_output += out_tok
+            cost: Optional[float] = task.total_cost
+            if cost is not None:
+                total_cost += cost
+
+        return total_input, total_output, total_cost
+
+    def _log_eval_to_promptlayer(
+        self,
+        result: ReliabilityEvaluationResult,
+        *,
+        start_time: float,
+        end_time: float,
+        input_tokens: int,
+        output_tokens: int,
+        price: float,
+    ) -> None:
+        if self.promptlayer is None:
+            return
+
+        per_tool_scores: dict[str, int] = {
+            f"tool_{check.tool_name}_called": 100 if check.was_called else 0
+            for check in result.checks
+        }
+
+        provider: str = "upsonic"
+        model: str = "reliability_eval"
+        model_params: Optional[Dict[str, Any]] = None
+
+        if self.agent_under_test is not None:
+            agent_model: str = getattr(self.agent_under_test, "model_name", "unknown")
+            provider, model = self.promptlayer._parse_provider_model(str(agent_model))
+            model_params = extract_model_parameters(self.agent_under_test)
+
+        self.promptlayer.log(
+            provider=provider,
+            model=model,
+            input_text=", ".join(result.expected_tool_calls),
+            output_text=", ".join(result.actual_tool_calls),
+            start_time=start_time,
+            end_time=end_time,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            price=price,
+            parameters=model_params,
+            tags=["upsonic-eval", "reliability-eval"],
+            metadata={
+                "eval_type": "reliability",
+                "passed": result.passed,
+                "summary": result.summary,
+                "expected_tool_calls": result.expected_tool_calls,
+                "actual_tool_calls": result.actual_tool_calls,
+                "missing_tool_calls": result.missing_tool_calls,
+                "unexpected_tool_calls": result.unexpected_tool_calls,
+            },
+            score=100 if result.passed else 0,
+            status="SUCCESS",
+            function_name="reliability_eval",
+            scores=per_tool_scores,
+        )
 
     def _normalize_tool_call_history(self, run_result: Union[Task, List[Task], Graph]) -> List[str]:
         """Extracts a single, flat list of tool call names from the run result."""
@@ -124,7 +224,6 @@ class ReliabilityEvaluator:
         return actual_tool_calls
 
     def _print_formatted_results(self, result: ReliabilityEvaluationResult) -> None:
-        """Prints a rich, formatted summary of the reliability results."""
         if result.passed:
             color = "green"
             title = "[bold green]✅ Reliability Check Passed[/bold green]"
@@ -132,8 +231,6 @@ class ReliabilityEvaluator:
             color = "red"
             title = "[bold red]❌ Reliability Check Failed[/bold red]"
 
-        panel_content = [result.summary, ""]
-        
         table = Table(box=None, show_header=False, padding=(0, 2, 0, 0))
         table.add_column("Status", style=color)
         table.add_column("Tool Name", style="cyan")

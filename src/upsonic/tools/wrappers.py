@@ -75,22 +75,30 @@ class FunctionTool(Tool):
             type_hints = {}
         
         converted_kwargs = {}
-        
+        named_params: set = set()
+        has_var_keyword = False
+
         for param_name, param in sig.parameters.items():
+            if param.kind == inspect.Parameter.VAR_KEYWORD:
+                has_var_keyword = True
+                continue
+            if param.kind == inspect.Parameter.VAR_POSITIONAL:
+                continue
+            named_params.add(param_name)
             if param_name in kwargs:
                 value = kwargs[param_name]
                 type_hint = type_hints.get(param_name)
-                
+
                 # Skip if no type hint or if value is already the correct type
                 if not type_hint:
                     converted_kwargs[param_name] = value
                     continue
-                
+
                 # Check if value is already a Pydantic model instance
                 if isinstance(value, BaseModel):
                     converted_kwargs[param_name] = value
                     continue
-                
+
                 # Handle Pydantic model conversion for dicts and lists
                 if isinstance(value, (dict, list)):
                     try:
@@ -109,7 +117,13 @@ class FunctionTool(Tool):
                         )
                 else:
                     converted_kwargs[param_name] = value
-        
+
+        # Pass through extra kwargs not in the signature (for **kwargs functions)
+        if has_var_keyword:
+            for k, v in kwargs.items():
+                if k not in named_params and k not in converted_kwargs:
+                    converted_kwargs[k] = v
+
         return converted_kwargs
     
     def _is_pydantic_model_type(self, type_hint: Any) -> bool:

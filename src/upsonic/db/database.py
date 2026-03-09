@@ -19,15 +19,7 @@ if TYPE_CHECKING:
 from ..storage.base import Storage
 from ..storage.memory.memory import Memory
 from ..models import Model
-from ..storage import (
-    InMemoryStorage,
-    JSONStorage,
-    Mem0Storage,
-    PostgresStorage,
-    RedisStorage,
-    SqliteStorage,
-    MongoStorage
-)
+from ..storage import InMemoryStorage, JSONStorage
 
 
 StorageType = TypeVar('StorageType', bound=Storage)
@@ -60,11 +52,11 @@ class DatabaseBase(Generic[StorageType]):
         return f"{self.__class__.__name__}(storage={type(self.storage).__name__}, memory={type(self.memory).__name__})"
 
 
-class SqliteDatabase(DatabaseBase[SqliteStorage]):
+class SqliteDatabase(DatabaseBase["SqliteStorage"]):
     """
     Database class combining SqliteStorage and Memory attributes.
     """
-    
+
     def __init__(
         self,
         db_file: Optional[str] = None,
@@ -86,6 +78,12 @@ class SqliteDatabase(DatabaseBase[SqliteStorage]):
         feed_tool_call_results: bool = False,
         user_memory_mode: Literal['update', 'replace'] = 'update'
     ):
+        try:
+            from ..storage import SqliteStorage
+        except AttributeError as e:
+            raise ImportError(
+                "SqliteStorage is not available. Install optional dependency: uv sync --extra sqlite-storage"
+            ) from e
         storage = SqliteStorage(
             db_file=db_file,
             db_engine=db_engine,
@@ -114,11 +112,11 @@ class SqliteDatabase(DatabaseBase[SqliteStorage]):
         super().__init__(storage=storage, memory=memory)
 
 
-class PostgresDatabase(DatabaseBase[PostgresStorage]):
+class PostgresDatabase(DatabaseBase["PostgresStorage"]):
     """
     Database class combining PostgresStorage and Memory attributes.
     """
-    
+
     def __init__(
         self,
         db_url: Optional[str] = None,
@@ -141,6 +139,12 @@ class PostgresDatabase(DatabaseBase[PostgresStorage]):
         feed_tool_call_results: bool = False,
         user_memory_mode: Literal['update', 'replace'] = 'update'
     ):
+        try:
+            from ..storage import PostgresStorage
+        except AttributeError as e:
+            raise ImportError(
+                "PostgresStorage is not available. Install optional dependency: uv sync --extra postgres-storage"
+            ) from e
         storage = PostgresStorage(
             db_url=db_url,
             db_engine=db_engine,
@@ -170,11 +174,11 @@ class PostgresDatabase(DatabaseBase[PostgresStorage]):
         super().__init__(storage=storage, memory=memory)
 
 
-class MongoDatabase(DatabaseBase[MongoStorage]):
+class MongoDatabase(DatabaseBase["MongoStorage"]):
     """
     Database class combining MongoStorage and Memory attributes.
     """
-    
+
     def __init__(
         self,
         db_client: Optional[Any] = None,
@@ -196,6 +200,12 @@ class MongoDatabase(DatabaseBase[MongoStorage]):
         feed_tool_call_results: bool = False,
         user_memory_mode: Literal['update', 'replace'] = 'update'
     ):
+        try:
+            from ..storage import MongoStorage
+        except AttributeError as e:
+            raise ImportError(
+                "MongoStorage is not available. Install optional dependency: uv sync --extra mongo-storage"
+            ) from e
         storage = MongoStorage(
             db_client=db_client,
             db_name=db_name,
@@ -224,11 +234,11 @@ class MongoDatabase(DatabaseBase[MongoStorage]):
         super().__init__(storage=storage, memory=memory)
 
 
-class RedisDatabase(DatabaseBase[RedisStorage]):
+class RedisDatabase(DatabaseBase["RedisStorage"]):
     """
     Database class combining RedisStorage and Memory attributes.
     """
-    
+
     def __init__(
         self,
         redis_client: Optional[Any] = None,
@@ -251,6 +261,12 @@ class RedisDatabase(DatabaseBase[RedisStorage]):
         feed_tool_call_results: bool = False,
         user_memory_mode: Literal['update', 'replace'] = 'update'
     ):
+        try:
+            from ..storage import RedisStorage
+        except AttributeError as e:
+            raise ImportError(
+                "RedisStorage is not available. Install optional dependency: uv sync --extra redis-storage"
+            ) from e
         storage = RedisStorage(
             redis_client=redis_client,
             db_url=db_url,
@@ -378,11 +394,11 @@ class JSONDatabase(DatabaseBase[JSONStorage]):
         super().__init__(storage=storage, memory=memory)
 
 
-class Mem0Database(DatabaseBase[Mem0Storage]):
+class Mem0Database(DatabaseBase["Mem0Storage"]):
     """
     Database class combining Mem0Storage and Memory attributes.
     """
-    
+
     def __init__(
         self,
         memory_client: Optional[Any] = None,
@@ -408,6 +424,12 @@ class Mem0Database(DatabaseBase[Mem0Storage]):
         feed_tool_call_results: bool = False,
         user_memory_mode: Literal['update', 'replace'] = 'update'
     ):
+        try:
+            from ..storage import Mem0Storage
+        except AttributeError as e:
+            raise ImportError(
+                "Mem0Storage is not available. Install optional dependency: uv sync --extra mem0-storage"
+            ) from e
         storage = Mem0Storage(
             memory_client=memory_client,
             api_key=api_key,

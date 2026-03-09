@@ -6,6 +6,7 @@ import httpx
 
 from upsonic.tools.base import ToolKit
 from upsonic.tools import tool
+from upsonic.utils.async_utils import run_async
 from upsonic.utils.printing import error_log, debug_log
 
 load_dotenv()
@@ -21,31 +22,32 @@ class WhatsAppTools(ToolKit):
         phone_number_id: Optional[str] = None,
         version: Optional[str] = None,
         recipient_waid: Optional[str] = None,
-    ):
+        **kwargs: Any,
+    ) -> None:
         """Initialize WhatsApp toolkit.
 
         Args:
-            access_token: WhatsApp Business API access token
-            phone_number_id: WhatsApp Business Account phone number ID
-            version: API version to use
-            recipient_waid: Default recipient WhatsApp ID (optional)
+            access_token: WhatsApp Business API access token.
+            phone_number_id: WhatsApp Business Account phone number ID.
+            version: API version to use.
+            recipient_waid: Default recipient WhatsApp ID (optional).
+            **kwargs: ToolKit params (include_tools, exclude_tools, timeout, etc.).
         """
-        # Core credentials
-        self.access_token = access_token or getenv("WHATSAPP_ACCESS_TOKEN")
+        super().__init__(**kwargs)
+
+        self.access_token: Optional[str] = access_token or getenv("WHATSAPP_ACCESS_TOKEN")
         if not self.access_token:
             error_log("WHATSAPP_ACCESS_TOKEN not set. Please set the WHATSAPP_ACCESS_TOKEN environment variable.")
 
-        self.phone_number_id = phone_number_id or getenv("WHATSAPP_PHONE_NUMBER_ID")
+        self.phone_number_id: Optional[str] = phone_number_id or getenv("WHATSAPP_PHONE_NUMBER_ID")
         if not self.phone_number_id:
             error_log(
                 "WHATSAPP_PHONE_NUMBER_ID not set. Please set the WHATSAPP_PHONE_NUMBER_ID environment variable."
             )
 
         # Optional default recipient
-        self.default_recipient = recipient_waid or getenv("WHATSAPP_RECIPIENT_WAID")
-
-        # API version
-        self.version = version or getenv("WHATSAPP_VERSION", "v22.0")
+        self.default_recipient: Optional[str] = recipient_waid or getenv("WHATSAPP_RECIPIENT_WAID")
+        self.version: str = version or getenv("WHATSAPP_VERSION", "v22.0")
 
     def _get_headers(self) -> Dict[str, str]:
         """Get headers for API requests."""
@@ -76,7 +78,7 @@ class WhatsAppTools(ToolKit):
             return response.json()
 
     @tool
-    async def send_text_message(
+    def send_text_message(
         self,
         text: str = "",
         recipient: Optional[str] = None,
@@ -94,7 +96,15 @@ class WhatsAppTools(ToolKit):
         Returns:
             Success message with message ID
         """
-        # Use default recipient if none provided
+        return run_async(self.asend_text_message(text, recipient, preview_url, recipient_type))
+
+    async def asend_text_message(
+        self,
+        text: str = "",
+        recipient: Optional[str] = None,
+        preview_url: bool = False,
+        recipient_type: str = "individual",
+    ) -> str:
         if recipient is None:
             if not self.default_recipient:
                 raise ValueError("No recipient provided and no default recipient set")
@@ -125,7 +135,7 @@ class WhatsAppTools(ToolKit):
             raise
 
     @tool
-    async def send_template_message(
+    def send_template_message(
         self,
         recipient: Optional[str] = None,
         template_name: str = "",
@@ -143,7 +153,15 @@ class WhatsAppTools(ToolKit):
         Returns:
             Success message with message ID
         """
-        # Use default recipient if none provided
+        return run_async(self.asend_template_message(recipient, template_name, language_code, components))
+
+    async def asend_template_message(
+        self,
+        recipient: Optional[str] = None,
+        template_name: str = "",
+        language_code: str = "en_US",
+        components: Optional[List[Dict[str, Any]]] = None,
+    ) -> str:
         if recipient is None:
             if not self.default_recipient:
                 raise ValueError("No recipient provided and no default recipient set")

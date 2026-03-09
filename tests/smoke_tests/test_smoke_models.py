@@ -5,11 +5,11 @@ from upsonic import Task, Agent
 def test_models(capsys):
     list_of_models = [
         "openai/gpt-4o",
-        "anthropic/claude-3-5-sonnet-latest",
+        "anthropic/claude-sonnet-4-5",
         "gemini/gemini-2.5-pro",
     ]
-    task = Task("What is the capital of Turkey?")
     for model in list_of_models:
+        task = Task("What is the capital of Turkey?")
         agent = Agent(model=model)
         agent.print_do(task)
 

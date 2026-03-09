@@ -6,14 +6,18 @@ from typing_extensions import overload
 from upsonic.profiles import ModelProfileSpec
 from upsonic.providers import Provider
 from upsonic.models.settings import ModelSettings
-from upsonic.models.openai import OpenAIChatModel, OpenAIModelName
+from upsonic.models.openai import OpenAIChatModel, OpenAIChatModelSettings, OpenAIModelName
 
 try:
     from openai import AsyncOpenAI
 except ImportError:
     AsyncOpenAI = None  # type: ignore
 
-__all__ = ('AzureModel',)
+__all__ = ('AzureModel', 'AzureModelSettings')
+
+
+class AzureModelSettings(OpenAIChatModelSettings, total=False):
+    """Settings for Azure OpenAI model requests. Inherits all options from OpenAIChatModelSettings."""
 
 
 class AzureModel(OpenAIChatModel):

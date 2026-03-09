@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import dataclasses
 import time
 from abc import abstractmethod
 from dataclasses import dataclass, field
 from typing import (
-    Any, Dict, List, Optional,
+    Any, Callable, Dict, List, Optional,
     Literal, TypeAlias, TYPE_CHECKING
 )
 
@@ -164,27 +163,120 @@ class Tool:
 
 class ToolKit:
     """
-    Base class for organized tool collections.
-    
-    Only @tool decorated methods are exposed as tools.
-    
-    Usage:
-        ```python
+    Base class for organized tool collections (config-only).
+
+    Stores user-provided configuration: filtering (``include_tools`` /
+    ``exclude_tools``), ``use_async`` mode, and toolkit-wide ``ToolConfig``
+    defaults.  **No tool discovery or registration happens here** -- that
+    is the ``ToolProcessor``'s responsibility.
+
+    Tool discovery rules:
+
+    * ``@tool``-decorated methods form the base candidate set.
+    * ``use_async=True`` replaces candidates with **all** async methods
+      and drops every sync method (even if decorated).
+    * ``include_tools`` is **additive** -- listed names are added to the
+      candidate set even without ``@tool``.
+    * ``exclude_tools`` is **supreme** -- listed names are always removed.
+
+    Config merge priority (highest first):
+
+    1. Toolkit ``__init__`` defaults -- toolkit-wide, set at instantiation.
+    2. ``@tool`` decorator -- per-method, set at class definition time.
+
+    After the processor processes this toolkit it writes the final list
+    of registered callables back into ``self.tools``, which is also
+    exposed via the ``functions`` property for introspection.
+
+    Usage::
+
         from upsonic.tools import tool, ToolKit
-        
+
         class MyToolKit(ToolKit):
-            @tool
-            def tool1(self, x: int) -> int:
-                '''Tool 1 description'''
+            def __init__(self, api_key: str, **kwargs):
+                super().__init__(**kwargs)
+                self.api_key = api_key
+
+            @tool(requires_confirmation=True)
+            def dangerous_action(self, x: int) -> int:
                 return x * 2
-            
+
             @tool
-            def tool2(self, y: str) -> str:
-                '''Tool 2 description'''
+            def safe_action(self, y: str) -> str:
                 return y.upper()
-        ```
+
+        tk = MyToolKit(
+            api_key="...",
+            include_tools=["extra_helper"],
+            timeout=60.0,
+        )
+        agent = Agent(tools=[tk])  # processor registers & populates tk.functions
     """
-    pass
+
+    def __init__(
+        self,
+        # --- Filtering & async mode ---
+        include_tools: Optional[List[str]] = None,
+        exclude_tools: Optional[List[str]] = None,
+        use_async: bool = False,
+        # --- Toolkit-level instructions ---
+        instructions: Optional[str] = None,
+        add_instructions: bool = False,
+        # --- Toolkit-wide defaults (mirror every ToolConfig field) ---
+        requires_confirmation: Optional[bool] = None,
+        requires_confirmation_tools: Optional[List[str]] = None,
+        requires_user_input: Optional[bool] = None,
+        requires_user_input_tools: Optional[List[str]] = None,
+        user_input_fields: Optional[List[str]] = None,
+        external_execution: Optional[bool] = None,
+        show_result: Optional[bool] = None,
+        stop_after_tool_call: Optional[bool] = None,
+        sequential: Optional[bool] = None,
+        cache_results: Optional[bool] = None,
+        cache_dir: Optional[str] = None,
+        cache_ttl: Optional[int] = None,
+        tool_hooks: Optional[Any] = None,
+        max_retries: Optional[int] = None,
+        timeout: Optional[float] = None,
+        strict: Optional[bool] = None,
+        docstring_format: Optional[str] = None,
+        require_parameter_descriptions: Optional[bool] = None,
+    ) -> None:
+        self._toolkit_include_tools: Optional[List[str]] = include_tools
+        self._toolkit_exclude_tools: Optional[List[str]] = exclude_tools
+        self._toolkit_use_async: bool = use_async
+        self.instructions: Optional[str] = instructions
+        self.add_instructions: bool = add_instructions
+
+        self._requires_confirmation_tools: Optional[List[str]] = requires_confirmation_tools
+        self._requires_user_input_tools: Optional[List[str]] = requires_user_input_tools
+
+        self._toolkit_defaults: Dict[str, Any] = {
+            "requires_confirmation": requires_confirmation,
+            "requires_user_input": requires_user_input,
+            "user_input_fields": user_input_fields,
+            "external_execution": external_execution,
+            "show_result": show_result,
+            "stop_after_tool_call": stop_after_tool_call,
+            "sequential": sequential,
+            "cache_results": cache_results,
+            "cache_dir": cache_dir,
+            "cache_ttl": cache_ttl,
+            "tool_hooks": tool_hooks,
+            "max_retries": max_retries,
+            "timeout": timeout,
+            "strict": strict,
+            "docstring_format": docstring_format,
+            "require_parameter_descriptions": require_parameter_descriptions,
+        }
+
+        # Populated by ToolProcessor._process_toolkit() after registration
+        self.tools: List[Callable] = []
+
+    @property
+    def functions(self) -> List[Callable]:
+        """Return the list of registered tool callables (populated by the processor)."""
+        return self.tools
 
 
 @dataclass

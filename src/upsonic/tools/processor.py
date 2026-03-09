@@ -11,7 +11,7 @@ import re
 import time
 from pathlib import Path
 from typing import (
-    Any, Callable, Dict, List, TYPE_CHECKING
+    Any, Callable, Dict, List, Optional, TYPE_CHECKING
 )
 
 from upsonic.tools.base import (
@@ -24,10 +24,11 @@ from upsonic.tools.schema import (
     GenerateToolJsonSchema,
 )
 from upsonic.tools.wrappers import FunctionTool
-from upsonic.tools.deferred import ExternalToolCall
+from upsonic.tools.deferred import PausedToolCall
 
 if TYPE_CHECKING:
     from upsonic.tools.base import Tool, ToolConfig
+    from upsonic.tools.user_input import UserInputField
 
 class ToolValidationError(Exception):
     """Error raised when tool validation fails."""
@@ -37,9 +38,30 @@ class ToolValidationError(Exception):
 class ExternalExecutionPause(Exception):
     """Exception to pause execution when external tool execution is required."""
     
-    def __init__(self, external_calls: List[ExternalToolCall] = None):
-        self.external_calls = external_calls or []
-        super().__init__(f"Paused for {len(self.external_calls)} external tool calls")
+    def __init__(self, paused_calls: List[PausedToolCall] = None):
+        self.paused_calls: List[PausedToolCall] = paused_calls or []
+        super().__init__(f"Paused for {len(self.paused_calls)} external tool calls")
+
+
+class ConfirmationPause(Exception):
+    """Exception to pause execution when user confirmation is required."""
+
+    def __init__(self, paused_calls: List[PausedToolCall] = None):
+        self.paused_calls: List[PausedToolCall] = paused_calls or []
+        super().__init__(f"Paused for {len(self.paused_calls)} tool(s) requiring confirmation")
+
+
+class UserInputPause(Exception):
+    """Exception to pause execution when user input is required."""
+
+    def __init__(
+        self,
+        paused_calls: List[PausedToolCall] = None,
+        user_input_schema: Optional[List["UserInputField"]] = None,
+    ):
+        self.paused_calls: List[PausedToolCall] = paused_calls or []
+        self.user_input_schema = user_input_schema or []
+        super().__init__(f"Paused for {len(self.paused_calls)} tool(s) requiring user input")
 
 
 class ToolProcessor:
@@ -56,6 +78,7 @@ class ToolProcessor:
         self.class_instance_to_tools: Dict[int, List[str]] = {}  # class instance id -> tool names
         # Track KnowledgeBase instances that need setup_async() called
         self.knowledge_base_instances: Dict[int, Any] = {}  # instance id -> KnowledgeBase instance
+        self.toolkit_instances: Dict[int, Any] = {}  # instance id -> ToolKit instance
         # Track raw tool object IDs for deduplication (prevents re-processing same objects)
         self._raw_tool_ids: set = set()
     
@@ -109,15 +132,12 @@ class ToolProcessor:
             elif hasattr(tool_item, '__class__'):
                 # Process instance
                 if isinstance(tool_item, ToolKit):
-                    # Process ToolKit instance
                     toolkit_tools = self._process_toolkit(tool_item)
                     processed_tools.update(toolkit_tools)
                 elif self._is_agent_instance(tool_item):
-                    # Process agent as tool
                     agent_tool = self._process_agent_tool(tool_item)
                     processed_tools[agent_tool.name] = agent_tool
                 else:
-                    # Process regular instance with methods
                     instance_tools = self._process_class_tools(tool_item)
                     processed_tools.update(instance_tools)
         
@@ -204,44 +224,225 @@ class ToolProcessor:
                 f"Invalid tool function '{func.__name__}': {e}"
             )
         
-        # Create wrapped tool
-        return FunctionTool(
+        tool_obj = FunctionTool(
             function=func,
             schema=schema,
             config=config
         )
+
+        if config.requires_confirmation:
+            confirm_suffix: str = (
+                "\n\nIMPORTANT: This tool requires confirmation before execution. "
+                "You MUST call this tool directly with the required parameters — "
+                "do NOT ask the user for confirmation yourself. The system will "
+                "automatically pause and request confirmation from the user after "
+                "you make the call."
+            )
+            if tool_obj.schema.description:
+                tool_obj.schema.description += confirm_suffix
+            else:
+                tool_obj.schema.description = confirm_suffix.lstrip("\n")
+            tool_obj.description = tool_obj.schema.description
+
+            if not config.instructions:
+                config.instructions = (
+                    f"Tool '{func.__name__}' requires user confirmation. You MUST call "
+                    f"this tool directly — never ask the user for confirmation in your "
+                    f"response text. The framework will automatically pause execution "
+                    f"and collect confirmation from the user."
+                )
+                config.add_instructions = True
+
+        if config.requires_user_input and config.user_input_fields:
+            required: list = tool_obj.schema.json_schema.get("required", [])
+            tool_obj.schema.json_schema["required"] = [
+                f for f in required if f not in config.user_input_fields
+            ]
+            field_list: str = ", ".join(config.user_input_fields)
+            suffix: str = (
+                f"\n\nIMPORTANT: The following field(s) will be provided by the user "
+                f"after you call this tool — do NOT ask the user for them and do NOT "
+                f"include them in the call. Just call this tool with the fields you "
+                f"already have. User-provided fields: {field_list}"
+            )
+            if tool_obj.schema.description:
+                tool_obj.schema.description += suffix
+            else:
+                tool_obj.schema.description = suffix.lstrip("\n")
+            tool_obj.description = tool_obj.schema.description
+
+            if not config.instructions:
+                config.instructions = (
+                    f"Tool '{func.__name__}' requires user input for the following "
+                    f"field(s): {field_list}. You MUST call this tool without providing "
+                    f"those fields — the framework will pause and collect them from the "
+                    f"user. Never ask the user for these values in your response text."
+                )
+                config.add_instructions = True
+
+        return tool_obj
     
     def _process_toolkit(self, toolkit: ToolKit) -> Dict[str, Tool]:
-        """Process a ToolKit instance."""
-        tools = {}
-        
-        # Check if this is a KnowledgeBase instance
+        """Process a ToolKit instance using a two-phase algorithm.
+
+        Phase 1 -- Discover which methods become tools:
+            * ``@tool``-decorated methods form the base candidate set.
+            * ``use_async=True`` replaces candidates with **all** non-private
+              async methods and drops every sync method.
+            * ``include_tools`` is **additive** -- names are added on top.
+            * ``exclude_tools`` is **supreme** -- names are always removed.
+
+        Phase 2 -- Assign configs and register:
+            * Methods with ``_upsonic_tool_config`` (from ``@tool``): merge
+              with toolkit defaults (toolkit init overrides decorator).
+            * Methods without config (added via ``include_tools`` or
+              ``use_async`` discovery): use toolkit defaults merged with
+              fresh ``ToolConfig()``.
+        """
+        tools: Dict[str, Tool] = {}
+
+        self.toolkit_instances[id(toolkit)] = toolkit
+
         try:
             from upsonic.knowledge_base.knowledge_base import KnowledgeBase
             if isinstance(toolkit, KnowledgeBase):
-                toolkit_id = id(toolkit)
-                self.knowledge_base_instances[toolkit_id] = toolkit
+                self.knowledge_base_instances[id(toolkit)] = toolkit
         except ImportError:
-            # KnowledgeBase might not be available, skip
             pass
-        
-        for name, method in inspect.getmembers(toolkit, inspect.ismethod):
-            # Only process methods marked with @tool
-            if hasattr(method, '_upsonic_is_tool'):
-                tool = self._process_function_tool(method)
-                tools[tool.name] = tool
-        
-        # Track which tools belong to this toolkit instance (avoid duplicates)
+
+        use_async: bool = getattr(toolkit, '_toolkit_use_async', False)
+        include_tools: List[str] | None = getattr(toolkit, '_toolkit_include_tools', None)
+        exclude_tools: List[str] | None = getattr(toolkit, '_toolkit_exclude_tools', None)
+
+        # ── Phase 1: discover candidates ──────────────────────────
+        candidates: Dict[str, Any] = {}
+
+        if use_async:
+            for name, method in inspect.getmembers(toolkit, inspect.ismethod):
+                if name.startswith('_'):
+                    continue
+                if inspect.iscoroutinefunction(method):
+                    candidates[name] = method
+        else:
+            for name, method in inspect.getmembers(toolkit, inspect.ismethod):
+                if getattr(method, '_upsonic_is_tool', False):
+                    candidates[name] = method
+
+        if include_tools is not None:
+            for name in include_tools:
+                if name not in candidates:
+                    method: Any = getattr(toolkit, name, None)
+                    if method is not None and inspect.ismethod(method):
+                        candidates[name] = method
+
+        if exclude_tools is not None:
+            for name in exclude_tools:
+                candidates.pop(name, None)
+
+        # ── Phase 2: build configs & register ─────────────────────
+        registered_callables: List[Any] = []
+        confirmation_tools: Optional[List[str]] = getattr(toolkit, '_requires_confirmation_tools', None)
+        user_input_tools: Optional[List[str]] = getattr(toolkit, '_requires_user_input_tools', None)
+
+        for name, method in candidates.items():
+            decorator_config: ToolConfig = getattr(
+                method, '_upsonic_tool_config', ToolConfig()
+            )
+            config: ToolConfig = self._apply_toolkit_config_overrides(
+                toolkit, decorator_config
+            )
+
+            if confirmation_tools and name in confirmation_tools:
+                config.requires_confirmation = True
+            if user_input_tools and name in user_input_tools:
+                config.requires_user_input = True
+
+            wrapper = self._make_tool_wrapper(method, name, config)
+            tool = self._process_function_tool(wrapper)
+            tools[tool.name] = tool
+            registered_callables.append(wrapper)
+
+        toolkit.tools = registered_callables
+
         if tools:
-            toolkit_id = id(toolkit)
+            toolkit_id: int = id(toolkit)
             if toolkit_id not in self.class_instance_to_tools:
                 self.class_instance_to_tools[toolkit_id] = []
-            existing_tools = set(self.class_instance_to_tools[toolkit_id])
-            for tool_name in tools.keys():
+            existing_tools: set = set(self.class_instance_to_tools[toolkit_id])
+            for tool_name in tools:
                 if tool_name not in existing_tools:
                     self.class_instance_to_tools[toolkit_id].append(tool_name)
-        
+
         return tools
+
+    @staticmethod
+    def _make_tool_wrapper(
+        method: Any,
+        tool_name: str,
+        config: ToolConfig,
+    ) -> Any:
+        """Wrap a bound method in a plain function with its own ``__dict__``.
+
+        Bound methods do not support arbitrary ``setattr``, so we create a
+        per-instance wrapper that carries ``_upsonic_tool_config`` and
+        ``_upsonic_is_tool``.
+        """
+        # Preserve __self__ from bound methods so unregister_tools
+        # can look up the owning instance for tracking cleanup.
+        bound_self = getattr(method, "__self__", None)
+
+        if inspect.iscoroutinefunction(method):
+            @functools.wraps(method)
+            async def _async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                return await method(*args, **kwargs)
+
+            _async_wrapper.__name__ = tool_name
+            _async_wrapper._upsonic_tool_config = config  # type: ignore[attr-defined]
+            _async_wrapper._upsonic_is_tool = True  # type: ignore[attr-defined]
+            if bound_self is not None:
+                _async_wrapper.__self__ = bound_self  # type: ignore[attr-defined]
+            return _async_wrapper
+        else:
+            @functools.wraps(method)
+            def _sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+                return method(*args, **kwargs)
+
+            _sync_wrapper.__name__ = tool_name
+            _sync_wrapper._upsonic_tool_config = config  # type: ignore[attr-defined]
+            _sync_wrapper._upsonic_is_tool = True  # type: ignore[attr-defined]
+            if bound_self is not None:
+                _sync_wrapper.__self__ = bound_self  # type: ignore[attr-defined]
+            return _sync_wrapper
+
+    def _apply_toolkit_config_overrides(
+        self,
+        toolkit: ToolKit,
+        decorator_config: ToolConfig,
+    ) -> ToolConfig:
+        """Build a merged ``ToolConfig``.
+
+        Priority (highest first):
+            1. Toolkit ``__init__`` defaults (toolkit-wide, set at instantiation)
+            2. ``@tool`` decorator values (per-method, set at class definition)
+
+        The decorator config is used as the base layer; then any
+        toolkit ``__init__`` value that was explicitly provided
+        (non-``None``) overwrites the decorator value.
+        """
+        from copy import deepcopy
+
+        tk_defaults: Dict[str, Any] = getattr(toolkit, '_toolkit_defaults', {})
+        if not tk_defaults:
+            return deepcopy(decorator_config)
+
+        merged: ToolConfig = deepcopy(decorator_config)
+
+        for field_name in ToolConfig.model_fields.keys():
+            tk_val: Any = tk_defaults.get(field_name)
+            if tk_val is not None:
+                setattr(merged, field_name, tk_val)
+
+        return merged
     
     def _process_class_tools(self, instance: Any) -> Dict[str, Tool]:
         """Process all public methods of a class instance as tools."""
@@ -274,7 +475,6 @@ class ToolProcessor:
     
     def _is_agent_instance(self, obj: Any) -> bool:
         """Check if an object is an agent instance."""
-        # Check for agent-like attributes
         return hasattr(obj, 'name') and (
             hasattr(obj, 'do_async') or 
             hasattr(obj, 'do') or
@@ -336,22 +536,16 @@ class ToolProcessor:
                     console.print(f"[red]Before hook error: {e}[/red]")
                     raise
             
-            # User confirmation
+            # User confirmation — pause for user approval
             if config.requires_confirmation:
-                if not self._get_user_confirmation(tool.name, kwargs):
-                    return "Tool execution cancelled by user"
-            
-            # User input
-            if config.requires_user_input and config.user_input_fields:
-                kwargs = self._get_user_input(
-                    tool.name, 
-                    kwargs, 
-                    config.user_input_fields
-                )
-            
+                raise ConfirmationPause()
+
+            # User input — pause for user-provided field values
+            if config.requires_user_input:
+                raise UserInputPause()
+
             # External execution
             if config.external_execution:
-                # Don't create ToolCall here - ToolManager will create ExternalToolCall with ID
                 raise ExternalExecutionPause()
             
             # Caching
@@ -396,6 +590,8 @@ class ToolProcessor:
                     else:
                         raise TimeoutError(f"Tool '{tool.name}' timed out after {config.timeout}s and {max_retries} retries")
                         
+                except (ExternalExecutionPause, ConfirmationPause, UserInputPause):
+                    raise
                 except Exception as e:
                     last_error = e
                     if attempt < max_retries:
@@ -443,39 +639,7 @@ class ToolProcessor:
             
             return func_dict
         
-        return wrapper    
-    def _get_user_confirmation(self, tool_name: str, args: Dict[str, Any]) -> bool:
-        """Get user confirmation for tool execution."""
-        from upsonic.utils.printing import console
-        console.print(f"[bold yellow]⚠️ Confirmation Required[/bold yellow]")
-        console.print(f"Tool: [cyan]{tool_name}[/cyan]")
-        console.print(f"Arguments: {args}")
-        
-        try:
-            response = input("Proceed? (y/n): ").lower().strip()
-            return response in ('y', 'yes')
-        except KeyboardInterrupt:
-            return False
-    
-    def _get_user_input(
-        self,
-        tool_name: str,
-        args: Dict[str, Any],
-        fields: List[str]
-    ) -> Dict[str, Any]:
-        """Get user input for specified fields."""
-        from upsonic.utils.printing import console
-        console.print(f"[bold blue]📝 Input Required for {tool_name}[/bold blue]")
-        
-        for field in fields:
-            try:
-                value = input(f"Enter value for '{field}': ")
-                args[field] = value
-            except KeyboardInterrupt:
-                console.print("[bold red]Input cancelled[/bold red]")
-                break
-        
-        return args
+        return wrapper
     
     def _get_cache_key(self, tool_name: str, args: Dict[str, Any]) -> str:
         """Generate cache key for tool call."""
@@ -624,10 +788,10 @@ class ToolProcessor:
                         # If no more tools from this instance, cleanup tracking
                         if not self.class_instance_to_tools[instance_id]:
                             del self.class_instance_to_tools[instance_id]
-                            # Also cleanup KnowledgeBase instances if applicable
                             if instance_id in self.knowledge_base_instances:
                                 del self.knowledge_base_instances[instance_id]
-                            # Remove from raw tool IDs tracking
+                            if instance_id in self.toolkit_instances:
+                                del self.toolkit_instances[instance_id]
                             if instance_id in self._raw_tool_ids:
                                 self._raw_tool_ids.discard(instance_id)
                 
@@ -728,12 +892,63 @@ class ToolProcessor:
             if instance_id in self.class_instance_to_tools:
                 del self.class_instance_to_tools[instance_id]
             
-            # Also cleanup KnowledgeBase instances if applicable
             if instance_id in self.knowledge_base_instances:
                 del self.knowledge_base_instances[instance_id]
+            
+            if instance_id in self.toolkit_instances:
+                del self.toolkit_instances[instance_id]
             
             # Remove from raw tool IDs tracking
             if instance_id in self._raw_tool_ids:
                 self._raw_tool_ids.discard(instance_id)
         
         return removed_tool_names
+
+    def collect_instructions(self) -> List[str]:
+        """Collect all active instructions from toolkits and individual tools.
+
+        Returns a deduplicated, ordered list of instruction strings. Each string
+        is prefixed with the source (toolkit name or tool name) so the model
+        knows which tool/toolkit the instructions apply to.
+
+        Sources:
+        1. ``ToolKit`` instances whose ``add_instructions`` is True.
+        2. Individual registered tools whose ``ToolConfig.add_instructions``
+           is True.
+        """
+        from upsonic.tools.base import ToolKit
+
+        seen: set = set()
+        instructions: List[str] = []
+
+        for toolkit in self.toolkit_instances.values():
+            if not isinstance(toolkit, ToolKit):
+                continue
+            if not getattr(toolkit, "add_instructions", False):
+                continue
+            text: Optional[str] = getattr(toolkit, "instructions", None)
+            if not text:
+                continue
+            toolkit_name: str = getattr(toolkit, "name", None) or type(toolkit).__name__
+            key = ("toolkit", toolkit_name, text)
+            if key in seen:
+                continue
+            seen.add(key)
+            instructions.append(f"Instructions for toolkit «{toolkit_name}»:\n{text.strip()}")
+
+        for tool_name, tool in self.registered_tools.items():
+            config: Optional[Any] = getattr(tool, "config", None)
+            if config is None:
+                continue
+            if not getattr(config, "add_instructions", False):
+                continue
+            text = getattr(config, "instructions", None)
+            if not text:
+                continue
+            key = ("tool", tool_name, text)
+            if key in seen:
+                continue
+            seen.add(key)
+            instructions.append(f"Instructions for tool «{tool_name}»:\n{text.strip()}")
+
+        return instructions

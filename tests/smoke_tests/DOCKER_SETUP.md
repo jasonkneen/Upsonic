@@ -45,6 +45,13 @@ MONGO_URL=mongodb://upsonic_test:test_password@localhost:27017/?authSource=admin
 # Redis Configuration
 REDIS_PORT=6379
 REDIS_URL=redis://localhost:6379/0
+
+# Jaeger Configuration (OpenTelemetry)
+JAEGER_OTLP_GRPC_PORT=4317
+JAEGER_OTLP_HTTP_PORT=4318
+JAEGER_UI_PORT=16686
+JAEGER_OTLP_ENDPOINT=http://localhost:4317
+JAEGER_QUERY_URL=http://localhost:16686
 ```
 
 ## Individual Service Commands
@@ -102,6 +109,32 @@ docker stop upsonic_test_redis
 docker rm upsonic_test_redis
 ```
 
+### Jaeger (OpenTelemetry Collector)
+
+Used by `test_otel_live.py` to verify that traces are exported correctly via OTLP.
+
+**Start:**
+```bash
+docker run -d \
+  --name upsonic_test_jaeger \
+  -e COLLECTOR_OTLP_ENABLED=true \
+  -p 4317:4317 \
+  -p 4318:4318 \
+  -p 16686:16686 \
+  jaegertracing/all-in-one:latest
+```
+
+**Stop:**
+```bash
+docker stop upsonic_test_jaeger
+docker rm upsonic_test_jaeger
+```
+
+**Open the UI:**
+```
+http://localhost:16686
+```
+
 ## Health Checks
 
 Check if services are running:
@@ -115,11 +148,27 @@ docker exec upsonic_test_mongo mongosh --eval "db.adminCommand('ping')"
 
 # Redis
 docker exec upsonic_test_redis redis-cli ping
+
+# Jaeger
+curl -s http://localhost:16686/api/services | python3 -c "import sys,json; print('OK' if json.load(sys.stdin).get('data') is not None else 'FAIL')"
 ```
+
+## Running OTel Tests
+
+The Jaeger-based tests in `test_otel_live.py` automatically skip if Jaeger is not running. To run them:
+
+1. Start Jaeger (via docker-compose or standalone command above)
+2. Run the tests:
+   ```bash
+   uv run pytest tests/smoke_tests/agent/test_otel_live.py -v
+   ```
+
+Tests prefixed with `test_jaeger_*` require a live Jaeger instance. All other OTel tests use an in-memory exporter and work without Docker.
 
 ## Notes
 
 - Services use test credentials and are intended for development/testing only
 - Data persists in Docker volumes unless explicitly removed
 - Ports can be customized via environment variables
+- Jaeger tests skip gracefully when no collector is available
 

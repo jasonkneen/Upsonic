@@ -9,6 +9,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       matrix:
         python-version: ['3.10', '3.11', '3.12', '3.13']
@@ -31,3 +32,6 @@ jobs:
     - name: Run unit tests
       run: |
         uv run pytest tests/unit_tests
+      env:
+        UPSONIC_TELEMETRY: "false"
+        UPSONIC_OTEL_ENABLED: ""

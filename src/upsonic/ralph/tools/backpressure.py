@@ -7,7 +7,7 @@ It is marked as sequential to ensure only one runs at a time.
 
 from __future__ import annotations
 
-from typing import Literal, TYPE_CHECKING
+from typing import Any, Literal, TYPE_CHECKING
 
 from upsonic.tools import ToolKit, tool
 
@@ -23,14 +23,15 @@ class BackpressureToolKit(ToolKit):
     is intentionally a bottleneck - only one validation runs at a time.
     """
     
-    def __init__(self, backpressure_gate: "BackpressureGate"):
+    def __init__(self, backpressure_gate: "BackpressureGate", **kwargs: Any):
         """
         Initialize BackpressureToolKit.
         
         Args:
             backpressure_gate: BackpressureGate instance for validation
+            **kwargs: ToolKit params (include_tools, exclude_tools, timeout, etc.).
         """
-        super().__init__()
+        super().__init__(**kwargs)
         self.backpressure_gate = backpressure_gate
     
     @tool(sequential=True, timeout=600.0)
@@ -65,7 +66,6 @@ class BackpressureToolKit(ToolKit):
         result = self.backpressure_gate.validate(validation_type=validation_type)
         return result.format_for_agent()
     
-    @tool(sequential=True, timeout=600.0)
     async def arun_backpressure(
         self,
         validation_type: Literal["build", "test", "lint", "all"] = "all",

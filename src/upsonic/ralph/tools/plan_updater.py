@@ -14,7 +14,7 @@ completed tasks are protected and cannot be deleted.
 
 from __future__ import annotations
 
-from typing import Literal, Optional, TYPE_CHECKING
+from typing import Any, Literal, Optional, TYPE_CHECKING
 
 from upsonic.tools import ToolKit, tool
 
@@ -38,14 +38,15 @@ class PlanUpdaterToolKit(ToolKit):
     Completed tasks are protected and cannot be deleted to preserve history.
     """
     
-    def __init__(self, state_manager: "StateManager"):
+    def __init__(self, state_manager: "StateManager", **kwargs: Any):
         """
         Initialize PlanUpdaterToolKit.
         
         Args:
             state_manager: StateManager instance for file operations
+            **kwargs: ToolKit params (include_tools, exclude_tools, timeout, etc.).
         """
-        super().__init__()
+        super().__init__(**kwargs)
         self.state_manager = state_manager
     
     @tool

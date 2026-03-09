@@ -18,12 +18,15 @@ from typing import (
     overload,
 )
 
+from dataclasses import dataclass
+
 from upsonic.tasks.tasks import Task
 from upsonic.storage.memory.memory import Memory
 from upsonic.storage.base import Storage
 from upsonic.storage.in_memory.in_memory import InMemoryStorage
 from .session_manager import SessionManager, SessionState
 from .message import ChatMessage
+from .schemas import InvokeResult
 
 if TYPE_CHECKING:
     from upsonic.agent.agent import Agent
@@ -613,6 +616,18 @@ class Chat:
         context: Optional[List[str]] = None,
         stream: Literal[False] = False,
         events: Literal[False] = False,
+        return_run_output: Literal[True],
+        **kwargs: Any
+    ) -> InvokeResult: ...
+
+    @overload
+    async def invoke(
+        self,
+        input_data: Union[str, Task],
+        *,
+        context: Optional[List[str]] = None,
+        stream: Literal[False] = False,
+        events: Literal[False] = False,
         **kwargs: Any
     ) -> str: ...
 
@@ -656,8 +671,9 @@ class Chat:
         context: Optional[List[str]] = None,
         stream: bool = False,
         events: bool = False,
+        return_run_output: bool = False,
         **kwargs: Any
-    ) -> Union[str, AsyncIterator[str], AsyncIterator["AgentEvent"]]:
+    ) -> Union[str, InvokeResult, AsyncIterator[str], AsyncIterator["AgentEvent"]]:
         """
         Send a message to the chat and get a response.
         
@@ -672,10 +688,12 @@ class Chat:
             context: Optional list of file paths to attach
             stream: Whether to stream the response
             events: If True, yield AgentEvent objects instead of text chunks (requires stream=True)
+            return_run_output: If True (and stream=False), return InvokeResult with optional run_output for HITL
             **kwargs: Additional arguments passed to the agent
             
         Returns:
-            If stream=False and events=False: The response string
+            If stream=False and events=False and return_run_output=False: The response string
+            If stream=False and return_run_output=True: InvokeResult(text, run_output) for HITL handling
             If stream=True and events=False: AsyncIterator yielding text chunks
             If stream=True and events=True: AsyncIterator yielding AgentEvent objects
             
@@ -696,6 +714,10 @@ class Chat:
         # If events=True, force stream=True
         if events and not stream:
             stream = True
+        
+        # return_run_output only applies to blocking (non-streaming) invocation
+        if stream and return_run_output:
+            return_run_output = False
         
         # State and concurrency checks
         if not self._session_manager.can_accept_invocation():
@@ -728,16 +750,20 @@ class Chat:
             else:
                 return self._invoke_streaming(task, response_start_time, **kwargs)
         else:
-            return await self._invoke_blocking_async(task, response_start_time, **kwargs)
+            return await self._invoke_blocking_async(task, response_start_time, return_run_output=return_run_output, **kwargs)
     
     async def _invoke_blocking_async(
         self,
         task: Task,
         response_start_time: float,
+        *,
+        return_run_output: bool = False,
         **kwargs: Any
-    ) -> str:
+    ) -> Union[str, InvokeResult]:
         """Handle blocking invocation."""
-        async def _execute() -> str:
+        from upsonic.run.agent.output import AgentRunOutput as AgentRunOutputConcrete
+
+        async def _execute() -> Union[str, InvokeResult]:
             if self.debug and self.debug_level >= 2:
                 from upsonic.utils.printing import debug_log_level2
                 debug_log_level2(
@@ -750,9 +776,17 @@ class Chat:
                     task_description=task.description[:300] if task.description else None,
                 )
             
-            # Execute agent - memory handles persistence
-            result = await self.agent.do_async(task, debug=self.debug, **kwargs)
+            if return_run_output:
+                result = await self.agent.do_async(task, debug=self.debug, return_output=True, **kwargs)
+                if not isinstance(result, AgentRunOutputConcrete):
+                    response_text = str(result)
+                    return InvokeResult(text=response_text, run_output=None)
+                response_text = str(result.output) if result.output else (str(result) if hasattr(result, "__str__") else "")
+                if result.is_paused:
+                    return InvokeResult(text=response_text, run_output=result)
+                return InvokeResult(text=response_text, run_output=None)
             
+            result = await self.agent.do_async(task, debug=self.debug, **kwargs)
             response_text = str(result)
             
             if self.debug and self.debug_level >= 2:

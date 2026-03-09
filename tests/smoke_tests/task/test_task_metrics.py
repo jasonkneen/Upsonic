@@ -4,6 +4,7 @@ Requires OPENAI_API_KEY to be set.
 """
 import pytest
 from upsonic import Task, Agent
+from upsonic.usage import TaskUsage
 
 
 @pytest.fixture
@@ -46,6 +47,10 @@ class TestTaskMetricsViaDo:
         # tool calls (no tools provided, should be empty list)
         assert isinstance(task.tool_calls, list)
 
+        # usage is TaskUsage
+        assert task.usage is not None
+        assert isinstance(task.usage, TaskUsage)
+
     def test_all_task_metrics_after_do(self, agent: Agent) -> None:
         task = Task("What is 3+3? Answer with just the number.")
         agent.do(task)
@@ -57,6 +62,7 @@ class TestTaskMetricsViaDo:
         assert task.total_cost is not None and task.total_cost >= 0
         assert task.total_input_token is not None and task.total_input_token > 0
         assert task.total_output_token is not None and task.total_output_token > 0
+        assert isinstance(task.usage, TaskUsage)
 
     @pytest.mark.asyncio
     async def test_all_task_metrics_after_print_do_async(self, agent: Agent) -> None:
@@ -97,3 +103,4 @@ class TestTaskMetricsViaDo:
         assert task_b.total_cost is not None
         assert task_a.total_input_token is not None
         assert task_b.total_input_token is not None
+        assert task_a.usage is not task_b.usage

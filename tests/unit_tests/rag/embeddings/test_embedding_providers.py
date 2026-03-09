@@ -19,11 +19,21 @@ from upsonic.embeddings.base import EmbeddingProvider, EmbeddingConfig, Embeddin
 from upsonic.embeddings.openai_provider import OpenAIEmbedding, OpenAIEmbeddingConfig
 from upsonic.embeddings.azure_openai_provider import AzureOpenAIEmbedding, AzureOpenAIEmbeddingConfig
 from upsonic.embeddings.bedrock_provider import BedrockEmbedding, BedrockEmbeddingConfig
-from upsonic.embeddings.huggingface_provider import HuggingFaceEmbedding, HuggingFaceEmbeddingConfig
-from upsonic.embeddings.fastembed_provider import FastEmbedProvider, FastEmbedConfig
 from upsonic.embeddings.ollama_provider import OllamaEmbedding, OllamaEmbeddingConfig
 from upsonic.embeddings.gemini_provider import GeminiEmbedding, GeminiEmbeddingConfig
 from upsonic.embeddings.factory import create_embedding_provider, list_available_providers
+
+try:
+    from upsonic.embeddings.huggingface_provider import HuggingFaceEmbedding, HuggingFaceEmbeddingConfig
+except (ImportError, ModuleNotFoundError):
+    HuggingFaceEmbedding = None
+    HuggingFaceEmbeddingConfig = None
+
+try:
+    from upsonic.embeddings.fastembed_provider import FastEmbedProvider, FastEmbedConfig
+except (ImportError, ModuleNotFoundError):
+    FastEmbedProvider = None
+    FastEmbedConfig = None
 
 from upsonic.knowledge_base.knowledge_base import KnowledgeBase
 from upsonic.vectordb.providers.faiss import FaissProvider
@@ -307,6 +317,8 @@ class TestEmbeddingProviders:
     
     def test_huggingface_embedding_creation(self, mock_huggingface_model):
         """Test HuggingFace embedding provider creation."""
+        if HuggingFaceEmbedding is None or HuggingFaceEmbeddingConfig is None:
+            pytest.skip("huggingface provider dependencies (e.g. numpy) not installed")
         mock_model, mock_tokenizer = mock_huggingface_model
         
         with patch('transformers.AutoModel.from_pretrained', return_value=mock_model):
@@ -323,6 +335,8 @@ class TestEmbeddingProviders:
     
     def test_fastembed_embedding_creation(self, mock_fastembed_model):
         """Test FastEmbed provider creation."""
+        if FastEmbedProvider is None or FastEmbedConfig is None:
+            pytest.skip("fastembed provider not installed")
         pytest.importorskip("fastembed", reason="fastembed requires onnxruntime which is not available on Python <3.11")
         with patch('upsonic.embeddings.fastembed_provider.TextEmbedding', return_value=mock_fastembed_model):
             config = FastEmbedConfig(
@@ -598,6 +612,8 @@ class TestEmbeddingProviderFactory:
     
     def test_create_embedding_provider_huggingface(self):
         """Test creating HuggingFace embedding provider via factory."""
+        if HuggingFaceEmbedding is None:
+            pytest.skip("huggingface provider dependencies (e.g. numpy) not installed")
         with patch('transformers.AutoModel.from_pretrained'):
             with patch('transformers.AutoTokenizer.from_pretrained'):
                 provider = create_embedding_provider(
@@ -610,6 +626,8 @@ class TestEmbeddingProviderFactory:
     
     def test_create_embedding_provider_fastembed(self):
         """Test creating FastEmbed provider via factory."""
+        if FastEmbedProvider is None:
+            pytest.skip("fastembed provider not installed")
         pytest.importorskip("fastembed", reason="fastembed requires onnxruntime which is not available on Python <3.11")
         with patch('upsonic.embeddings.fastembed_provider.TextEmbedding'):
             provider = create_embedding_provider("fastembed", model_name="BAAI/bge-small-en-v1.5")

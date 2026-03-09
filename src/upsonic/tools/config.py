@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, Callable, List, Optional, Union
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 
 
 class ToolHooks(BaseModel):
@@ -96,6 +96,31 @@ class ToolConfig(BaseModel):
         default=False,
         description="If True, raise error if required parameter descriptions are missing."
     )
+
+    instructions: Optional[str] = Field(
+        default=None,
+        description="Instructions for the LLM on how to use this tool. Injected into the system prompt."
+    )
+
+    add_instructions: bool = Field(
+        default=False,
+        description="If True, the tool's instructions will be appended to the agent's system prompt."
+    )
+
+    @model_validator(mode="after")
+    def _validate_hitl_mutual_exclusivity(self) -> "ToolConfig":
+        hitl_flags = [
+            ("requires_confirmation", self.requires_confirmation),
+            ("requires_user_input", self.requires_user_input),
+            ("external_execution", self.external_execution),
+        ]
+        active = [name for name, enabled in hitl_flags if enabled]
+        if len(active) > 1:
+            raise ValueError(
+                f"Only one HITL pattern can be active per tool, but got: {', '.join(active)}. "
+                "requires_confirmation, requires_user_input, and external_execution are mutually exclusive."
+            )
+        return self
 
 
 class _ToolDecorator:

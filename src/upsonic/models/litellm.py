@@ -6,14 +6,18 @@ from typing_extensions import overload
 from upsonic.profiles import ModelProfileSpec
 from upsonic.providers import Provider
 from upsonic.models.settings import ModelSettings
-from upsonic.models.openai import OpenAIChatModel, OpenAIModelName
+from upsonic.models.openai import OpenAIChatModel, OpenAIChatModelSettings, OpenAIModelName
 
 try:
     from openai import AsyncOpenAI
 except ImportError:
     AsyncOpenAI = None  # type: ignore
 
-__all__ = ('LiteLLMModel',)
+__all__ = ('LiteLLMModel', 'LiteLLMModelSettings')
+
+
+class LiteLLMModelSettings(OpenAIChatModelSettings, total=False):
+    """Settings for LiteLLM model requests. Inherits all options from OpenAIChatModelSettings."""
 
 
 class LiteLLMModel(OpenAIChatModel):

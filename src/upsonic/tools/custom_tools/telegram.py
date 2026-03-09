@@ -48,10 +48,14 @@ from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
+from upsonic.tools.base import ToolKit
+from upsonic.tools.config import tool
+from upsonic.utils.async_utils import run_async
+from upsonic.utils.integrations.telegram import sanitize_text_for_telegram
 from upsonic.utils.printing import error_log
 
 
-class TelegramTools:
+class TelegramTools(ToolKit):
     """
     Telegram Bot API toolkit for sending messages and managing bot operations.
     
@@ -93,35 +97,38 @@ class TelegramTools:
         disable_notification: bool = False,
         protect_content: bool = False,
         max_message_length: int = 4096,
-        timeout: float = 30.0,
-    ):
-        """
-        Initialize the Telegram toolkit.
-        
+        http_timeout: float = 30.0,
+        **kwargs: Any,
+    ) -> None:
+        """Initialize the Telegram toolkit.
+
         Args:
             bot_token: Telegram Bot API token. If not provided, reads from
                       TELEGRAM_BOT_TOKEN environment variable.
-            parse_mode: Default parse mode for messages ("HTML", "Markdown", 
+            parse_mode: Default parse mode for messages ("HTML", "Markdown",
                        "MarkdownV2", or None).
             disable_web_page_preview: Disable link previews by default.
             disable_notification: Send messages silently by default.
             protect_content: Protect messages from forwarding/saving by default.
-            max_message_length: Maximum message length before splitting (default: 4096).
-            timeout: HTTP request timeout in seconds (default: 30.0).
+            max_message_length: Maximum message length before splitting.
+            http_timeout: HTTP request timeout in seconds.
+            **kwargs: ToolKit params (include_tools, exclude_tools, timeout, etc.).
         """
-        self.bot_token = bot_token or getenv("TELEGRAM_BOT_TOKEN")
+        super().__init__(**kwargs)
+
+        self.bot_token: Optional[str] = bot_token or getenv("TELEGRAM_BOT_TOKEN")
         if not self.bot_token:
             error_log(
                 "TELEGRAM_BOT_TOKEN not set. Please set the TELEGRAM_BOT_TOKEN "
                 "environment variable or pass bot_token to the constructor."
             )
         
-        self.parse_mode = parse_mode
-        self.disable_web_page_preview = disable_web_page_preview
-        self.disable_notification = disable_notification
-        self.protect_content = protect_content
-        self.max_message_length = max_message_length
-        self.timeout = timeout
+        self.parse_mode: Optional[str] = parse_mode
+        self.disable_web_page_preview: bool = disable_web_page_preview
+        self.disable_notification: bool = disable_notification
+        self.protect_content: bool = protect_content
+        self.max_message_length: int = max_message_length
+        self.http_timeout: float = http_timeout
         
         # HTTP client (lazy initialization)
         self._http_client: Optional[httpx.AsyncClient] = None
@@ -142,7 +149,7 @@ class TelegramTools:
     async def _get_client(self) -> httpx.AsyncClient:
         """Get or create HTTP client."""
         if self._http_client is None or self._http_client.is_closed:
-            self._http_client = httpx.AsyncClient(timeout=self.timeout)
+            self._http_client = httpx.AsyncClient(timeout=self.http_timeout)
         return self._http_client
     
     async def close(self) -> None:
@@ -204,13 +211,16 @@ class TelegramTools:
     
 
     
-    async def get_me(self) -> Optional[Dict[str, Any]]:
-        """
-        Get basic information about the bot.
-        
+    @tool
+    def get_me(self) -> Optional[Dict[str, Any]]:
+        """Get basic information about the bot.
+
         Returns:
             Bot information including id, username, first_name, etc.
         """
+        return run_async(self.aget_me())
+
+    async def aget_me(self) -> Optional[Dict[str, Any]]:
         if self._bot_info is None:
             self._bot_info = await self._api_request("getMe")
         return self._bot_info
@@ -282,29 +292,8 @@ class TelegramTools:
         
         return data
 
-    @staticmethod
-    def _sanitize_text_for_telegram(text: str) -> str:
-        """
-        Sanitize text to be safe for Telegram's sendMessage API.
-        
-        Strips HTML entities and control characters that may cause
-        400 Bad Request errors.
-        
-        Args:
-            text: Raw text that may contain problematic characters.
-            
-        Returns:
-            Sanitized plain text safe for Telegram.
-        """
-        import html
-        import re
-        sanitized: str = html.unescape(text)
-        sanitized = re.sub(r"<[^>]+>", "", sanitized)
-        sanitized = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", sanitized)
-        sanitized = sanitized.strip()
-        return sanitized if sanitized else "(empty response)"
-
-    async def send_message(
+    @tool
+    def send_message(
         self,
         chat_id: Union[int, str],
         text: str,
@@ -338,6 +327,30 @@ class TelegramTools:
         Returns:
             The sent Message on success, None on failure.
         """
+        return run_async(self.asend_message(
+            chat_id=chat_id,
+            text=text,
+            parse_mode=parse_mode,
+            disable_web_page_preview=disable_web_page_preview,
+            disable_notification=disable_notification,
+            protect_content=protect_content,
+            reply_to_message_id=reply_to_message_id,
+            reply_markup=reply_markup,
+            message_thread_id=message_thread_id,
+        ))
+
+    async def asend_message(
+        self,
+        chat_id: Union[int, str],
+        text: str,
+        parse_mode: Optional[str] = None,
+        disable_web_page_preview: Optional[bool] = None,
+        disable_notification: Optional[bool] = None,
+        protect_content: Optional[bool] = None,
+        reply_to_message_id: Optional[int] = None,
+        reply_markup: Optional[Dict[str, Any]] = None,
+        message_thread_id: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
         if not text or not text.strip():
             error_log("send_message called with empty text, skipping")
             return None
@@ -367,7 +380,6 @@ class TelegramTools:
             message_thread_id=message_thread_id,
         )
         
-        # Attempt 1: send as-is
         try:
             result: Optional[Dict[str, Any]] = await self._api_request(
                 "sendMessage", data, raise_on_client_error=True,
@@ -376,7 +388,6 @@ class TelegramTools:
         except httpx.HTTPStatusError:
             pass
         
-        # Attempt 2: strip parse_mode → plain text
         if "parse_mode" in data:
             data.pop("parse_mode")
             from upsonic.utils.printing import debug_log
@@ -389,14 +400,12 @@ class TelegramTools:
             except httpx.HTTPStatusError:
                 pass
         
-        # Attempt 3: sanitize text (remove HTML tags, control chars)
-        sanitized_text: str = self._sanitize_text_for_telegram(text)
+        sanitized_text: str = sanitize_text_for_telegram(text)
         data["text"] = sanitized_text
         data.pop("parse_mode", None)
         from upsonic.utils.printing import debug_log
         debug_log("sendMessage 400 retry: sanitized text")
         
-        # Final attempt — no raise, let _api_request handle the error
         return await self._api_request("sendMessage", data)
     
     async def _send_long_message(
@@ -414,7 +423,6 @@ class TelegramTools:
                 chunks.append(remaining)
                 break
             
-            # Find a good split point
             split_point = remaining.rfind("\n", 0, self.max_message_length)
             if split_point == -1:
                 split_point = remaining.rfind(" ", 0, self.max_message_length)
@@ -437,7 +445,8 @@ class TelegramTools:
         
         return last_result
     
-    async def send_photo(
+    @tool
+    def send_photo(
         self,
         chat_id: Union[int, str],
         photo: Union[str, bytes],
@@ -462,6 +471,26 @@ class TelegramTools:
         Returns:
             The sent Message on success.
         """
+        return run_async(self.asend_photo(
+            chat_id=chat_id,
+            photo=photo,
+            caption=caption,
+            parse_mode=parse_mode,
+            reply_to_message_id=reply_to_message_id,
+            reply_markup=reply_markup,
+            message_thread_id=message_thread_id,
+        ))
+
+    async def asend_photo(
+        self,
+        chat_id: Union[int, str],
+        photo: Union[str, bytes],
+        caption: Optional[str] = None,
+        parse_mode: Optional[str] = None,
+        reply_to_message_id: Optional[int] = None,
+        reply_markup: Optional[Dict[str, Any]] = None,
+        message_thread_id: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
         data: Dict[str, Any] = {"chat_id": chat_id}
         
         if caption:
@@ -482,7 +511,8 @@ class TelegramTools:
             files = {"photo": ("photo.jpg", photo, "image/jpeg")}
             return await self._api_request("sendPhoto", data, files=files)
     
-    async def send_document(
+    @tool
+    def send_document(
         self,
         chat_id: Union[int, str],
         document: Union[str, bytes],
@@ -509,6 +539,28 @@ class TelegramTools:
         Returns:
             The sent Message on success.
         """
+        return run_async(self.asend_document(
+            chat_id=chat_id,
+            document=document,
+            filename=filename,
+            caption=caption,
+            parse_mode=parse_mode,
+            reply_to_message_id=reply_to_message_id,
+            reply_markup=reply_markup,
+            message_thread_id=message_thread_id,
+        ))
+
+    async def asend_document(
+        self,
+        chat_id: Union[int, str],
+        document: Union[str, bytes],
+        filename: Optional[str] = None,
+        caption: Optional[str] = None,
+        parse_mode: Optional[str] = None,
+        reply_to_message_id: Optional[int] = None,
+        reply_markup: Optional[Dict[str, Any]] = None,
+        message_thread_id: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
         data: Dict[str, Any] = {"chat_id": chat_id}
         
         if caption:
@@ -530,7 +582,8 @@ class TelegramTools:
             files = {"document": (fname, document, "application/octet-stream")}
             return await self._api_request("sendDocument", data, files=files)
     
-    async def send_audio(
+    @tool
+    def send_audio(
         self,
         chat_id: Union[int, str],
         audio: Union[str, bytes],
@@ -559,6 +612,30 @@ class TelegramTools:
         Returns:
             The sent Message on success.
         """
+        return run_async(self.asend_audio(
+            chat_id=chat_id,
+            audio=audio,
+            caption=caption,
+            parse_mode=parse_mode,
+            duration=duration,
+            performer=performer,
+            title=title,
+            reply_to_message_id=reply_to_message_id,
+            message_thread_id=message_thread_id,
+        ))
+
+    async def asend_audio(
+        self,
+        chat_id: Union[int, str],
+        audio: Union[str, bytes],
+        caption: Optional[str] = None,
+        parse_mode: Optional[str] = None,
+        duration: Optional[int] = None,
+        performer: Optional[str] = None,
+        title: Optional[str] = None,
+        reply_to_message_id: Optional[int] = None,
+        message_thread_id: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
         data: Dict[str, Any] = {"chat_id": chat_id}
         
         if caption:
@@ -583,7 +660,8 @@ class TelegramTools:
             files = {"audio": ("audio.mp3", audio, "audio/mpeg")}
             return await self._api_request("sendAudio", data, files=files)
     
-    async def send_video(
+    @tool
+    def send_video(
         self,
         chat_id: Union[int, str],
         video: Union[str, bytes],
@@ -612,6 +690,30 @@ class TelegramTools:
         Returns:
             The sent Message on success.
         """
+        return run_async(self.asend_video(
+            chat_id=chat_id,
+            video=video,
+            caption=caption,
+            parse_mode=parse_mode,
+            duration=duration,
+            width=width,
+            height=height,
+            reply_to_message_id=reply_to_message_id,
+            message_thread_id=message_thread_id,
+        ))
+
+    async def asend_video(
+        self,
+        chat_id: Union[int, str],
+        video: Union[str, bytes],
+        caption: Optional[str] = None,
+        parse_mode: Optional[str] = None,
+        duration: Optional[int] = None,
+        width: Optional[int] = None,
+        height: Optional[int] = None,
+        reply_to_message_id: Optional[int] = None,
+        message_thread_id: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
         data: Dict[str, Any] = {"chat_id": chat_id}
         
         if caption:
@@ -636,7 +738,8 @@ class TelegramTools:
             files = {"video": ("video.mp4", video, "video/mp4")}
             return await self._api_request("sendVideo", data, files=files)
     
-    async def send_voice(
+    @tool
+    def send_voice(
         self,
         chat_id: Union[int, str],
         voice: Union[str, bytes],
@@ -661,6 +764,26 @@ class TelegramTools:
         Returns:
             The sent Message on success.
         """
+        return run_async(self.asend_voice(
+            chat_id=chat_id,
+            voice=voice,
+            caption=caption,
+            parse_mode=parse_mode,
+            duration=duration,
+            reply_to_message_id=reply_to_message_id,
+            message_thread_id=message_thread_id,
+        ))
+
+    async def asend_voice(
+        self,
+        chat_id: Union[int, str],
+        voice: Union[str, bytes],
+        caption: Optional[str] = None,
+        parse_mode: Optional[str] = None,
+        duration: Optional[int] = None,
+        reply_to_message_id: Optional[int] = None,
+        message_thread_id: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
         data: Dict[str, Any] = {"chat_id": chat_id}
         
         if caption:
@@ -681,7 +804,8 @@ class TelegramTools:
             files = {"voice": ("voice.ogg", voice, "audio/ogg")}
             return await self._api_request("sendVoice", data, files=files)
     
-    async def send_location(
+    @tool
+    def send_location(
         self,
         chat_id: Union[int, str],
         latitude: float,
@@ -704,6 +828,24 @@ class TelegramTools:
         Returns:
             The sent Message on success.
         """
+        return run_async(self.asend_location(
+            chat_id=chat_id,
+            latitude=latitude,
+            longitude=longitude,
+            reply_to_message_id=reply_to_message_id,
+            reply_markup=reply_markup,
+            message_thread_id=message_thread_id,
+        ))
+
+    async def asend_location(
+        self,
+        chat_id: Union[int, str],
+        latitude: float,
+        longitude: float,
+        reply_to_message_id: Optional[int] = None,
+        reply_markup: Optional[Dict[str, Any]] = None,
+        message_thread_id: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
         data: Dict[str, Any] = {
             "chat_id": chat_id,
             "latitude": latitude,
@@ -719,8 +861,8 @@ class TelegramTools:
         
         return await self._api_request("sendLocation", data)
     
-    
-    async def send_poll(
+    @tool
+    def send_poll(
         self,
         chat_id: Union[int, str],
         question: str,
@@ -779,6 +921,42 @@ class TelegramTools:
                 explanation="Basic arithmetic: 2 + 2 = 4"
             )
         """
+        return run_async(self.asend_poll(
+            chat_id=chat_id,
+            question=question,
+            options=options,
+            is_anonymous=is_anonymous,
+            poll_type=poll_type,
+            allows_multiple_answers=allows_multiple_answers,
+            correct_option_id=correct_option_id,
+            explanation=explanation,
+            explanation_parse_mode=explanation_parse_mode,
+            open_period=open_period,
+            close_date=close_date,
+            is_closed=is_closed,
+            reply_to_message_id=reply_to_message_id,
+            reply_markup=reply_markup,
+            message_thread_id=message_thread_id,
+        ))
+
+    async def asend_poll(
+        self,
+        chat_id: Union[int, str],
+        question: str,
+        options: List[str],
+        is_anonymous: bool = True,
+        poll_type: str = "regular",
+        allows_multiple_answers: bool = False,
+        correct_option_id: Optional[int] = None,
+        explanation: Optional[str] = None,
+        explanation_parse_mode: Optional[str] = None,
+        open_period: Optional[int] = None,
+        close_date: Optional[int] = None,
+        is_closed: bool = False,
+        reply_to_message_id: Optional[int] = None,
+        reply_markup: Optional[Dict[str, Any]] = None,
+        message_thread_id: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
         if len(options) < 2 or len(options) > 10:
             error_log("Poll must have between 2 and 10 options")
             return None
@@ -816,7 +994,8 @@ class TelegramTools:
         
         return await self._api_request("sendPoll", data)
     
-    async def stop_poll(
+    @tool
+    def stop_poll(
         self,
         chat_id: Union[int, str],
         message_id: int,
@@ -833,6 +1012,18 @@ class TelegramTools:
         Returns:
             The stopped Poll object on success.
         """
+        return run_async(self.astop_poll(
+            chat_id=chat_id,
+            message_id=message_id,
+            reply_markup=reply_markup,
+        ))
+
+    async def astop_poll(
+        self,
+        chat_id: Union[int, str],
+        message_id: int,
+        reply_markup: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
         data: Dict[str, Any] = {
             "chat_id": chat_id,
             "message_id": message_id,
@@ -843,8 +1034,8 @@ class TelegramTools:
         
         return await self._api_request("stopPoll", data)
 
-    
-    async def send_chat_action(
+    @tool
+    def send_chat_action(
         self,
         chat_id: Union[int, str],
         action: str = "typing",
@@ -864,6 +1055,18 @@ class TelegramTools:
         Returns:
             True on success.
         """
+        return run_async(self.asend_chat_action(
+            chat_id=chat_id,
+            action=action,
+            message_thread_id=message_thread_id,
+        ))
+
+    async def asend_chat_action(
+        self,
+        chat_id: Union[int, str],
+        action: str = "typing",
+        message_thread_id: Optional[int] = None,
+    ) -> bool:
         if action not in self.CHAT_ACTIONS:
             action = "typing"
         
@@ -878,9 +1081,8 @@ class TelegramTools:
         result = await self._api_request("sendChatAction", data)
         return result is True
     
-
-    
-    async def answer_callback_query(
+    @tool
+    def answer_callback_query(
         self,
         callback_query_id: str,
         text: Optional[str] = None,
@@ -901,6 +1103,22 @@ class TelegramTools:
         Returns:
             True on success.
         """
+        return run_async(self.aanswer_callback_query(
+            callback_query_id=callback_query_id,
+            text=text,
+            show_alert=show_alert,
+            url=url,
+            cache_time=cache_time,
+        ))
+
+    async def aanswer_callback_query(
+        self,
+        callback_query_id: str,
+        text: Optional[str] = None,
+        show_alert: bool = False,
+        url: Optional[str] = None,
+        cache_time: int = 0,
+    ) -> bool:
         data: Dict[str, Any] = {
             "callback_query_id": callback_query_id,
         }
@@ -917,8 +1135,8 @@ class TelegramTools:
         result = await self._api_request("answerCallbackQuery", data)
         return result is True
     
-    
-    async def get_file(self, file_id: str) -> Optional[Dict[str, Any]]:
+    @tool
+    def get_file(self, file_id: str) -> Optional[Dict[str, Any]]:
         """
         Get basic info about a file and prepare it for downloading.
         
@@ -928,9 +1146,13 @@ class TelegramTools:
         Returns:
             File object with file_path for downloading.
         """
+        return run_async(self.aget_file(file_id=file_id))
+
+    async def aget_file(self, file_id: str) -> Optional[Dict[str, Any]]:
         return await self._api_request("getFile", {"file_id": file_id})
     
-    async def download_file(self, file_path: str) -> Optional[bytes]:
+    @tool
+    def download_file(self, file_path: str) -> Optional[bytes]:
         """
         Download a file from Telegram servers.
         
@@ -940,6 +1162,9 @@ class TelegramTools:
         Returns:
             File content as bytes.
         """
+        return run_async(self.adownload_file(file_path=file_path))
+
+    async def adownload_file(self, file_path: str) -> Optional[bytes]:
         if not self.bot_token:
             return None
         
@@ -954,9 +1179,8 @@ class TelegramTools:
             error_log(f"Failed to download file: {e}")
             return None
     
-
-    
-    async def edit_message_text(
+    @tool
+    def edit_message_text(
         self,
         text: str,
         chat_id: Optional[Union[int, str]] = None,
@@ -984,6 +1208,26 @@ class TelegramTools:
         Returns:
             The edited Message on success, None on failure.
         """
+        return run_async(self.aedit_message_text(
+            text=text,
+            chat_id=chat_id,
+            message_id=message_id,
+            inline_message_id=inline_message_id,
+            parse_mode=parse_mode,
+            disable_web_page_preview=disable_web_page_preview,
+            reply_markup=reply_markup,
+        ))
+
+    async def aedit_message_text(
+        self,
+        text: str,
+        chat_id: Optional[Union[int, str]] = None,
+        message_id: Optional[int] = None,
+        inline_message_id: Optional[str] = None,
+        parse_mode: Optional[str] = None,
+        disable_web_page_preview: Optional[bool] = None,
+        reply_markup: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
         if not text or not text.strip():
             return None
 
@@ -1007,7 +1251,6 @@ class TelegramTools:
         if reply_markup:
             data["reply_markup"] = reply_markup
         
-        # Attempt 1: send as-is
         try:
             result: Optional[Dict[str, Any]] = await self._api_request(
                 "editMessageText", data, raise_on_client_error=True,
@@ -1016,7 +1259,6 @@ class TelegramTools:
         except httpx.HTTPStatusError:
             pass
         
-        # Attempt 2: strip parse_mode
         if "parse_mode" in data:
             data.pop("parse_mode")
             from upsonic.utils.printing import debug_log
@@ -1029,15 +1271,15 @@ class TelegramTools:
             except httpx.HTTPStatusError:
                 pass
         
-        # Attempt 3: sanitize text
-        data["text"] = self._sanitize_text_for_telegram(text)
+        data["text"] = sanitize_text_for_telegram(text)
         data.pop("parse_mode", None)
         from upsonic.utils.printing import debug_log
         debug_log("editMessageText 400 retry: sanitized text")
         
         return await self._api_request("editMessageText", data)
     
-    async def edit_message_reply_markup(
+    @tool
+    def edit_message_reply_markup(
         self,
         chat_id: Optional[Union[int, str]] = None,
         message_id: Optional[int] = None,
@@ -1056,6 +1298,20 @@ class TelegramTools:
         Returns:
             The edited Message on success.
         """
+        return run_async(self.aedit_message_reply_markup(
+            chat_id=chat_id,
+            message_id=message_id,
+            inline_message_id=inline_message_id,
+            reply_markup=reply_markup,
+        ))
+
+    async def aedit_message_reply_markup(
+        self,
+        chat_id: Optional[Union[int, str]] = None,
+        message_id: Optional[int] = None,
+        inline_message_id: Optional[str] = None,
+        reply_markup: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
         data: Dict[str, Any] = {}
         
         if chat_id and message_id:
@@ -1072,7 +1328,8 @@ class TelegramTools:
         
         return await self._api_request("editMessageReplyMarkup", data)
     
-    async def delete_message(
+    @tool
+    def delete_message(
         self,
         chat_id: Union[int, str],
         message_id: int,
@@ -1087,15 +1344,24 @@ class TelegramTools:
         Returns:
             True on success.
         """
+        return run_async(self.adelete_message(
+            chat_id=chat_id,
+            message_id=message_id,
+        ))
+
+    async def adelete_message(
+        self,
+        chat_id: Union[int, str],
+        message_id: int,
+    ) -> bool:
         result = await self._api_request("deleteMessage", {
             "chat_id": chat_id,
             "message_id": message_id,
         })
         return result is True
     
-
-    
-    async def set_webhook(
+    @tool
+    def set_webhook(
         self,
         url: str,
         secret_token: Optional[str] = None,
@@ -1120,6 +1386,26 @@ class TelegramTools:
         Returns:
             True on success.
         """
+        return run_async(self.aset_webhook(
+            url=url,
+            secret_token=secret_token,
+            max_connections=max_connections,
+            allowed_updates=allowed_updates,
+            drop_pending_updates=drop_pending_updates,
+            certificate=certificate,
+            ip_address=ip_address,
+        ))
+
+    async def aset_webhook(
+        self,
+        url: str,
+        secret_token: Optional[str] = None,
+        max_connections: int = 40,
+        allowed_updates: Optional[List[str]] = None,
+        drop_pending_updates: bool = False,
+        certificate: Optional[bytes] = None,
+        ip_address: Optional[str] = None,
+    ) -> bool:
         data: Dict[str, Any] = {
             "url": url,
             "max_connections": max_connections,
@@ -1140,11 +1426,10 @@ class TelegramTools:
         else:
             result = await self._api_request("setWebhook", data)
         
-        # Telegram API returns True on success, or None on error
-        # result can be True (success) or None (error from _api_request)
         return result is True
     
-    async def delete_webhook(self, drop_pending_updates: bool = False) -> bool:
+    @tool
+    def delete_webhook(self, drop_pending_updates: bool = False) -> bool:
         """
         Delete the webhook.
         
@@ -1154,22 +1439,29 @@ class TelegramTools:
         Returns:
             True on success.
         """
+        return run_async(self.adelete_webhook(drop_pending_updates=drop_pending_updates))
+
+    async def adelete_webhook(self, drop_pending_updates: bool = False) -> bool:
         result = await self._api_request("deleteWebhook", {
             "drop_pending_updates": drop_pending_updates,
         })
         return result is True
     
-    async def get_webhook_info(self) -> Optional[Dict[str, Any]]:
+    @tool
+    def get_webhook_info(self) -> Optional[Dict[str, Any]]:
         """
         Get current webhook status.
         
         Returns:
             WebhookInfo object with webhook details.
         """
+        return run_async(self.aget_webhook_info())
+
+    async def aget_webhook_info(self) -> Optional[Dict[str, Any]]:
         return await self._api_request("getWebhookInfo")
     
-    
-    async def get_chat(self, chat_id: Union[int, str]) -> Optional[Dict[str, Any]]:
+    @tool
+    def get_chat(self, chat_id: Union[int, str]) -> Optional[Dict[str, Any]]:
         """
         Get up-to-date information about a chat.
         
@@ -1179,9 +1471,13 @@ class TelegramTools:
         Returns:
             Chat object.
         """
+        return run_async(self.aget_chat(chat_id=chat_id))
+
+    async def aget_chat(self, chat_id: Union[int, str]) -> Optional[Dict[str, Any]]:
         return await self._api_request("getChat", {"chat_id": chat_id})
     
-    async def get_chat_member(
+    @tool
+    def get_chat_member(
         self,
         chat_id: Union[int, str],
         user_id: int,
@@ -1196,12 +1492,23 @@ class TelegramTools:
         Returns:
             ChatMember object.
         """
+        return run_async(self.aget_chat_member(
+            chat_id=chat_id,
+            user_id=user_id,
+        ))
+
+    async def aget_chat_member(
+        self,
+        chat_id: Union[int, str],
+        user_id: int,
+    ) -> Optional[Dict[str, Any]]:
         return await self._api_request("getChatMember", {
             "chat_id": chat_id,
             "user_id": user_id,
         })
     
-    async def get_chat_member_count(self, chat_id: Union[int, str]) -> Optional[int]:
+    @tool
+    def get_chat_member_count(self, chat_id: Union[int, str]) -> Optional[int]:
         """
         Get the number of members in a chat.
         
@@ -1211,6 +1518,9 @@ class TelegramTools:
         Returns:
             Number of members in the chat.
         """
+        return run_async(self.aget_chat_member_count(chat_id=chat_id))
+
+    async def aget_chat_member_count(self, chat_id: Union[int, str]) -> Optional[int]:
         return await self._api_request("getChatMemberCount", {"chat_id": chat_id})
     
 
@@ -1256,7 +1566,7 @@ class TelegramTools:
             Returns:
                 A message indicating the poll was created successfully with the message ID.
             """
-            result = await self.send_poll(
+            result = await self.asend_poll(
                 chat_id=chat_id,
                 question=question,
                 options=options,

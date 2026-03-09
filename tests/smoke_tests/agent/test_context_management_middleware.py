@@ -388,20 +388,21 @@ class TestPruneToolCallHistory:
         pruned = mw._prune_tool_call_history(msgs)
         assert len(pruned) == len(msgs)
 
-    def test_prunes_old_tool_messages(self) -> None:
+    def test_prunes_old_tool_rounds(self) -> None:
         model = _get_real_model()
         mw = ContextManagementMiddleware(model=model, keep_recent_count=2)
         msgs = _build_conversation(5)
         pruned = mw._prune_tool_call_history(msgs)
         assert len(pruned) < len(msgs)
 
-        tool_count = 0
+        tool_msg_count: int = 0
         for msg in pruned:
             for part in msg.parts:
                 if isinstance(part, (ToolCallPart, ToolReturnPart)):
-                    tool_count += 1
+                    tool_msg_count += 1
                     break
-        assert tool_count == 2
+        # 2 rounds kept × 2 messages per round (ToolCallPart resp + ToolReturnPart req)
+        assert tool_msg_count == 4
 
     def test_returns_new_list_object(self) -> None:
         model = _get_real_model()
@@ -435,19 +436,193 @@ class TestPruneToolCallHistory:
         msgs = _build_conversation(4)
         pruned = mw._prune_tool_call_history(msgs)
 
-        tool_count = 0
+        tool_msg_count: int = 0
         for msg in pruned:
             for part in msg.parts:
                 if isinstance(part, (ToolCallPart, ToolReturnPart)):
-                    tool_count += 1
+                    tool_msg_count += 1
                     break
-        assert tool_count == 1
+        # 1 round kept × 2 messages per round
+        assert tool_msg_count == 2
 
     def test_empty_messages(self) -> None:
         model = _get_real_model()
         mw = ContextManagementMiddleware(model=model, keep_recent_count=5)
         pruned = mw._prune_tool_call_history([])
         assert pruned == []
+
+    def test_mixed_parts_preserved_after_prune(self) -> None:
+        """When a ModelResponse has both TextPart and ToolCallPart, pruning
+        removes only the ToolCallPart and keeps the TextPart."""
+        model = _get_real_model()
+        mw = ContextManagementMiddleware(model=model, keep_recent_count=0)
+        msgs = [
+            _make_user_request("hello"),
+            ModelResponse(parts=[
+                TextPart(content="I'll search for that."),
+                ToolCallPart(tool_name="search", tool_call_id="tc_mixed", args="{}"),
+            ]),
+            _make_tool_return_request("search", "tc_mixed", "found it"),
+            _make_text_response("Here are the results."),
+        ]
+        pruned = mw._prune_tool_call_history(msgs)
+
+        # The ModelResponse at index 1 should still exist with TextPart only
+        response_msgs = [m for m in pruned if isinstance(m, ModelResponse)]
+        assert len(response_msgs) == 2
+        mixed_resp = response_msgs[0]
+        assert len(mixed_resp.parts) == 1
+        assert isinstance(mixed_resp.parts[0], TextPart)
+        assert mixed_resp.parts[0].content == "I'll search for that."
+
+    def test_tool_call_return_ids_match_when_pruning(self) -> None:
+        """After pruning, remaining ToolCallParts and ToolReturnParts still
+        have matching tool_call_ids."""
+        model = _get_real_model()
+        mw = ContextManagementMiddleware(model=model, keep_recent_count=2)
+        msgs = _build_conversation(5)
+        pruned = mw._prune_tool_call_history(msgs)
+
+        call_ids: set[str] = set()
+        return_ids: set[str] = set()
+        for msg in pruned:
+            for part in msg.parts:
+                if isinstance(part, ToolCallPart):
+                    call_ids.add(part.tool_call_id)
+                elif isinstance(part, ToolReturnPart):
+                    return_ids.add(part.tool_call_id)
+        assert call_ids == return_ids
+
+
+# ===========================================================================
+# _group_into_conversation_pairs
+# ===========================================================================
+
+class TestGroupIntoConversationPairs:
+    def test_simple_alternating(self) -> None:
+        model = _get_real_model()
+        mw = ContextManagementMiddleware(model=model)
+        msgs = [
+            _make_user_request("A"),
+            _make_text_response("B"),
+            _make_user_request("C"),
+            _make_text_response("D"),
+        ]
+        pairs = mw._group_into_conversation_pairs(msgs)
+        assert len(pairs) == 2
+        assert len(pairs[0]) == 2
+        assert len(pairs[1]) == 2
+
+    def test_trailing_unpaired_request(self) -> None:
+        model = _get_real_model()
+        mw = ContextManagementMiddleware(model=model)
+        msgs = [
+            _make_user_request("A"),
+            _make_text_response("B"),
+            _make_user_request("C"),
+        ]
+        pairs = mw._group_into_conversation_pairs(msgs)
+        assert len(pairs) == 2
+        assert len(pairs[0]) == 2
+        assert len(pairs[1]) == 1  # lone request
+
+    def test_consecutive_responses_become_singles(self) -> None:
+        model = _get_real_model()
+        mw = ContextManagementMiddleware(model=model)
+        msgs = [
+            _make_text_response("orphan"),
+            _make_user_request("A"),
+            _make_text_response("B"),
+        ]
+        pairs = mw._group_into_conversation_pairs(msgs)
+        assert len(pairs) == 2
+        assert len(pairs[0]) == 1  # lone response
+        assert len(pairs[1]) == 2  # proper pair
+
+    def test_empty_list(self) -> None:
+        model = _get_real_model()
+        mw = ContextManagementMiddleware(model=model)
+        pairs = mw._group_into_conversation_pairs([])
+        assert pairs == []
+
+    def test_tool_pattern_grouping(self) -> None:
+        """Tool interaction pattern: Response(ToolCall) → Request(ToolReturn)
+        is (ModelResponse, ModelRequest) so each becomes a lone element."""
+        model = _get_real_model()
+        mw = ContextManagementMiddleware(model=model)
+        msgs = [
+            _make_user_request("do it"),
+            _make_text_response("ok"),
+            _make_tool_call_response("fn", "tc_0"),
+            _make_tool_return_request("fn", "tc_0"),
+            _make_text_response("done"),
+        ]
+        pairs = mw._group_into_conversation_pairs(msgs)
+        # (UserReq, TextResp), (ToolCallResp,), (ToolReturnReq, TextResp-err no)
+        # Actually: msg[0]=Req, msg[1]=Resp → pair
+        # msg[2]=Resp → lone
+        # msg[3]=Req, msg[4]=Resp → pair
+        assert len(pairs) == 3
+        assert len(pairs[0]) == 2
+        assert len(pairs[1]) == 1
+        assert len(pairs[2]) == 2
+
+
+# ===========================================================================
+# _identify_tool_rounds
+# ===========================================================================
+
+class TestIdentifyToolRounds:
+    def test_single_tool_round(self) -> None:
+        model = _get_real_model()
+        mw = ContextManagementMiddleware(model=model)
+        msgs = [
+            _make_user_request("search for X"),
+            _make_tool_call_response("search", "tc_0"),
+            _make_tool_return_request("search", "tc_0"),
+            _make_text_response("found X"),
+        ]
+        rounds = mw._identify_tool_rounds(msgs)
+        assert len(rounds) == 1
+        assert rounds[0] == (1, 2)
+
+    def test_multiple_tool_rounds(self) -> None:
+        model = _get_real_model()
+        mw = ContextManagementMiddleware(model=model)
+        msgs = _build_conversation(4)
+        rounds = mw._identify_tool_rounds(msgs)
+        assert len(rounds) == 4
+
+    def test_no_tool_rounds_in_text_only(self) -> None:
+        model = _get_real_model()
+        mw = ContextManagementMiddleware(model=model)
+        msgs = [
+            _make_user_request("hello"),
+            _make_text_response("hi"),
+            _make_user_request("bye"),
+            _make_text_response("goodbye"),
+        ]
+        rounds = mw._identify_tool_rounds(msgs)
+        assert rounds == []
+
+    def test_unmatched_tool_call_not_a_round(self) -> None:
+        """A ToolCallPart without a following ToolReturnPart is not a round."""
+        model = _get_real_model()
+        mw = ContextManagementMiddleware(model=model)
+        msgs = [
+            _make_user_request("do it"),
+            _make_tool_call_response("fn", "tc_orphan"),
+            _make_user_request("something else"),
+            _make_text_response("ok"),
+        ]
+        rounds = mw._identify_tool_rounds(msgs)
+        assert rounds == []
+
+    def test_empty_messages(self) -> None:
+        model = _get_real_model()
+        mw = ContextManagementMiddleware(model=model)
+        rounds = mw._identify_tool_rounds([])
+        assert rounds == []
 
 
 # ===========================================================================
@@ -688,6 +863,88 @@ class TestReconstructMessages:
         assert isinstance(part, ToolReturnPart)
         assert part.tool_name == ""
         assert part.tool_call_id == ""
+
+    def test_text_response_finish_reason_stop(self) -> None:
+        model = _get_real_model()
+        mw = ContextManagementMiddleware(model=model)
+        summary = ConversationSummary(messages=[
+            SummarizedResponse(parts=[
+                SummarizedResponsePart(part_kind="text", content="Hello"),
+            ]),
+        ])
+        result = mw._reconstruct_messages(summary)
+        assert result[0].finish_reason == "stop"
+
+    def test_tool_call_response_finish_reason_tool_call(self) -> None:
+        model = _get_real_model()
+        mw = ContextManagementMiddleware(model=model)
+        summary = ConversationSummary(messages=[
+            SummarizedResponse(parts=[
+                SummarizedResponsePart(
+                    part_kind="tool-call",
+                    tool_name="search",
+                    tool_call_id="tc_1",
+                    args="{}",
+                ),
+            ]),
+        ])
+        result = mw._reconstruct_messages(summary)
+        assert result[0].finish_reason == "tool_call"
+
+    def test_request_timestamp_set(self) -> None:
+        from datetime import datetime
+        model = _get_real_model()
+        mw = ContextManagementMiddleware(model=model)
+        summary = ConversationSummary(messages=[
+            SummarizedRequest(parts=[
+                SummarizedRequestPart(part_kind="user-prompt", content="Hi"),
+            ]),
+        ])
+        result = mw._reconstruct_messages(summary)
+        ts = result[0].timestamp
+        assert ts is not None
+        assert isinstance(ts, datetime)
+
+    def test_response_timestamp_set(self) -> None:
+        from datetime import datetime
+        model = _get_real_model()
+        mw = ContextManagementMiddleware(model=model)
+        summary = ConversationSummary(messages=[
+            SummarizedResponse(parts=[
+                SummarizedResponsePart(part_kind="text", content="ok"),
+            ]),
+        ])
+        result = mw._reconstruct_messages(summary)
+        ts = result[0].timestamp
+        assert ts is not None
+        assert isinstance(ts, datetime)
+
+    def test_full_conversation_finish_reasons(self) -> None:
+        model = _get_real_model()
+        mw = ContextManagementMiddleware(model=model)
+        summary = ConversationSummary(messages=[
+            SummarizedRequest(parts=[
+                SummarizedRequestPart(part_kind="user-prompt", content="Search for X."),
+            ]),
+            SummarizedResponse(parts=[
+                SummarizedResponsePart(
+                    part_kind="tool-call", tool_name="search",
+                    tool_call_id="tc_1", args='{"q":"X"}',
+                ),
+            ]),
+            SummarizedRequest(parts=[
+                SummarizedRequestPart(
+                    part_kind="tool-return", content="Found X",
+                    tool_name="search", tool_call_id="tc_1",
+                ),
+            ]),
+            SummarizedResponse(parts=[
+                SummarizedResponsePart(part_kind="text", content="Here is X."),
+            ]),
+        ])
+        result = mw._reconstruct_messages(summary)
+        assert result[1].finish_reason == "tool_call"
+        assert result[3].finish_reason == "stop"
 
 
 # ===========================================================================

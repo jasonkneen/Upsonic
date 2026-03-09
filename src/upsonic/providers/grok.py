@@ -5,6 +5,7 @@ from typing import Literal, overload
 
 import httpx
 from openai import AsyncOpenAI
+from typing_extensions import deprecated
 
 from upsonic.profiles import ModelProfile
 from upsonic.utils.package.exception import UserError
@@ -27,6 +28,14 @@ except ImportError:  # pragma: no cover
 GrokModelName = Literal[
     'grok-4',
     'grok-4-0709',
+    'grok-4-latest',
+    'grok-4-1-fast',
+    'grok-4-1-fast-reasoning',
+    'grok-4-1-fast-non-reasoning',
+    'grok-4-fast',
+    'grok-4-fast-reasoning',
+    'grok-4-fast-non-reasoning',
+    'grok-code-fast-1',
     'grok-3',
     'grok-3-mini',
     'grok-3-fast',
@@ -36,8 +45,11 @@ GrokModelName = Literal[
 ]
 
 
+@deprecated(
+    '`GrokProvider` is deprecated, use `XaiProvider` with `XaiModel` instead for the native xAI SDK. '
+)
 class GrokProvider(Provider[AsyncOpenAI]):
-    """Provider for Grok API."""
+    """Provider for Grok API (OpenAI-compatible interface)."""
 
     @property
     def name(self) -> str:

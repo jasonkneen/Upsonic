@@ -34,6 +34,8 @@ class ToolExecution:
 
     external_execution_required: Optional[bool] = None
 
+    result_injected: bool = False
+
     @property
     def is_paused(self) -> bool:
         return bool(self.requires_confirmation or self.requires_user_input or self.external_execution_required)

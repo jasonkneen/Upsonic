@@ -1004,13 +1004,15 @@ class MultiMCPHandler:
 
         console.print(f"[cyan]🔌 Connecting to {len(self.server_params_list)} MCP server(s)...[/cyan]")
         
-        # Validate tool_name_prefixes length if provided
+        # Validate tool_name_prefixes length if provided (graceful failure: log and skip connection)
         if self.tool_name_prefixes is not None:
             if len(self.tool_name_prefixes) != len(self.server_params_list):
-                raise ValueError(
-                    f"tool_name_prefixes length ({len(self.tool_name_prefixes)}) must match "
-                    f"number of servers ({len(self.server_params_list)})"
+                console.print(
+                    f"[yellow]⚠️  tool_name_prefixes length ({len(self.tool_name_prefixes)}) does not match "
+                    f"number of servers ({len(self.server_params_list)}). Skipping connection.[/yellow]"
                 )
+                self._initialized = True
+                return
         
         # Create MCPHandler for each server and connect
         for idx, server_params in enumerate(self.server_params_list):

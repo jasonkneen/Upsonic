@@ -1,23 +1,22 @@
 import time
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
-# Heavy imports moved to lazy loading for faster startup
 if TYPE_CHECKING:
     from upsonic.models import Model
-    from upsonic.utils.printing import call_end
-    from upsonic.utils.llm_usage import llm_usage
-    from upsonic.utils.tool_usage import tool_usage
-else:
-    # Use string annotations to avoid importing heavy modules
-    Model = "Model"
-    call_end = "call_end"
-    llm_usage = "llm_usage"
-    tool_usage = "tool_usage"
+    from upsonic.run.agent.output import AgentRunOutput
+    from upsonic.tasks.tasks import Task
 
 
 class CallManager:
-    def __init__(self, model: "Model", task, debug=False, show_tool_calls=True, print_output=False):
+    def __init__(
+        self,
+        model: "Model",
+        task: "Task",
+        debug: bool = False,
+        show_tool_calls: bool = True,
+        print_output: bool = False,
+    ):
         """
         Initializes the CallManager.
 
@@ -28,92 +27,119 @@ class CallManager:
             show_tool_calls: Whether to show tool calls.
             print_output: Whether to print output to console.
         """
-        self.model = model
-        self.task = task
-        self.show_tool_calls = show_tool_calls
-        self.debug = debug
-        self.print_output = print_output
-        self.start_time = None
-        self.end_time = None
-        self.model_response = None
-        
-    def process_response(self, model_response):
+        self.model: "Model" = model
+        self.task: "Task" = task
+        self.show_tool_calls: bool = show_tool_calls
+        self.debug: bool = debug
+        self.print_output: bool = print_output
+        self.start_time: Optional[float] = None
+        self.end_time: Optional[float] = None
+        self.model_response: Optional[Any] = None
+
+    def process_response(self, model_response: Any) -> Any:
         self.model_response = model_response
         return self.model_response
-    
+
     async def aprepare(self) -> None:
         """Prepare the call by recording start time."""
         self.start_time = time.time()
-    
+
     async def afinalize(self) -> None:
         """Finalize the call by setting end time."""
-        # Only set end_time if not already set (may be set from context.model_end_time)
         if self.end_time is None:
             self.end_time = time.time()
-        
-        # Ensure start_time is set (fallback to end_time if not set)
         if self.start_time is None:
             self.start_time = self.end_time
-    
-    async def alog_completion(self, context) -> None:
-        """Log the completion with usage tracking and call_end.
-        
+
+    async def alog_completion(self, context: "AgentRunOutput") -> None:
+        """Log the completion with usage tracking, Tool Calls, LLM Result, and Task Metrics.
+
+        This is the single printing entry-point for completed runs.
+        It calls ``call_end`` (which prints Tool Calls + LLM Result
+        and tracks price_id) and then ``print_price_id_summary`` (Task Metrics).
+
         Args:
             context: AgentRunOutput object containing messages and output.
         """
-        # Only call call_end if we have a context
-        if context is not None:
-            # Lazy import for heavy modules
+        if context is None:
+            return
+
+        from upsonic.utils.tool_usage import tool_usage
+        from upsonic.utils.printing import call_end
+
+        task_usage: Optional[Any] = getattr(self.task, '_usage', None)
+        if task_usage is not None and (task_usage.input_tokens or task_usage.output_tokens):
+            usage: Dict[str, int] = {
+                "input_tokens": task_usage.input_tokens,
+                "output_tokens": task_usage.output_tokens,
+            }
+        elif context.usage is not None and hasattr(context.usage, 'input_tokens'):
+            usage = {
+                "input_tokens": context.usage.input_tokens,
+                "output_tokens": context.usage.output_tokens,
+            }
+        else:
             from upsonic.utils.llm_usage import llm_usage
-            from upsonic.utils.tool_usage import tool_usage
-            from upsonic.utils.printing import call_end
-            
-            # Calculate usage and tool usage from context (AgentRunOutput)
             usage = llm_usage(context)
-            tool_usage_result = tool_usage(context, self.task)
-            # Call the end logging
-            call_end(
-                context.output,
-                self.model,
-                self.task.response_format,
-                self.start_time,
-                self.end_time,
-                usage,
-                tool_usage_result,
-                self.debug,
-                self.task.price_id,
-                print_output=self.print_output,
-                show_tool_calls=self.show_tool_calls
-            )
-    
+
+        tool_usage_result: Optional[List[Dict[str, Any]]] = (
+            tool_usage(context, self.task) if self.show_tool_calls else None
+        )
+
+        has_output: bool = context.output is not None
+        has_tool_calls: bool = bool(tool_usage_result and len(tool_usage_result) > 0)
+        if not has_output and not has_tool_calls:
+            return
+
+        effective_end: float = self.end_time if self.end_time is not None else time.time()
+        effective_start: float = self.start_time if self.start_time is not None else effective_end
+
+        call_end(
+            context.output,
+            self.model,
+            self.task.response_format if hasattr(self.task, 'response_format') else str,
+            effective_start,
+            effective_end,
+            usage,
+            tool_usage_result,
+            self.debug,
+            getattr(self.task, 'price_id', None),
+            print_output=self.print_output,
+            show_tool_calls=self.show_tool_calls,
+        )
+
+        if self.task and not getattr(self.task, 'not_main_task', False):
+            from upsonic.utils.printing import print_price_id_summary, price_id_summary
+            price_id: Optional[str] = getattr(self.task, 'price_id', None)
+            if price_id and price_id in price_id_summary:
+                print_price_id_summary(price_id, self.task, print_output=self.print_output)
+
     def prepare(self) -> None:
         """Synchronous version of aprepare."""
         import asyncio
         asyncio.get_event_loop().run_until_complete(self.aprepare())
-    
+
     def finalize(self) -> None:
         """Synchronous version of afinalize."""
         import asyncio
         asyncio.get_event_loop().run_until_complete(self.afinalize())
-    
-    def log_completion(self, context) -> None:
+
+    def log_completion(self, context: "AgentRunOutput") -> None:
         """Synchronous version of alog_completion."""
         import asyncio
         asyncio.get_event_loop().run_until_complete(self.alog_completion(context))
-    
+
     @asynccontextmanager
     async def manage_call(self):
         """
         Async context manager for call lifecycle.
-        
+
         Note: This context manager is kept for backward compatibility.
         For step-based architecture, use aprepare() and afinalize() directly.
         """
         await self.aprepare()
-        
+
         try:
             yield self
         finally:
             await self.afinalize()
-            # Note: alog_completion requires context, so it's not called here
-            # It should be called explicitly from the step that has access to context

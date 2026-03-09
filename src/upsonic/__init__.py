@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+__version__ = "0.1.0"
+
 from dotenv import load_dotenv
 
 from upsonic.utils.logging_config import *
@@ -11,8 +13,6 @@ from upsonic.utils.logging_config import *
 warnings.filterwarnings("ignore", category=ResourceWarning)
 warnings.filterwarnings("ignore", category=PendingDeprecationWarning)
 warnings.filterwarnings("ignore", category=DeprecationWarning)
-
-__version__ = "0.1.0"
 
 _lazy_imports = {}
 

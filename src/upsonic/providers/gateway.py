@@ -1,8 +1,9 @@
-"""This module implements the Pydantic AI Gateway provider."""
+"""This module implements the Gateway provider."""
 
 from __future__ import annotations as _annotations
 
 import os
+import re
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, Literal, overload
 
@@ -19,8 +20,6 @@ if TYPE_CHECKING:
 
     from upsonic.models.anthropic import AsyncAnthropicClient
     from upsonic.providers import Provider
-
-GATEWAY_BASE_URL = 'https://gateway.pydantic.dev/proxy'
 
 
 @overload
@@ -93,13 +92,17 @@ def gateway_provider(
 ) -> Provider[Any]: ...
 
 
-UpstreamProvider = Literal[
+ModelProvider = Literal[
     'openai',
     'groq',
     'anthropic',
     'bedrock',
     'google-vertex',
-    # Those are only API formats, but we still support them for convenience.
+]
+
+
+# These are only API flavors, we support them for convenience.
+APIFlavor = Literal[
     'openai-chat',
     'openai-responses',
     'chat',
@@ -107,6 +110,8 @@ UpstreamProvider = Literal[
     'converse',
     'gemini',
 ]
+
+UpstreamProvider = ModelProvider | APIFlavor
 
 
 def gateway_provider(
@@ -126,20 +131,22 @@ def gateway_provider(
         upstream_provider: The upstream provider to use.
         route: The name of the provider or routing group to use to handle the request. If not provided, the default
             routing group for the API format will be used.
-        api_key: The API key to use for authentication. If not provided, the `PYDANTIC_AI_GATEWAY_API_KEY`
+        api_key: The API key to use for authentication. If not provided, the `GATEWAY_API_KEY`
             environment variable will be used if available.
-        base_url: The base URL to use for the Gateway. If not provided, the `PYDANTIC_AI_GATEWAY_BASE_URL`
+        base_url: The base URL to use for the Gateway. If not provided, the `GATEWAY_BASE_URL`
             environment variable will be used if available. Otherwise, defaults to `https://gateway.pydantic.dev/proxy`.
         http_client: The HTTP client to use for the Gateway.
     """
-    api_key = api_key or os.getenv('PYDANTIC_AI_GATEWAY_API_KEY')
+    api_key = api_key or os.getenv('GATEWAY_API_KEY', os.getenv('PAIG_API_KEY'))
     if not api_key:
         raise UserError(
-            'Set the `PYDANTIC_AI_GATEWAY_API_KEY` environment variable or pass it via `gateway_provider(..., api_key=...)`'
-            ' to use the Pydantic AI Gateway provider.'
+            'Set the `GATEWAY_API_KEY` environment variable or pass it via `gateway_provider(..., api_key=...)`'
+            ' to use the Gateway provider.'
         )
 
-    base_url = base_url or os.getenv('PYDANTIC_AI_GATEWAY_BASE_URL', GATEWAY_BASE_URL)
+    base_url = (
+        base_url or os.getenv('GATEWAY_BASE_URL', os.getenv('PAIG_BASE_URL')) or _infer_base_url(api_key)
+    )
     http_client = http_client or cached_async_http_client(provider=f'gateway/{upstream_provider}')
     http_client.event_hooks = {'request': [_request_hook(api_key)]}
 
@@ -171,7 +178,7 @@ def gateway_provider(
         return BedrockProvider(
             api_key=api_key,
             base_url=base_url,
-            region_name='pydantic-ai-gateway',  # Fake region name to avoid NoRegionError
+            region_name='upsonic-gateway',  # Fake region name to avoid NoRegionError
         )
     elif upstream_provider in ('google-vertex', 'gemini'):
         from .google import GoogleProvider
@@ -218,6 +225,8 @@ def normalize_gateway_provider(provider: str) -> str:
     Args:
         provider: The provider name to normalize.
     """
+    provider = provider.removeprefix('gateway/')
+
     if provider in ('openai', 'openai-chat', 'chat'):
         return 'openai'
     elif provider in ('openai-responses', 'responses'):
@@ -227,3 +236,24 @@ def normalize_gateway_provider(provider: str) -> str:
     elif provider in ('bedrock', 'converse'):
         return 'bedrock'
     return provider
+
+GATEWAY_BASE_URL = 'https://gateway.pydantic.dev/proxy'
+
+_PYDANTIC_TOKEN_PATTERN = re.compile(r'^pylf_v(?P<version>[0-9]+)_(?P<region>[a-z]+)_[a-zA-Z0-9-_]+$')
+
+
+def _infer_base_url(api_key: str) -> str:
+    """Infer the gateway base URL from the API key.
+
+    The region is extracted to determine the appropriate gateway URL.
+    Defaults to the old gateway base URL if the region is not found.
+    """
+    if match := _PYDANTIC_TOKEN_PATTERN.match(api_key):
+        region = match.group('region')
+        assert isinstance(region, str)
+
+        if region.startswith('staging'):
+            return 'https://gateway.pydantic.info/proxy'
+        return f'https://gateway-{region}.pydantic.dev/proxy'
+
+    return GATEWAY_BASE_URL

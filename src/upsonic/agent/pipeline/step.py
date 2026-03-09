@@ -32,7 +32,6 @@ else:
     RunStatus = "RunStatus"
     AgentEvent = "AgentEvent"
 
-
 class StepStatus(str, Enum):
     """Status of step execution - synced with RunStatus."""
     RUNNING = "RUNNING"
@@ -161,10 +160,9 @@ class Step(ABC):
         This is the core method that subclasses must implement. Each step
         should use try-except-finally pattern to:
         1. Check for cancellation via raise_if_cancelled
-        2. Check for injected errors via check_and_raise_injected_error
-        3. Execute business logic
-        4. Create and return StepResult with all attributes set
-        5. In finally: append result to context.step_results, update stats
+        2. Execute business logic
+        3. Create and return StepResult with all attributes set
+        4. In finally: append result to context.step_results, update stats
         
         Args:
             context: The agent run output (single source of truth)

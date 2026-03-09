@@ -41,6 +41,7 @@ def send_email(to: str, subject: str, body: str) -> str:
     Returns:
         Confirmation message
     """
+    print("send_email called")
     # In a real implementation, this would call an email service
     return f"Email sent successfully to {to} with subject '{subject}'"
 
@@ -56,6 +57,7 @@ def execute_database_query(query: str) -> str:
     Returns:
         Query results
     """
+    print("execute_database_query called")
     # In a real implementation, this would execute the query
     return f"Query executed: {query} | Results: 10 rows returned"
 
@@ -72,20 +74,17 @@ def call_external_api(endpoint: str, payload: dict = None) -> dict:
     Returns:
         API response
     """
+    print("call_external_api called")
     # In a real implementation, this would call the API
     return {"status": "success", "data": {"message": f"API called at {endpoint}"}}
 
 
 # ============================================================================
-# EXTERNAL TOOL EXECUTOR
+# HITL HANDLER
 # ============================================================================
 
-def execute_tool_externally(requirement) -> str:
-    """
-    Execute an external tool based on the requirement.
-    
-    In a real application, this would call actual external services.
-    """
+def _execute_tool(requirement) -> str:
+    """Execute an external tool and return the result string."""
     tool_exec = requirement.tool_execution
     tool_name = tool_exec.tool_name
     tool_args = tool_exec.tool_args
@@ -101,6 +100,20 @@ def execute_tool_externally(requirement) -> str:
         raise ValueError(f"Unknown tool: {tool_name}")
 
 
+def hitl_handler(requirement) -> None:
+    """
+    Unified HITL handler for all pause types.
+    
+    Mutates the requirement in-place based on its type:
+    - External execution: sets tool_execution.result
+    - Confirmation: calls confirm() or reject()
+    - User input: fills user_input_schema field values
+    """
+    if requirement.needs_external_execution:
+        result = _execute_tool(requirement)
+        requirement.tool_execution.result = result
+
+
 # ============================================================================
 # VARIANT 1: Direct Call with run_id - Same Agent
 # ============================================================================
@@ -109,7 +122,7 @@ async def external_direct_call_with_run_id_same_agent():
     """
     Direct call mode with external tool using run_id and same agent instance.
     
-    The run_id is obtained from the output of do_async.
+    The run_id is obtained from the output of print_do_async.
     """
     agent = Agent("openai/gpt-4o-mini", name="external_tool_agent")
     task = Task(
@@ -117,11 +130,11 @@ async def external_direct_call_with_run_id_same_agent():
         tools=[send_email]
     )
     
-    output = await agent.do_async(task, return_output=True)
+    output = await agent.print_do_async(task, return_output=True)
     
     for requirement in output.active_requirements:
         if requirement.is_external_tool_execution:
-            result = execute_tool_externally(requirement)
+            result = _execute_tool(requirement)
             requirement.tool_execution.result = result
     
     result = await agent.continue_run_async(run_id=output.run_id, return_output=True)
@@ -140,11 +153,11 @@ async def external_direct_call_with_task_same_agent():
         tools=[send_email]
     )
     
-    output = await agent.do_async(task, return_output=True)
+    output = await agent.print_do_async(task, return_output=True)
     
     for requirement in output.active_requirements:
         if requirement.is_external_tool_execution:
-            result = execute_tool_externally(requirement)
+            result = _execute_tool(requirement)
             requirement.tool_execution.result = result
     
     result = await agent.continue_run_async(task=task, return_output=True)
@@ -173,11 +186,11 @@ async def external_direct_call_with_task_new_agent():
         tools=[send_email]
     )
     
-    output = await agent.do_async(task, return_output=True)
+    output = await agent.print_do_async(task, return_output=True)
     
     for requirement in output.active_requirements:
         if requirement.is_external_tool_execution:
-            result = execute_tool_externally(requirement)
+            result = _execute_tool(requirement)
             requirement.tool_execution.result = result
     
     # New agent uses task for continuation
@@ -210,13 +223,13 @@ async def external_direct_call_with_run_id_new_agent():
         tools=[send_email]
     )
     
-    output = await agent.do_async(task, return_output=True)
+    output = await agent.print_do_async(task, return_output=True)
     run_id = output.run_id
     
     # Execute tools and set results on in-memory requirements
     for requirement in output.active_requirements:
         if requirement.is_external_tool_execution:
-            result = execute_tool_externally(requirement)
+            result = _execute_tool(requirement)
             requirement.tool_execution.result = result
     
     # New agent loads from storage and injects results from passed requirements
@@ -230,15 +243,15 @@ async def external_direct_call_with_run_id_new_agent():
 
 
 # ============================================================================
-# VARIANT 3A: Using external_tool_executor parameter with task
+# VARIANT 3A: Using hitl_handler parameter with task
 # ============================================================================
 
 async def external_with_executor_callback_task():
     """
-    Use the external_tool_executor parameter with task parameter to handle tools automatically.
+    Use the hitl_handler parameter with task parameter to handle tools automatically.
     
-    When provided, if the agent pauses again with NEW external tool requirements,
-    the executor is called automatically for each requirement.
+    When provided, if the agent pauses again with NEW HITL requirements,
+    the handler is called automatically for each requirement.
     """
     agent = Agent("openai/gpt-4o-mini", name="external_tool_agent")
     task = Task(
@@ -246,31 +259,31 @@ async def external_with_executor_callback_task():
         tools=[send_email]
     )
     
-    output = await agent.do_async(task, return_output=True)
+    output = await agent.print_do_async(task, return_output=True)
     
     for requirement in output.active_requirements:
         if requirement.is_external_tool_execution:
-            result = execute_tool_externally(requirement)
+            result = _execute_tool(requirement)
             requirement.tool_execution.result = result
     
     result = await agent.continue_run_async(
         task=task, 
         return_output=True,
-        external_tool_executor=execute_tool_externally
+        hitl_handler=hitl_handler,
     )
     return result
 
 
 # ============================================================================
-# VARIANT 3B: Using external_tool_executor parameter with run_id
+# VARIANT 3B: Using hitl_handler parameter with run_id
 # ============================================================================
 
 async def external_with_executor_callback():
     """
-    Use the external_tool_executor parameter to handle tools automatically.
+    Use the hitl_handler parameter to handle tools automatically.
     
-    When provided, if the agent pauses again with NEW external tool requirements,
-    the executor is called automatically for each requirement.
+    When provided, if the agent pauses again with NEW HITL requirements,
+    the handler is called automatically for each requirement.
     """
     agent = Agent("openai/gpt-4o-mini", name="external_tool_agent")
     task = Task(
@@ -278,17 +291,17 @@ async def external_with_executor_callback():
         tools=[send_email]
     )
     
-    output = await agent.do_async(task, return_output=True)
+    output = await agent.print_do_async(task, return_output=True)
     
     for requirement in output.active_requirements:
         if requirement.is_external_tool_execution:
-            result = execute_tool_externally(requirement)
+            result = _execute_tool(requirement)
             requirement.tool_execution.result = result
     
     result = await agent.continue_run_async(
         run_id=output.run_id, 
         return_output=True,
-        external_tool_executor=execute_tool_externally
+        hitl_handler=hitl_handler
     )
     return result
 
@@ -313,12 +326,12 @@ async def external_multiple_tools_direct_call_task():
         tools=[send_email, execute_database_query, call_external_api]
     )
     
-    output = await agent.do_async(task, return_output=True)
+    output = await agent.print_do_async(task, return_output=True)
     
     while output.active_requirements:
         for requirement in output.active_requirements:
             if requirement.is_external_tool_execution:
-                result = execute_tool_externally(requirement)
+                result = _execute_tool(requirement)
                 requirement.tool_execution.result = result
         
         output = await agent.continue_run_async(
@@ -333,7 +346,7 @@ async def external_multiple_tools_with_executor_task():
     """
     Multiple external tools with automatic executor callback using task parameter.
     
-    The external_tool_executor handles all subsequent tool pauses automatically.
+    The hitl_handler handles all subsequent tool pauses automatically.
     """
     agent = Agent("openai/gpt-4o-mini", name="external_tool_agent")
     task = Task(
@@ -345,17 +358,17 @@ async def external_multiple_tools_with_executor_task():
         tools=[send_email, execute_database_query, call_external_api]
     )
     
-    output = await agent.do_async(task, return_output=True)
+    output = await agent.print_do_async(task, return_output=True)
     
     for requirement in output.active_requirements:
         if requirement.is_external_tool_execution:
-            result = execute_tool_externally(requirement)
+            result = _execute_tool(requirement)
             requirement.tool_execution.result = result
     
     result = await agent.continue_run_async(
         task=task, 
         return_output=True,
-        external_tool_executor=execute_tool_externally
+        hitl_handler=hitl_handler
     )
     
     return result
@@ -381,12 +394,12 @@ async def external_multiple_tools_direct_call():
         tools=[send_email, execute_database_query, call_external_api]
     )
     
-    output = await agent.do_async(task, return_output=True)
+    output = await agent.print_do_async(task, return_output=True)
     
     while output.active_requirements:
         for requirement in output.active_requirements:
             if requirement.is_external_tool_execution:
-                result = execute_tool_externally(requirement)
+                result = _execute_tool(requirement)
                 requirement.tool_execution.result = result
         
         output = await agent.continue_run_async(
@@ -401,7 +414,7 @@ async def external_multiple_tools_with_executor():
     """
     Multiple external tools with automatic executor callback.
     
-    The external_tool_executor handles all subsequent tool pauses automatically.
+    The hitl_handler handles all subsequent tool pauses automatically.
     """
     agent = Agent("openai/gpt-4o-mini", name="external_tool_agent")
     task = Task(
@@ -413,17 +426,17 @@ async def external_multiple_tools_with_executor():
         tools=[send_email, execute_database_query, call_external_api]
     )
     
-    output = await agent.do_async(task, return_output=True)
+    output = await agent.print_do_async(task, return_output=True)
     
     for requirement in output.active_requirements:
         if requirement.is_external_tool_execution:
-            result = execute_tool_externally(requirement)
+            result = _execute_tool(requirement)
             requirement.tool_execution.result = result
     
     result = await agent.continue_run_async(
         run_id=output.run_id, 
         return_output=True,
-        external_tool_executor=execute_tool_externally
+        hitl_handler=hitl_handler
     )
     
     return result
@@ -438,7 +451,7 @@ async def external_cross_process_handling_task():
     Pattern for handling external tools across process restarts using task parameter.
     
     Demonstrates the flow:
-    1. Process A: do_async returns with paused status and requirements
+    1. Process A: print_do_async returns with paused status and requirements
     2. External system executes tools and sets results on in-memory requirements
     3. Process B: Creates new agent, uses task object for continuation
     
@@ -455,7 +468,7 @@ async def external_cross_process_handling_task():
         tools=[send_email]
     )
     
-    output = await agent.do_async(task, return_output=True)
+    output = await agent.print_do_async(task, return_output=True)
     run_id = output.run_id
     
     if output.is_paused and output.active_requirements:
@@ -470,7 +483,7 @@ async def external_cross_process_handling_task():
     print("\nExecuting external tools and setting results...")
     for req in output.active_requirements:
         if req.is_external_tool_execution and not req.is_resolved:
-            tool_result = execute_tool_externally(req)
+            tool_result = _execute_tool(req)
             req.tool_execution.result = tool_result
             print(f"  Set result for {req.tool_execution.tool_name}: {tool_result}")
     
@@ -498,7 +511,7 @@ async def external_cross_process_handling():
     Pattern for handling external tools across process restarts.
     
     Demonstrates the full flow:
-    1. Process A: do_async returns with paused status and requirements
+    1. Process A: print_do_async returns with paused status and requirements
     2. External system executes tools and sets results on in-memory requirements
     3. Process B: Creates new agent, loads run by run_id, and continues with requirements
     """
@@ -512,7 +525,7 @@ async def external_cross_process_handling():
         tools=[send_email]
     )
     
-    output = await agent.do_async(task, return_output=True)
+    output = await agent.print_do_async(task, return_output=True)
     run_id = output.run_id
     
     if output.is_paused and output.active_requirements:
@@ -527,7 +540,7 @@ async def external_cross_process_handling():
     print("\nExecuting external tools and setting results...")
     for req in output.active_requirements:
         if req.is_external_tool_execution and not req.is_resolved:
-            tool_result = execute_tool_externally(req)
+            tool_result = _execute_tool(req)
             req.tool_execution.result = tool_result
             print(f"  Set result for {req.tool_execution.tool_name}: {tool_result}")
     
@@ -580,14 +593,14 @@ async def test_external_direct_call_with_task_new_agent():
 
 @pytest.mark.asyncio
 async def test_external_with_executor_callback():
-    """Test: Using external_tool_executor parameter with run_id"""
+    """Test: Using hitl_handler parameter with run_id"""
     result = await external_with_executor_callback()
     assert result.is_complete, f"Expected complete, got {result.status}"
 
 
 @pytest.mark.asyncio
 async def test_external_with_executor_callback_task():
-    """Test: Using external_tool_executor parameter with task"""
+    """Test: Using hitl_handler parameter with task"""
     result = await external_with_executor_callback_task()
     assert result.is_complete, f"Expected complete, got {result.status}"
 
@@ -670,14 +683,14 @@ async def run_all_tests():
     print("TEST 3A PASSED")
     
     print("\n" + "="*80)
-    print("TEST 4: Using external_tool_executor parameter with run_id")
+    print("TEST 4: Using hitl_handler parameter with run_id")
     print("="*80)
     result = await external_with_executor_callback()
     assert result.is_complete, f"TEST 4 FAILED: Expected complete, got {result.status}"
     print("TEST 4 PASSED")
     
     print("\n" + "="*80)
-    print("TEST 4A: Using external_tool_executor parameter with task")
+    print("TEST 4A: Using hitl_handler parameter with task")
     print("="*80)
     result = await external_with_executor_callback_task()
     assert result.is_complete, f"TEST 4A FAILED: Expected complete, got {result.status}"

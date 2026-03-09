@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from functools import cache, cached_property
-from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Generic, Literal, Sequence, TypeVar, overload
 
 import httpx
 from typing_extensions import TypeAliasType, TypedDict
@@ -25,7 +25,7 @@ from typing_extensions import TypeAliasType, TypedDict
 from upsonic import _utils
 from upsonic._json_schema import JsonSchemaTransformer
 from upsonic.output import OutputObjectDefinition, DEFAULT_OUTPUT_TOOL_NAME
-from upsonic._output import PromptedOutputSchema
+from upsonic._output import StructuredTextOutputSchema
 from upsonic._parts_manager import ModelResponsePartsManager
 from upsonic.tools.builtin_tools import AbstractBuiltinTool
 from upsonic.utils.package.exception import UserError
@@ -64,6 +64,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+DEFAULT_HTTP_TIMEOUT: int = 600
+"""Default HTTP timeout in seconds for API requests.
+
+This matches the default timeout used by OpenAI's Python client.
+See https://github.com/openai/openai-python/blob/v1.54.4/src/openai/_constants.py#L9
+"""
+
 KnownModelName = TypeAliasType(
     'KnownModelName',
     Literal[
@@ -83,10 +90,12 @@ KnownModelName = TypeAliasType(
         'anthropic/claude-opus-4-20250514',
         'anthropic/claude-opus-4-5-20251101',
         'anthropic/claude-opus-4-5',
+        'anthropic/claude-opus-4-6',
         'anthropic/claude-sonnet-4-0',
         'anthropic/claude-sonnet-4-20250514',
         'anthropic/claude-sonnet-4-5-20250929',
         'anthropic/claude-sonnet-4-5',
+        'anthropic/claude-sonnet-4-6',
         'bedrock/amazon.titan-text-express-v1',
         'bedrock/amazon.titan-text-lite-v1',
         'bedrock/amazon.titan-tg1-large',
@@ -102,6 +111,7 @@ KnownModelName = TypeAliasType(
         'bedrock/anthropic.claude-opus-4-20250514-v1:0',
         'bedrock/anthropic.claude-sonnet-4-20250514-v1:0',
         'bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0',
+        'bedrock/anthropic.claude-sonnet-4-6',
         'bedrock/anthropic.claude-v2:1',
         'bedrock/anthropic.claude-v2',
         'bedrock/cohere.command-light-text-v14',
@@ -111,6 +121,7 @@ KnownModelName = TypeAliasType(
         'bedrock/eu.anthropic.claude-haiku-4-5-20251001-v1:0',
         'bedrock/eu.anthropic.claude-sonnet-4-20250514-v1:0',
         'bedrock/eu.anthropic.claude-sonnet-4-5-20250929-v1:0',
+        'bedrock/eu.anthropic.claude-sonnet-4-6',
         'bedrock/global.anthropic.claude-opus-4-5-20251101-v1:0',
         'bedrock/meta.llama3-1-405b-instruct-v1:0',
         'bedrock/meta.llama3-1-70b-instruct-v1:0',
@@ -121,6 +132,7 @@ KnownModelName = TypeAliasType(
         'bedrock/mistral.mistral-large-2402-v1:0',
         'bedrock/mistral.mistral-large-2407-v1:0',
         'bedrock/mistral.mixtral-8x7b-instruct-v0:1',
+        'bedrock/us.amazon.nova-2-lite-v1:0',
         'bedrock/us.amazon.nova-lite-v1:0',
         'bedrock/us.amazon.nova-micro-v1:0',
         'bedrock/us.amazon.nova-pro-v1:0',
@@ -135,6 +147,7 @@ KnownModelName = TypeAliasType(
         'bedrock/us.anthropic.claude-opus-4-20250514-v1:0',
         'bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0',
         'bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0',
+        'bedrock/us.anthropic.claude-sonnet-4-6',
         'bedrock/us.meta.llama3-1-70b-instruct-v1:0',
         'bedrock/us.meta.llama3-1-8b-instruct-v1:0',
         'bedrock/us.meta.llama3-2-11b-instruct-v1:0',
@@ -147,7 +160,9 @@ KnownModelName = TypeAliasType(
         'cerebras/llama3.1-8b',
         'cerebras/qwen-3-235b-a22b-instruct-2507',
         'cerebras/qwen-3-32b',
+        'cerebras/qwen-3-coder-480b',
         'cerebras/zai-glm-4.6',
+        'cerebras/zai-glm-4.7',
         'cohere/c4ai-aya-expanse-32b',
         'cohere/c4ai-aya-expanse-8b',
         'cohere/command-nightly',
@@ -172,10 +187,12 @@ KnownModelName = TypeAliasType(
         'gateway/anthropic/claude-opus-4-20250514',
         'gateway/anthropic/claude-opus-4-5-20251101',
         'gateway/anthropic/claude-opus-4-5',
+        'gateway/anthropic/claude-opus-4-6',
         'gateway/anthropic/claude-sonnet-4-0',
         'gateway/anthropic/claude-sonnet-4-20250514',
         'gateway/anthropic/claude-sonnet-4-5-20250929',
         'gateway/anthropic/claude-sonnet-4-5',
+        'gateway/anthropic/claude-sonnet-4-6',
         'gateway/bedrock/amazon.titan-text-express-v1',
         'gateway/bedrock/amazon.titan-text-lite-v1',
         'gateway/bedrock/amazon.titan-tg1-large',
@@ -191,6 +208,7 @@ KnownModelName = TypeAliasType(
         'gateway/bedrock/anthropic.claude-opus-4-20250514-v1:0',
         'gateway/bedrock/anthropic.claude-sonnet-4-20250514-v1:0',
         'gateway/bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0',
+        'gateway/bedrock/anthropic.claude-sonnet-4-6',
         'gateway/bedrock/anthropic.claude-v2:1',
         'gateway/bedrock/anthropic.claude-v2',
         'gateway/bedrock/cohere.command-light-text-v14',
@@ -200,6 +218,7 @@ KnownModelName = TypeAliasType(
         'gateway/bedrock/eu.anthropic.claude-haiku-4-5-20251001-v1:0',
         'gateway/bedrock/eu.anthropic.claude-sonnet-4-20250514-v1:0',
         'gateway/bedrock/eu.anthropic.claude-sonnet-4-5-20250929-v1:0',
+        'gateway/bedrock/eu.anthropic.claude-sonnet-4-6',
         'gateway/bedrock/global.anthropic.claude-opus-4-5-20251101-v1:0',
         'gateway/bedrock/meta.llama3-1-405b-instruct-v1:0',
         'gateway/bedrock/meta.llama3-1-70b-instruct-v1:0',
@@ -210,6 +229,7 @@ KnownModelName = TypeAliasType(
         'gateway/bedrock/mistral.mistral-large-2402-v1:0',
         'gateway/bedrock/mistral.mistral-large-2407-v1:0',
         'gateway/bedrock/mistral.mixtral-8x7b-instruct-v0:1',
+        'gateway/bedrock/us.amazon.nova-2-lite-v1:0',
         'gateway/bedrock/us.amazon.nova-lite-v1:0',
         'gateway/bedrock/us.amazon.nova-micro-v1:0',
         'gateway/bedrock/us.amazon.nova-pro-v1:0',
@@ -224,6 +244,7 @@ KnownModelName = TypeAliasType(
         'gateway/bedrock/us.anthropic.claude-opus-4-20250514-v1:0',
         'gateway/bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0',
         'gateway/bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0',
+        'gateway/bedrock/us.anthropic.claude-sonnet-4-6',
         'gateway/bedrock/us.meta.llama3-1-70b-instruct-v1:0',
         'gateway/bedrock/us.meta.llama3-1-8b-instruct-v1:0',
         'gateway/bedrock/us.meta.llama3-2-11b-instruct-v1:0',
@@ -239,33 +260,28 @@ KnownModelName = TypeAliasType(
         'gateway/google-vertex/gemini-2.5-flash-preview-09-2025',
         'gateway/google-vertex/gemini-2.5-flash',
         'gateway/google-vertex/gemini-2.5-pro',
+        'gateway/google-vertex/gemini-3-flash-preview',
         'gateway/google-vertex/gemini-3-pro-image-preview',
         'gateway/google-vertex/gemini-3-pro-preview',
+        'gateway/google-vertex/gemini-3.1-pro-preview',
         'gateway/google-vertex/gemini-flash-latest',
         'gateway/google-vertex/gemini-flash-lite-latest',
-        'gateway/groq/deepseek-r1-distill-llama-70b',
-        'gateway/groq/deepseek-r1-distill-qwen-32b',
-        'gateway/groq/distil-whisper-large-v3-en',
-        'gateway/groq/gemma2-9b-it',
         'gateway/groq/llama-3.1-8b-instant',
-        'gateway/groq/llama-3.2-11b-vision-preview',
-        'gateway/groq/llama-3.2-1b-preview',
-        'gateway/groq/llama-3.2-3b-preview',
-        'gateway/groq/llama-3.2-90b-vision-preview',
-        'gateway/groq/llama-3.3-70b-specdec',
         'gateway/groq/llama-3.3-70b-versatile',
-        'gateway/groq/llama-guard-3-8b',
-        'gateway/groq/llama3-70b-8192',
-        'gateway/groq/llama3-8b-8192',
-        'gateway/groq/mistral-saba-24b',
-        'gateway/groq/moonshotai/kimi-k2-instruct',
-        'gateway/groq/playai-tts-arabic',
-        'gateway/groq/playai-tts',
-        'gateway/groq/qwen-2.5-32b',
-        'gateway/groq/qwen-2.5-coder-32b',
-        'gateway/groq/qwen-qwq-32b',
-        'gateway/groq/whisper-large-v3-turbo',
+        'gateway/groq/meta-llama/llama-guard-4-12b',
+        'gateway/groq/openai/gpt-oss-120b',
+        'gateway/groq/openai/gpt-oss-20b',
         'gateway/groq/whisper-large-v3',
+        'gateway/groq/whisper-large-v3-turbo',
+        'gateway/groq/meta-llama/llama-4-maverick-17b-128e-instruct',
+        'gateway/groq/meta-llama/llama-4-scout-17b-16e-instruct',
+        'gateway/groq/meta-llama/llama-prompt-guard-2-22m',
+        'gateway/groq/meta-llama/llama-prompt-guard-2-86m',
+        'gateway/groq/moonshotai/kimi-k2-instruct-0905',
+        'gateway/groq/openai/gpt-oss-safeguard-20b',
+        'gateway/groq/playai-tts',
+        'gateway/groq/playai-tts-arabic',
+        'gateway/groq/qwen/qwen-3-32b',
         'gateway/openai/chatgpt-4o-latest',
         'gateway/openai/codex-mini-latest',
         'gateway/openai/computer-use-preview-2025-03-11',
@@ -360,8 +376,10 @@ KnownModelName = TypeAliasType(
         'google-gla/gemini-2.5-flash-preview-09-2025',
         'google-gla/gemini-2.5-flash',
         'google-gla/gemini-2.5-pro',
+        'google-gla/gemini-3-flash-preview',
         'google-gla/gemini-3-pro-image-preview',
         'google-gla/gemini-3-pro-preview',
+        'google-gla/gemini-3.1-pro-preview',
         'google-gla/gemini-flash-latest',
         'google-gla/gemini-flash-lite-latest',
         'google-vertex/gemini-2.0-flash-lite',
@@ -372,8 +390,10 @@ KnownModelName = TypeAliasType(
         'google-vertex/gemini-2.5-flash-preview-09-2025',
         'google-vertex/gemini-2.5-flash',
         'google-vertex/gemini-2.5-pro',
+        'google-vertex/gemini-3-flash-preview',
         'google-vertex/gemini-3-pro-image-preview',
         'google-vertex/gemini-3-pro-preview',
+        'google-vertex/gemini-3.1-pro-preview',
         'google-vertex/gemini-flash-latest',
         'google-vertex/gemini-flash-lite-latest',
         'grok/grok-2-image-1212',
@@ -383,6 +403,7 @@ KnownModelName = TypeAliasType(
         'grok/grok-3-mini',
         'grok/grok-3',
         'grok/grok-4-0709',
+        'grok/grok-4-latest',
         'grok/grok-4-1-fast-non-reasoning',
         'grok/grok-4-1-fast-reasoning',
         'grok/grok-4-1-fast',
@@ -391,30 +412,43 @@ KnownModelName = TypeAliasType(
         'grok/grok-4-fast',
         'grok/grok-4',
         'grok/grok-code-fast-1',
-        'groq/deepseek-r1-distill-llama-70b',
-        'groq/deepseek-r1-distill-qwen-32b',
-        'groq/distil-whisper-large-v3-en',
-        'groq/gemma2-9b-it',
+        'xai/grok-3',
+        'xai/grok-3-fast',
+        'xai/grok-3-fast-latest',
+        'xai/grok-3-latest',
+        'xai/grok-3-mini',
+        'xai/grok-3-mini-fast',
+        'xai/grok-3-mini-fast-latest',
+        'xai/grok-4',
+        'xai/grok-4-0709',
+        'xai/grok-4-1-fast',
+        'xai/grok-4-1-fast-non-reasoning',
+        'xai/grok-4-1-fast-non-reasoning-latest',
+        'xai/grok-4-1-fast-reasoning',
+        'xai/grok-4-1-fast-reasoning-latest',
+        'xai/grok-4-fast',
+        'xai/grok-4-fast-non-reasoning',
+        'xai/grok-4-fast-non-reasoning-latest',
+        'xai/grok-4-fast-reasoning',
+        'xai/grok-4-fast-reasoning-latest',
+        'xai/grok-4-latest',
+        'xai/grok-code-fast-1',
         'groq/llama-3.1-8b-instant',
-        'groq/llama-3.2-11b-vision-preview',
-        'groq/llama-3.2-1b-preview',
-        'groq/llama-3.2-3b-preview',
-        'groq/llama-3.2-90b-vision-preview',
-        'groq/llama-3.3-70b-specdec',
         'groq/llama-3.3-70b-versatile',
-        'groq/llama-guard-3-8b',
-        'groq/llama3-70b-8192',
-        'groq/llama3-8b-8192',
-        'groq/mistral-saba-24b',
-        'groq/moonshotai/kimi-k2-instruct',
-        'groq/playai-tts-arabic',
-        'groq/playai-tts',
-        'groq/qwen-2.5-32b',
-        'groq/qwen-2.5-coder-32b',
-        'groq/qwen-qwq-32b',
-        'groq/whisper-large-v3-turbo',
+        'groq/meta-llama/llama-guard-4-12b',
+        'groq/openai/gpt-oss-120b',
+        'groq/openai/gpt-oss-20b',
         'groq/whisper-large-v3',
-        'heroku/amazon-rerank-1-0',
+        'groq/whisper-large-v3-turbo',
+        'groq/meta-llama/llama-4-maverick-17b-128e-instruct',
+        'groq/meta-llama/llama-4-scout-17b-16e-instruct',
+        'groq/meta-llama/llama-prompt-guard-2-22m',
+        'groq/meta-llama/llama-prompt-guard-2-86m',
+        'groq/moonshotai/kimi-k2-instruct-0905',
+        'groq/openai/gpt-oss-safeguard-20b',
+        'groq/playai-tts',
+        'groq/playai-tts-arabic',
+        'groq/qwen/qwen-3-32b',
         'heroku/claude-3-5-haiku',
         'heroku/claude-3-5-sonnet-latest',
         'heroku/claude-3-7-sonnet',
@@ -422,8 +456,13 @@ KnownModelName = TypeAliasType(
         'heroku/claude-4-5-haiku',
         'heroku/claude-4-5-sonnet',
         'heroku/claude-4-sonnet',
-        'heroku/cohere-rerank-3-5',
+        'heroku/claude-opus-4-5',
         'heroku/gpt-oss-120b',
+        'heroku/kimi-k2-thinking',
+        'heroku/minimax-m2',
+        'heroku/qwen3-235b',
+        'heroku/qwen3-coder-480b',
+        'heroku/nova-2-lite',
         'heroku/nova-lite',
         'heroku/nova-pro',
         'huggingface/deepseek-ai/DeepSeek-R1',
@@ -541,17 +580,61 @@ KnownModelName = TypeAliasType(
 `KnownModelName` is provided as a concise way to specify a model.
 """
 
+OpenAIChatCompatibleProvider = TypeAliasType(
+    'OpenAIChatCompatibleProvider',
+    Literal[
+        'alibaba',
+        'azure',
+        'cerebras',
+        'deepseek',
+        'fireworks',
+        'github',
+        'grok',
+        'heroku',
+        'litellm',
+        'lmstudio',
+        'moonshotai',
+        'nebius',
+        'nvidia',
+        'ollama',
+        'openai',
+        'openai-chat',
+        'openrouter',
+        'ovhcloud',
+        'sambanova',
+        'together',
+        'vercel',
+        'vllm',
+    ],
+)
+OpenAIResponsesCompatibleProvider = TypeAliasType(
+    'OpenAIResponsesCompatibleProvider',
+    Literal[
+        'azure',
+        'deepseek',
+        'fireworks',
+        'grok',
+        'nebius',
+        'openrouter',
+        'ovhcloud',
+        'sambanova',
+        'together',
+    ],
+)
+
+
 
 @dataclass(repr=False, kw_only=True)
 class ModelRequestParameters:
     """Configuration for an agent's request to a model, specifically related to tools and output handling."""
 
-    function_tools: list[ToolDefinition] = field(default_factory=list)
-    builtin_tools: list[AbstractBuiltinTool] = field(default_factory=list)
+    function_tools: list[ToolDefinition] = field(default_factory=list[ToolDefinition])
+    builtin_tools: list[AbstractBuiltinTool] = field(default_factory=list[AbstractBuiltinTool])
 
     output_mode: OutputMode = 'text'
     output_object: OutputObjectDefinition | None = None
-    output_tools: list[ToolDefinition] = field(default_factory=list)
+
+    output_tools: list[ToolDefinition] = field(default_factory=list[ToolDefinition])
     prompted_output_template: str | None = None
     allow_text_output: bool = True
     allow_image_output: bool = False
@@ -562,8 +645,8 @@ class ModelRequestParameters:
 
     @cached_property
     def prompted_output_instructions(self) -> str | None:
-        if self.output_mode == 'prompted' and self.prompted_output_template and self.output_object:
-            return PromptedOutputSchema.build_instructions(self.prompted_output_template, self.output_object)
+        if self.prompted_output_template and self.output_object:
+            return StructuredTextOutputSchema.build_instructions(self.prompted_output_template, self.output_object)
         return None
 
     __repr__ = _utils.dataclasses_no_defaults_repr
@@ -733,11 +816,14 @@ class Model(Runnable[Any, Any]):
             params = replace(params, output_tools=[])
         if params.output_object and params.output_mode not in ('native', 'prompted'):
             params = replace(params, output_object=None)
-        if params.prompted_output_template and params.output_mode != 'prompted':
+        if params.prompted_output_template and params.output_mode not in ('prompted', 'native'):
             params = replace(params, prompted_output_template=None)  # pragma: no cover
 
         # Set default prompted output template
-        if params.output_mode == 'prompted' and not params.prompted_output_template:
+        if (
+            params.output_mode == 'prompted'
+            or (params.output_mode == 'native' and self.profile.native_output_requires_schema_in_instructions)
+        ) and not params.prompted_output_template:
             params = replace(params, prompted_output_template=self.profile.prompted_output_template)
 
         # Check if output mode is supported
@@ -747,6 +833,17 @@ class Model(Runnable[Any, Any]):
             raise UserError('Tool output is not supported by this model.')
         if params.allow_image_output and not self.profile.supports_image_output:
             raise UserError('Image output is not supported by this model.')
+
+        # Check if builtin tools are supported
+        if params.builtin_tools:
+            supported_types = self.profile.supported_builtin_tools
+            unsupported = [tool for tool in params.builtin_tools if not isinstance(tool, tuple(supported_types))]
+            if unsupported:
+                unsupported_names = [type(tool).__name__ for tool in unsupported]
+                supported_names = [t.__name__ for t in supported_types]
+                raise UserError(
+                    f'Builtin tool(s) {unsupported_names} not supported by this model. Supported: {supported_names}'
+                )
 
         return model_settings, params
 
@@ -966,7 +1063,7 @@ class Model(Runnable[Any, Any]):
         Returns:
             List of ModelMessages ready for model request
         """
-        from upsonic.messages import ModelRequest, UserPromptPart, ModelMessage
+        from upsonic.messages import ModelRequest, UserPromptPart
         
         if isinstance(input, str):
             user_part = UserPromptPart(content=input)
@@ -1235,7 +1332,6 @@ class Model(Runnable[Any, Any]):
             Final model response after tool execution
         """
         from upsonic.messages import ToolCallPart, ModelRequest
-        import asyncio
         
         tool_calls = [
             part for part in response.parts 
@@ -1459,17 +1555,76 @@ class Model(Runnable[Any, Any]):
         """The model name."""
         raise NotImplementedError()
 
+    @property
+    def model_id(self) -> str:
+        """The fully qualified model name in `'provider:model_name'` format."""
+        return f'{self.system}:{self.model_name}'
+
+    @property
+    def label(self) -> str:
+        """Human-friendly display label for the model.
+
+        Handles common patterns:
+        - gpt-5 -> GPT 5
+        - claude-sonnet-4-5 -> Claude Sonnet 4.5
+        - gemini-2.5-pro -> Gemini 2.5 Pro
+        - meta-llama/llama-3-70b -> Llama 3 70b (OpenRouter style)
+        """
+        label = self.model_name
+        # Handle OpenRouter-style names with / (e.g., meta-llama/llama-3-70b)
+        if '/' in label:
+            label = label.split('/')[-1]
+
+        parts = label.split('-')
+        result: list[str] = []
+
+        for i, part in enumerate(parts):
+            if i == 0 and part.lower() == 'gpt':
+                result.append(part.upper())
+            elif part.replace('.', '').isdigit():
+                if result and result[-1].replace('.', '').isdigit():
+                    result[-1] = f'{result[-1]}.{part}'
+                else:
+                    result.append(part)
+            else:
+                result.append(part.capitalize())
+
+        return ' '.join(result)
+
+    @classmethod
+    def supported_builtin_tools(cls) -> frozenset[type[AbstractBuiltinTool]]:
+        """Return the set of builtin tool types this model class can handle.
+
+        Subclasses should override this to reflect their actual capabilities.
+        Default is empty set - subclasses must explicitly declare support.
+        """
+        return frozenset()
+
     @cached_property
     def profile(self) -> ModelProfile:
-        """The model profile."""
+        """The model profile.
+
+        We use this to compute the intersection of the profile's supported_builtin_tools
+        and the model's implemented tools, ensuring model.profile.supported_builtin_tools
+        is the single source of truth for what builtin tools are actually usable.
+        """
         _profile = self._profile
         if callable(_profile):
             _profile = _profile(self.model_name)
 
         if _profile is None:
-            return DEFAULT_PROFILE
+            _profile = DEFAULT_PROFILE
+
+        # Compute intersection: profile's allowed tools & model's implemented tools
+        model_supported = self.__class__.supported_builtin_tools()
+        profile_supported = _profile.supported_builtin_tools
+        effective_tools = profile_supported & model_supported
+
+        if effective_tools != profile_supported:
+            _profile = replace(_profile, supported_builtin_tools=effective_tools)
 
         return _profile
+
 
     @property
     @abstractmethod
@@ -1488,9 +1643,20 @@ class Model(Runnable[Any, Any]):
         """The base URL for the provider API, if available."""
         return None
 
+    @property
+    def provider(self) -> Provider[Any] | None:
+        """The provider for this model, if any. Use for pricing (e.g. genai_prices provider_id) and API base URL."""
+        return None
+
+    @property
+    def provider_name(self) -> str | None:
+        """Get the provider name (e.g. for genai_prices). Uses provider.name when available."""
+        p = self.provider
+        return p.name if p is not None else None
+
     @staticmethod
     def _get_instructions(
-        messages: list[ModelMessage], model_request_parameters: ModelRequestParameters | None = None
+        messages: Sequence[ModelMessage], model_request_parameters: ModelRequestParameters | None = None
     ) -> str | None:
         """Get instructions from the first ModelRequest found when iterating messages in reverse.
 
@@ -1644,12 +1810,13 @@ class StreamedResponse(ABC):
             timestamp=self.timestamp,
             usage=self.usage(),
             provider_name=self.provider_name,
+            provider_url=self.provider_url,
             provider_response_id=self.provider_response_id,
             provider_details=self.provider_details,
             finish_reason=self.finish_reason,
         )
 
-    # TODO (v2): Make this a property
+    # TODO: Make this a property
     def usage(self) -> RequestUsage:
         """Get the usage of the response so far. This will not be the final usage until the stream is exhausted."""
         return self._usage
@@ -1664,6 +1831,12 @@ class StreamedResponse(ABC):
     @abstractmethod
     def provider_name(self) -> str | None:
         """Get the provider name."""
+        raise NotImplementedError()
+
+    @property
+    @abstractmethod
+    def provider_url(self) -> str | None:
+        """Get the provider URL."""
         raise NotImplementedError()
 
     @property
@@ -1711,28 +1884,22 @@ def override_allow_model_requests(allow_model_requests: bool) -> Iterator[None]:
 
 
 
-_OPENAI_CHAT_PROVIDERS = {
-    'openai',
-    'azure',
-    'deepseek',
-    'cerebras',
-    'fireworks',
-    'github',
-    'grok',
-    'heroku',
-    'moonshotai',
-    'ollama',
-    'openrouter',
-    'together',
-    'vercel',
-    'litellm',
-    'nebius',
-    'ovhcloud',
-    'vllm',
-    'nvidia',
-}
+_GOOGLE_PROVIDERS = {'google', 'google-gla', 'google-vertex', 'gemini'}
 
-_GOOGLE_PROVIDERS = {'google-gla', 'google-vertex'}
+_OPENAI_CHAT_COMPATIBLE_PROVIDERS: frozenset[str] = frozenset(
+    [
+        'alibaba',
+        'azure',
+        'deepseek',
+        'fireworks',
+        'grok',
+        'litellm',
+        'nebius',
+        'openai',
+        'openai-chat',
+        'openrouter',
+    ]
+)
 
 
 # --- Model ID Normalization ---
@@ -2022,10 +2189,66 @@ def infer_model(  # noqa: C901
         model_kind = provider_name.removeprefix('gateway/')
         model_kind = normalize_gateway_provider(model_kind)
 
-    if model_kind in _OPENAI_CHAT_PROVIDERS:
+    if model_kind in _OPENAI_CHAT_COMPATIBLE_PROVIDERS:
         model_kind = 'openai-chat'
     elif model_kind in _GOOGLE_PROVIDERS:
         model_kind = 'google'
+
+
+    if model_kind == 'openrouter':
+        from .openrouter import OpenRouterModel
+
+        return OpenRouterModel(model_name, provider=provider)
+
+    if model_kind == 'vercel':
+        from .vercel import VercelModel
+
+        return VercelModel(model_name, provider=provider)
+    if model_kind == 'together':
+        from .together import TogetherModel
+
+        return TogetherModel(model_name, provider=provider)
+    if model_kind == 'sambanova':
+        from .sambanova import SambaNovaModel
+
+        return SambaNovaModel(model_name, provider=provider)
+    if model_kind == 'ovhcloud':
+        from .ovhcloud import OVHcloudModel
+
+        return OVHcloudModel(model_name, provider=provider)
+    if model_kind == 'moonshotai':
+        from .moonshotai import MoonshotAIModel
+
+        return MoonshotAIModel(model_name, provider=provider)
+    if model_kind == 'heroku':
+        from .heroku import HerokuModel
+
+        return HerokuModel(model_name, provider=provider)
+    if model_kind == 'github':
+        from .github import GitHubModel
+
+        return GitHubModel(model_name, provider=provider)
+    if model_kind == 'cerebras':
+        from .cerebras import CerebrasModel
+
+        return CerebrasModel(model_name, provider=provider)
+
+    if model_kind == 'vllm':
+        from .vllm import VLLMModel
+
+        return VLLMModel(model_name, provider=provider)
+    if model_kind == 'nvidia':
+        from .nvidia import NvidiaModel
+
+        return NvidiaModel(model_name, provider=provider)
+    if model_kind == 'ollama':
+        from .ollama import OllamaModel
+
+        return OllamaModel(model_name, provider=provider)
+    if model_kind == 'lmstudio':
+        from .lmstudio import LMStudioModel
+
+        return LMStudioModel(model_name, provider=provider)
 
     if model_kind == 'openai-chat':
         from .openai import OpenAIChatModel
@@ -2063,11 +2286,17 @@ def infer_model(  # noqa: C901
         from .huggingface import HuggingFaceModel
 
         return HuggingFaceModel(model_name, provider=provider)
+    elif model_kind == 'xai':
+        from .xai import XaiModel
+
+        return XaiModel(model_name, provider=provider)
     else:
         raise UserError(f'Unknown model: {model}')  # pragma: no cover
 
 
-def cached_async_http_client(*, provider: str | None = None, timeout: int = 600, connect: int = 5) -> httpx.AsyncClient:
+def cached_async_http_client(
+    *, provider: str | None = None, timeout: int = DEFAULT_HTTP_TIMEOUT, connect: int = 5
+) -> httpx.AsyncClient:
     """Cached HTTPX async client that creates a separate client for each provider.
 
     The client is cached based on the provider parameter. If provider is None, it's used for non-provider specific
@@ -2083,7 +2312,7 @@ def cached_async_http_client(*, provider: str | None = None, timeout: int = 600,
     see <https://github.com/openai/openai-python/blob/v1.54.4/src/openai/_constants.py#L9>.
     """
     client = _cached_async_http_client(provider=provider, timeout=timeout, connect=connect)
-    if client.is_closed:
+    if client.is_closed:  # pragma: no cover
         # This happens if the context manager is used, so we need to create a new client.
         # Since there is no API from `functools.cache` to clear the cache for a specific
         #  key, clear the entire cache here as a workaround.
@@ -2093,7 +2322,9 @@ def cached_async_http_client(*, provider: str | None = None, timeout: int = 600,
 
 
 @cache
-def _cached_async_http_client(provider: str | None, timeout: int = 600, connect: int = 5) -> httpx.AsyncClient:
+def _cached_async_http_client(
+    provider: str | None, timeout: int = DEFAULT_HTTP_TIMEOUT, connect: int = 5
+) -> httpx.AsyncClient:
     return httpx.AsyncClient(
         timeout=httpx.Timeout(timeout=timeout, connect=connect),
         headers={'User-Agent': get_user_agent()},
@@ -2139,6 +2370,14 @@ async def download_item(
 ) -> DownloadedItem[str] | DownloadedItem[bytes]:
     """Download an item by URL and return the content as a bytes object or a (base64-encoded) string.
 
+    This function includes SSRF (Server-Side Request Forgery) protection:
+    - Only http:// and https:// protocols are allowed
+    - Private/internal IP addresses are blocked by default
+    - Cloud metadata endpoints (169.254.169.254) are always blocked
+    - Hostnames are resolved before requests to prevent DNS rebinding
+
+    Set `item.force_download='allow-local'` to allow private IP addresses.
+
     Args:
         item: The item to download.
         data_format: The format to return the content in:
@@ -2151,16 +2390,17 @@ async def download_item(
             - `extension`: The media type as an extension.
 
     Raises:
-        UserError: If the URL points to a YouTube video or its protocol is gs://.
+        UserError: If the URL points to a YouTube video.
+        ValueError: If the URL uses an unsupported protocol or targets a private/internal
+            IP address (unless allow-local is set).
     """
-    if item.url.startswith('gs://'):
-        raise UserError('Downloading from protocol "gs://" is not supported.')
-    elif isinstance(item, VideoUrl) and item.is_youtube:
+    if isinstance(item, VideoUrl) and item.is_youtube:
         raise UserError('Downloading YouTube videos is not supported.')
 
-    client = cached_async_http_client()
-    response = await client.get(item.url, follow_redirects=True)
-    response.raise_for_status()
+    from upsonic._ssrf import safe_download
+
+    allow_local = item.force_download == 'allow-local'
+    response = await safe_download(item.url, allow_local=allow_local)
 
     if content_type := response.headers.get('content-type'):
         content_type = content_type.split(';')[0]
@@ -2193,23 +2433,27 @@ def get_user_agent() -> str:
     return f'upsonic/{__version__}'
 
 
-def _customize_tool_def(transformer: type[JsonSchemaTransformer], t: ToolDefinition):
-    schema_transformer = transformer(t.parameters_json_schema, strict=t.strict)
+def _customize_tool_def(transformer: type[JsonSchemaTransformer], tool_def: ToolDefinition):
+    """Customize the tool definition using the given transformer.
+
+    If the tool definition has `strict` set to None, the strictness will be inferred from the transformer.
+    """
+    schema_transformer = transformer(tool_def.parameters_json_schema, strict=tool_def.strict)
     parameters_json_schema = schema_transformer.walk()
     return replace(
-        t,
+        tool_def,
         parameters_json_schema=parameters_json_schema,
-        strict=schema_transformer.is_strict_compatible if t.strict is None else t.strict,
+        strict=schema_transformer.is_strict_compatible if tool_def.strict is None else tool_def.strict,
     )
 
 
-def _customize_output_object(transformer: type[JsonSchemaTransformer], o: OutputObjectDefinition):
-    schema_transformer = transformer(o.json_schema, strict=o.strict)
+def _customize_output_object(transformer: type[JsonSchemaTransformer], output_object: OutputObjectDefinition):
+    schema_transformer = transformer(output_object.json_schema, strict=output_object.strict)
     json_schema = schema_transformer.walk()
     return replace(
-        o,
+        output_object,
         json_schema=json_schema,
-        strict=schema_transformer.is_strict_compatible if o.strict is None else o.strict,
+        strict=schema_transformer.is_strict_compatible if output_object.strict is None else output_object.strict,
     )
 
 

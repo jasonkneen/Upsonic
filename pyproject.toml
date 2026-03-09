@@ -1,6 +1,6 @@
 [project]
 name = "upsonic"
-version = "0.72.6"
+version = "0.73.0"
 description = "Agent Framework For Fintech"
 readme = "README.md"
 authors = [
@@ -134,6 +134,7 @@ models = [
     "mypy-boto3-bedrock-runtime>=1.40.41",
     "openai>=2.1.0",
     "outlines>=1.2.9",
+    "xai-sdk>=1.4.0",
 ]
 embeddings = [
     "aiohttp>=3.13.3",
@@ -238,8 +239,16 @@ ocr = [
 ]
 
 custom-tools = [
+    "apify-client>=1.8.1",
     "firecrawl-py>=4.14.1",
     "slack-sdk>=3.38.0",
+    "crawlee[beautifulsoup]>=1.4.0",
+]
+apify-tool = [
+    "apify-client>=1.8.1",
+]
+crawlee-browser = [
+    "crawlee[playwright]>=1.4.0",
 ]
 gmail-interface = [
     "fastapi",
@@ -254,6 +263,22 @@ slack-interface = [
     "fastapi>=0.128.0",
     "slack-sdk>=3.39.0",
 ]
+otel = [
+    "opentelemetry-api>=1.39.1",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.39.1",
+    "opentelemetry-exporter-otlp-proto-http>=1.39.1",
+    "opentelemetry-sdk>=1.39.1",
+]
+langfuse = [
+    "opentelemetry-api>=1.39.1",
+    "opentelemetry-exporter-otlp-proto-http>=1.39.1",
+    "opentelemetry-sdk>=1.39.1",
+]
+gmail-tool = [
+    "google-api-python-client>=2.188.0",
+    "google-auth-httplib2>=0.3.0",
+    "google-auth-oauthlib>=1.2.4",
+]
 
 [project.scripts]
 upsonic = "upsonic.cli.main:main"
@@ -266,6 +291,7 @@ build-backend = "hatchling.build"
 [tool.uv]
 default-groups = ["dev"]
 required-version = ">=0.10.0"
+override-dependencies = ["packaging>=25.0,<26"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/upsonic"]
@@ -276,6 +302,7 @@ dev = [
     "pre-commit>=4.0.1",
     "pytest>=8.3.4",
     "pytest-asyncio>=0.25.1",
+    "pytest-timeout>=2.3.1",
     "tomlkit>=0.13.3",
 ]
 

@@ -73,7 +73,7 @@ def infer_provider_class(provider: str) -> type[Provider[Any]]:  # noqa: C901
         from .azure import AzureProvider
 
         return AzureProvider
-    elif provider in ('google-vertex', 'google-gla'):
+    elif provider in ('google-vertex', 'google-gla', 'gemini'):
         from .google import GoogleProvider
 
         return GoogleProvider
@@ -102,9 +102,13 @@ def infer_provider_class(provider: str) -> type[Provider[Any]]:  # noqa: C901
 
         return CohereProvider
     elif provider == 'grok':
-        from .grok import GrokProvider
+        from .grok import GrokProvider  # pyright: ignore[reportDeprecated]
 
-        return GrokProvider
+        return GrokProvider  # pyright: ignore[reportDeprecated]
+    elif provider == 'xai':
+        from .xai import XaiProvider
+
+        return XaiProvider
     elif provider == 'moonshotai':
         from .moonshotai import MoonshotAIProvider
 
@@ -129,6 +133,10 @@ def infer_provider_class(provider: str) -> type[Provider[Any]]:  # noqa: C901
         from .ollama import OllamaProvider
 
         return OllamaProvider
+    elif provider == 'lmstudio':
+        from .lmstudio import LMStudioProvider
+
+        return LMStudioProvider
     elif provider == 'github':
         from .github import GitHubProvider
 
@@ -137,14 +145,14 @@ def infer_provider_class(provider: str) -> type[Provider[Any]]:  # noqa: C901
         from .litellm import LiteLLMProvider
 
         return LiteLLMProvider
-    elif provider == 'nebius':
-        from .nebius import NebiusProvider
-
-        return NebiusProvider
     elif provider == 'ovhcloud':
         from .ovhcloud import OVHcloudProvider
 
         return OVHcloudProvider
+    elif provider == 'sambanova':
+        from .sambanova import SambaNovaProvider
+
+        return SambaNovaProvider
     elif provider == 'outlines':
         from .outlines import OutlinesProvider
 
@@ -168,7 +176,7 @@ def infer_provider(provider: str) -> Provider[Any]:
 
         upstream_provider = provider.removeprefix('gateway/')
         return gateway_provider(upstream_provider)
-    elif provider in ('google-vertex', 'google-gla'):
+    elif provider in ('google-vertex', 'google-gla', 'gemini'):
         from .google import GoogleProvider
 
         return GoogleProvider(vertexai=provider == 'google-vertex')

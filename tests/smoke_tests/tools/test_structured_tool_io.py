@@ -37,7 +37,7 @@ async def test_structured_tool_input_output():
         """Calculate the final price after applying a discount."""
         return price * (1 - discount_percent / 100)
     
-    agent = Agent(model="openai/gpt-4o", name="Structured Tool Agent", debug=True)
+    agent = Agent(model="openai/gpt-4o", name="Structured Tool Agent", debug=True, show_tool_calls=True)
     
     task = Task(
         description="Calculate 20% discount on $100",
@@ -47,7 +47,7 @@ async def test_structured_tool_input_output():
     output_buffer = StringIO()
     try:
         with redirect_stdout(output_buffer):
-            result = await agent.do_async(task)
+            result = await agent.print_do_async(task)
         
         output = output_buffer.getvalue()
         
@@ -267,7 +267,7 @@ async def test_structured_tool_with_complex_types():
             'total': total
         }
     
-    agent = Agent(model="openai/gpt-4o", name="Complex Tool Agent", debug=True)
+    agent = Agent(model="openai/gpt-4o", name="Complex Tool Agent", debug=True, show_tool_calls=True)
     
     task = Task(
         description="Process an order with 2 items: item1 price $10 quantity 3, item2 price $5 quantity 2, with 8% tax",
@@ -277,7 +277,7 @@ async def test_structured_tool_with_complex_types():
     output_buffer = StringIO()
     try:
         with redirect_stdout(output_buffer):
-            result = await agent.do_async(task)
+            result = await agent.print_do_async(task)
         
         output = output_buffer.getvalue()
         

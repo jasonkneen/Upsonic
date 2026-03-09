@@ -1,25 +1,42 @@
+"""Async/sync bridging utilities used across the Upsonic framework."""
+
 import asyncio
 import concurrent.futures
-from typing import Awaitable, TypeVar
+from typing import Any, Awaitable, TypeVar
 
 T = TypeVar('T')
 
+
+def run_async(coro: Any) -> Any:
+    """Run an async coroutine safely from a sync context.
+
+    Handles the case where an event loop is already running (e.g. when the
+    framework wraps a sync tool call) by executing the coroutine in a
+    dedicated thread with its own event loop.
+
+    Args:
+        coro: An awaitable coroutine to execute.
+
+    Returns:
+        The result of the coroutine.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    if loop.is_running():
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(asyncio.run, coro).result()
+    else:
+        return loop.run_until_complete(coro)
+
+
 class AsyncExecutionMixin:
-    """
-    A mixin class that provides a robust method for calling an async function
-    from a synchronous context.
-
-    This utility is the cornerstone of the dual sync/async API. It intelligently
-    detects the presence of a running asyncio event loop to avoid common
-
-    `RuntimeError` exceptions in mixed environments (like Jupyter notebooks or
-    when integrating with other async frameworks).
-    """
+    """Mixin providing a method for calling async from sync context."""
 
     def _run_async_from_sync(self, awaitable: Awaitable[T]) -> T:
-        """
-        Executes an awaitable from a synchronous method, managing the event loop
-        intelligently.
+        """Execute an awaitable from a synchronous method.
 
         Args:
             awaitable: The coroutine or other awaitable object to run.
@@ -27,14 +44,4 @@ class AsyncExecutionMixin:
         Returns:
             The result of the awaitable.
         """
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return asyncio.run(awaitable)
-
-        if loop.is_running():
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(asyncio.run, awaitable)
-                return future.result()
-        else:
-            loop.run_until_complete(awaitable)
+        return run_async(awaitable)
