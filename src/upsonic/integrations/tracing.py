@@ -27,6 +27,7 @@ import os
 from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
+    import httpx as _httpx
     from opentelemetry.sdk.metrics import MeterProvider as _MeterProvider
     from opentelemetry.sdk.resources import Resource as _Resource
     from opentelemetry.sdk.trace import TracerProvider as _TracerProvider
@@ -66,6 +67,16 @@ class TracingProvider(abc.ABC):
         self._use_aggregated: bool = use_aggregated_usage_attribute_names
         self._flush_on_exit: bool = flush_on_exit
         self._shutdown_called: bool = False
+
+        # HTTP clients for REST API access (lazy-initialized).
+        # Subclasses that need REST access should set ``_api_base_url``
+        # before calling ``super().__init__()``.
+        if not hasattr(self, "_api_base_url"):
+            self._api_base_url: str = ""
+        if not hasattr(self, "_client"):
+            self._client: Optional[_httpx.Client] = None
+        if not hasattr(self, "_async_client"):
+            self._async_client: Optional[_httpx.AsyncClient] = None
 
         self._tracer_provider: _TracerProvider
         self._meter_provider: _MeterProvider
@@ -126,6 +137,20 @@ class TracingProvider(abc.ABC):
         exporter = self._create_exporter()
         tracer_provider.add_span_processor(BatchSpanProcessor(exporter))
 
+        # BaggageSpanProcessor copies OTel Baggage entries to span attributes.
+        # Langfuse requires trace-level attributes (user.id, session.id, etc.)
+        # to be present on ALL spans in a trace for proper filtering.
+        try:
+            from opentelemetry.processor.baggage import (
+                BaggageSpanProcessor,
+                ALLOW_ALL_BAGGAGE_KEYS,
+            )
+            tracer_provider.add_span_processor(
+                BaggageSpanProcessor(ALLOW_ALL_BAGGAGE_KEYS)
+            )
+        except ImportError:
+            pass
+
         meter_provider = MeterProvider(resource=resource)
 
         from upsonic.models.instrumented import InstrumentationSettings
@@ -154,8 +179,139 @@ class TracingProvider(abc.ABC):
         """The ``MeterProvider`` owned by this instance."""
         return self._meter_provider
 
+    # ------------------------------------------------------------------
+    # HTTP plumbing for REST API access (scores, metadata, etc.)
+    # ------------------------------------------------------------------
+
+    def _api_headers(self) -> Dict[str, str]:
+        """Return headers for REST API requests.
+
+        Subclasses override this to supply authentication headers.
+        The default implementation returns an empty dict.
+        """
+        return {}
+
+    def _get_client(self) -> "_httpx.Client":
+        """Return a lazily-initialized sync ``httpx.Client``."""
+        if self._client is None:
+            import httpx
+            self._client = httpx.Client(base_url=self._api_base_url, timeout=30.0)
+        return self._client
+
+    def _get_async_client(self) -> "_httpx.AsyncClient":
+        """Return a lazily-initialized async ``httpx.AsyncClient``."""
+        if self._async_client is None:
+            import httpx
+            self._async_client = httpx.AsyncClient(base_url=self._api_base_url, timeout=30.0)
+        return self._async_client
+
+    @staticmethod
+    def _raise_api_error(method: str, path: str, response: Any) -> None:
+        """Raise an informative error with the response body included."""
+        try:
+            detail = response.json()
+        except Exception:
+            detail = response.text
+        from httpx import HTTPStatusError
+        raise HTTPStatusError(
+            f"{method} {path} failed ({response.status_code}): {detail}",
+            request=response.request,
+            response=response,
+        )
+
+    def _post(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Send a POST request and return the JSON response."""
+        response = self._get_client().post(path, json=body, headers=self._api_headers())
+        if response.status_code >= 400:
+            self._raise_api_error("POST", path, response)
+        return response.json()
+
+    async def _apost(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Async variant of :meth:`_post`."""
+        response = await self._get_async_client().post(path, json=body, headers=self._api_headers())
+        if response.status_code >= 400:
+            self._raise_api_error("POST", path, response)
+        return response.json()
+
+    def _get(
+        self, path: str, params: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Send a GET request and return the JSON response."""
+        response = self._get_client().get(
+            path, params=params, headers=self._api_headers(),
+        )
+        if response.status_code >= 400:
+            self._raise_api_error("GET", path, response)
+        return response.json()
+
+    async def _aget(
+        self, path: str, params: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Async variant of :meth:`_get`."""
+        response = await self._get_async_client().get(
+            path, params=params, headers=self._api_headers(),
+        )
+        if response.status_code >= 400:
+            self._raise_api_error("GET", path, response)
+        return response.json()
+
+    def _patch(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Send a PATCH request and return the JSON response."""
+        response = self._get_client().patch(
+            path, json=body, headers=self._api_headers(),
+        )
+        if response.status_code >= 400:
+            self._raise_api_error("PATCH", path, response)
+        return response.json()
+
+    async def _apatch(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Async variant of :meth:`_patch`."""
+        response = await self._get_async_client().patch(
+            path, json=body, headers=self._api_headers(),
+        )
+        if response.status_code >= 400:
+            self._raise_api_error("PATCH", path, response)
+        return response.json()
+
+    def _delete(self, path: str) -> None:
+        """Send a DELETE request."""
+        response = self._get_client().delete(path, headers=self._api_headers())
+        if response.status_code >= 400:
+            self._raise_api_error("DELETE", path, response)
+
+    async def _adelete(self, path: str) -> None:
+        """Async variant of :meth:`_delete`."""
+        response = await self._get_async_client().delete(path, headers=self._api_headers())
+        if response.status_code >= 400:
+            self._raise_api_error("DELETE", path, response)
+
+    def _delete_with_body(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Send a DELETE request with a JSON body and return the JSON response."""
+        response = self._get_client().request(
+            "DELETE", path, json=body, headers=self._api_headers(),
+        )
+        if response.status_code >= 400:
+            self._raise_api_error("DELETE", path, response)
+        return response.json()
+
+    async def _adelete_with_body(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Async variant of :meth:`_delete_with_body`."""
+        response = await self._get_async_client().request(
+            "DELETE", path, json=body, headers=self._api_headers(),
+        )
+        if response.status_code >= 400:
+            self._raise_api_error("DELETE", path, response)
+        return response.json()
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
     def shutdown(self) -> None:
-        """Flush pending spans and shut down providers.  Safe to call multiple times."""
+        """Flush pending spans, shut down providers, and close HTTP clients.
+
+        Safe to call multiple times.
+        """
         if self._shutdown_called:
             return
         self._shutdown_called = True
@@ -167,6 +323,16 @@ class TracingProvider(abc.ABC):
             self._meter_provider.shutdown()
         except Exception:
             pass
+        if self._client is not None:
+            self._client.close()
+            self._client = None
+
+    async def ashutdown(self) -> None:
+        """Async variant — also closes the async HTTP client."""
+        self.shutdown()
+        if self._async_client is not None:
+            await self._async_client.aclose()
+            self._async_client = None
 
     def flush(self) -> None:
         """Force-flush pending spans without shutting down."""

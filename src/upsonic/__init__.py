@@ -66,6 +66,15 @@ def _get_Agent():
         pass
     return agent_cls
 
+def _get_Clanker():
+    clanker_cls = _lazy_import("upsonic.agent.agent", "Clanker")()
+    try:
+        from upsonic.tasks.tasks import Task
+        Task.model_rebuild()
+    except Exception:
+        pass
+    return clanker_cls
+
 def _get_Graph():
     return _lazy_import("upsonic.graph.graph", "Graph")()
 
@@ -104,6 +113,8 @@ def __getattr__(name: str) -> Any:
         return _get_KnowledgeBase()
     elif name == "Agent":
         return _get_Agent()
+    elif name == "Clanker":
+        return _get_Clanker()
     elif name == "Graph":
         return _get_Graph()
     elif name == "Team":
@@ -130,6 +141,7 @@ __all__ = [
     "hello",
     "Task",
     "KnowledgeBase",
+    "Clanker",
     "Agent",
     "AutonomousAgent",
     "Graph",

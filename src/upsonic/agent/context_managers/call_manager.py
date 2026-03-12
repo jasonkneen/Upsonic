@@ -82,9 +82,8 @@ class CallManager:
             from upsonic.utils.llm_usage import llm_usage
             usage = llm_usage(context)
 
-        tool_usage_result: Optional[List[Dict[str, Any]]] = (
-            tool_usage(context, self.task) if self.show_tool_calls else None
-        )
+        # Always populate task._tool_calls; display is gated by show_tool_calls
+        tool_usage_result: Optional[List[Dict[str, Any]]] = tool_usage(context, self.task)
 
         has_output: bool = context.output is not None
         has_tool_calls: bool = bool(tool_usage_result and len(tool_usage_result) > 0)

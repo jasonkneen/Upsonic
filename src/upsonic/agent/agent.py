@@ -6,7 +6,9 @@ import uuid
 from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Literal, Optional, Union, TYPE_CHECKING
 
 
-from upsonic.utils.logging_config import sentry_sdk, get_env_bool_optional
+from upsonic.utils.logging_config import sentry_sdk, get_env_bool_optional, get_logger
+
+_pl_logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +135,7 @@ RetryMode = Literal["raise", "return_false"]
 class Agent(BaseAgent):
     """
     A comprehensive, high-level AI Agent that integrates all framework components.
-    
+
     This Agent class provides:
     - Complete model abstraction through Model/Provider/Profile system
     - Advanced tool handling with ToolManager and Orchestrator
@@ -1152,6 +1154,7 @@ class Agent(BaseAgent):
         if self.promptlayer is None or self._suppress_promptlayer_logging:
             return
         try:
+            import json as _json
             from upsonic.eval._pl_helpers import extract_model_parameters, accumulate_agent_usage
 
             task_description: str = str(task.description) if task is not None else ""
@@ -1166,6 +1169,15 @@ class Agent(BaseAgent):
             if self.name:
                 tags.append(f"agent:{self.name}")
 
+            # ── Collect all metrics from AgentRunOutput ───────────────
+            run_output: Any = getattr(self, "_agent_run_output", None)
+            run_usage: Any = getattr(run_output, "usage", None) if run_output else None
+
+            input_tokens: int
+            output_tokens: int
+            price: float
+            input_tokens, output_tokens, price = accumulate_agent_usage(self)
+
             metadata_dict: Dict[str, Any] = {
                 "agent_name": self.name or "",
                 "model": model_name,
@@ -1175,18 +1187,139 @@ class Agent(BaseAgent):
             if total_cost is not None:
                 metadata_dict["total_cost"] = total_cost
 
-            input_tokens: int
-            output_tokens: int
-            price: float
-            input_tokens, output_tokens, price = accumulate_agent_usage(self)
+            # TaskUsage metrics
+            if run_usage is not None:
+                requests = getattr(run_usage, "requests", 0) or 0
+                if requests:
+                    metadata_dict["requests"] = requests
+
+                cache_write = getattr(run_usage, "cache_write_tokens", 0) or 0
+                if cache_write:
+                    metadata_dict["cache_write_tokens"] = cache_write
+
+                cache_read = getattr(run_usage, "cache_read_tokens", 0) or 0
+                if cache_read:
+                    metadata_dict["cache_read_tokens"] = cache_read
+
+                reasoning = getattr(run_usage, "reasoning_tokens", 0) or 0
+                if reasoning:
+                    metadata_dict["reasoning_tokens"] = reasoning
+
+                total_tok = getattr(run_usage, "total_tokens", 0) or 0
+                if total_tok:
+                    metadata_dict["total_tokens"] = total_tok
+
+                input_audio = getattr(run_usage, "input_audio_tokens", 0) or 0
+                if input_audio:
+                    metadata_dict["input_audio_tokens"] = input_audio
+
+                output_audio = getattr(run_usage, "output_audio_tokens", 0) or 0
+                if output_audio:
+                    metadata_dict["output_audio_tokens"] = output_audio
+
+                model_exec_time = getattr(run_usage, "model_execution_time", None)
+                if model_exec_time is not None and model_exec_time > 0:
+                    metadata_dict["model_execution_time"] = round(model_exec_time, 3)
+
+                tool_exec_time = getattr(run_usage, "tool_execution_time", None)
+                if tool_exec_time is not None and tool_exec_time > 0:
+                    metadata_dict["tool_execution_time"] = round(tool_exec_time, 3)
+
+                framework_time = getattr(run_usage, "upsonic_execution_time", None)
+                if framework_time is not None and framework_time > 0:
+                    metadata_dict["framework_overhead_time"] = round(framework_time, 3)
+
+                duration = getattr(run_usage, "duration", None)
+                if duration is not None and duration > 0:
+                    metadata_dict["duration"] = round(duration, 3)
+
+                ttft = getattr(run_usage, "time_to_first_token", None)
+                if ttft is not None and ttft > 0:
+                    metadata_dict["time_to_first_token"] = round(ttft, 3)
+
+            # AgentRunOutput metadata
+            if run_output is not None:
+                run_id = getattr(run_output, "run_id", None)
+                if run_id:
+                    metadata_dict["run_id"] = run_id
+
+                status = getattr(run_output, "status", None)
+                if status is not None:
+                    metadata_dict["status"] = str(status.value) if hasattr(status, "value") else str(status)
+
+                out_model_name = getattr(run_output, "model_name", None)
+                if out_model_name:
+                    metadata_dict["model_name"] = out_model_name
+
+                out_model_provider = getattr(run_output, "model_provider", None)
+                if out_model_provider:
+                    metadata_dict["model_provider"] = out_model_provider
+
+                tool_call_count = getattr(run_output, "tool_call_count", 0) or 0
+                if tool_call_count:
+                    metadata_dict["tool_call_count"] = tool_call_count
+
+                tool_limit_reached = getattr(run_output, "tool_limit_reached", False)
+                if tool_limit_reached:
+                    metadata_dict["tool_limit_reached"] = True
+
+                is_streaming = getattr(run_output, "is_streaming", False)
+                if is_streaming:
+                    metadata_dict["is_streaming"] = True
+
+                # Pipeline execution stats
+                exec_stats = getattr(run_output, "execution_stats", None)
+                if exec_stats is not None:
+                    executed_steps = getattr(exec_stats, "executed_steps", 0) or 0
+                    if executed_steps:
+                        metadata_dict["pipeline_executed_steps"] = executed_steps
+
+                    total_steps = getattr(exec_stats, "total_steps", 0) or 0
+                    if total_steps:
+                        metadata_dict["pipeline_total_steps"] = total_steps
+
+                    step_timing = getattr(exec_stats, "step_timing", None)
+                    if step_timing:
+                        metadata_dict["pipeline_step_timing"] = step_timing
+
+                    step_statuses = getattr(exec_stats, "step_statuses", None)
+                    if step_statuses:
+                        metadata_dict["pipeline_step_statuses"] = step_statuses
 
             model_parameters: Optional[Dict[str, Any]] = extract_model_parameters(self)
 
             pl_tools: Optional[List[Dict[str, Any]]] = self._build_pl_tools()
 
+            # ── Build tool calls and tool results from AgentRunOutput.tools ──
             pl_tool_calls: Optional[List[Dict[str, Any]]] = None
-            if task is not None and task.tool_calls:
-                import json as _json
+            pl_tool_results: Optional[List[Dict[str, Any]]] = None
+
+            tool_executions = getattr(run_output, "tools", None) if run_output else None
+            if tool_executions:
+                pl_tool_calls = []
+                pl_tool_results = []
+                for idx, te in enumerate(tool_executions):
+                    call_id = getattr(te, "tool_call_id", None) or f"call_{idx}"
+                    tool_name = getattr(te, "tool_name", None) or "unknown"
+                    tool_args = getattr(te, "tool_args", None) or {}
+                    result = getattr(te, "result", None)
+
+                    pl_tool_calls.append({
+                        "type": "function",
+                        "id": call_id,
+                        "function": {
+                            "name": tool_name,
+                            "arguments": _json.dumps(tool_args, default=str),
+                        },
+                    })
+
+                    pl_tool_results.append({
+                        "tool_call_id": call_id,
+                        "name": tool_name,
+                        "content": str(result)[:5000] if result is not None else "",
+                    })
+            elif task is not None and task.tool_calls:
+                # Fallback to legacy task.tool_calls
                 pl_tool_calls = [
                     {
                         "type": "function",
@@ -1213,15 +1346,52 @@ class Agent(BaseAgent):
                 tags=tags,
                 metadata=metadata_dict,
                 function_name=model_name,
+                prompt_name=self.promptlayer._last_prompt_name,
+                prompt_id=self.promptlayer._last_prompt_id,
+                prompt_version=self.promptlayer._last_prompt_version,
                 system_prompt=self.system_prompt,
                 tools=pl_tools,
                 tool_calls=pl_tool_calls,
+                tool_results=pl_tool_results,
             )
 
             if task is not None:
                 task._promptlayer_request_id = request_id
-        except Exception:
-            pass
+
+            # ── Register agent as a workflow in PromptLayer ──────────
+            await self._create_promptlayer_workflow(
+                task_description=task_description,
+                output_text=output_text,
+                model_name=model_name,
+                pl_tool_calls=pl_tool_calls,
+                pl_tool_results=pl_tool_results,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                price=price,
+                start_time=start_time,
+                end_time=end_time,
+                tags=tags,
+                run_output=run_output,
+            )
+        except Exception as e:
+            _pl_logger.warning("Error in _log_to_promptlayer_unified: %s", e)
+
+    def _log_to_promptlayer_background(
+        self,
+        task: "Task",
+        output: Any,
+        start_time: float,
+        end_time: float,
+    ) -> None:
+        """Fire-and-forget: launches PromptLayer logging in a background thread."""
+        def _run():
+            try:
+                asyncio.run(self._log_to_promptlayer_unified(task, output, start_time, end_time))
+            except Exception as e:
+                _pl_logger.warning("Background PromptLayer logging failed: %s", e)
+
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
 
     def _build_pl_tools(self) -> Optional[List[Dict[str, Any]]]:
         """Build PromptLayer-compatible tool definitions from the agent's registered tools."""
@@ -1242,6 +1412,238 @@ class Agent(BaseAgent):
                 },
             })
         return result
+
+    async def _create_promptlayer_workflow(
+        self,
+        *,
+        task_description: str,
+        output_text: str,
+        model_name: str,
+        pl_tool_calls: Optional[List[Dict[str, Any]]],
+        pl_tool_results: Optional[List[Dict[str, Any]]],
+        input_tokens: int,
+        output_tokens: int,
+        price: float,
+        start_time: float,
+        end_time: float,
+        tags: List[str],
+        run_output: Any,
+    ) -> None:
+        """Register or update the agent as a workflow in PromptLayer."""
+        if self.promptlayer is None:
+            return
+        try:
+            import json as _json
+
+            agent_name: str = self.name or "upsonic-agent"
+            workflow_display_name: str = f"upsonic-{agent_name}"
+
+            # ── Collect pipeline data ────────────────────────────────
+            step_results: List[Any] = []
+            if run_output is not None:
+                step_results = getattr(run_output, "step_results", None) or []
+
+            is_streaming: bool = getattr(run_output, "is_streaming", False) if run_output else False
+
+            # ── Agent-level usage from self.usage ────────────────────
+            agent_usage: Any = self.usage
+            agent_metrics: Dict[str, Any] = {}
+            if agent_usage is not None:
+                agent_metrics = {
+                    "total_requests": getattr(agent_usage, "requests", 0),
+                    "total_tool_calls": getattr(agent_usage, "tool_calls", 0),
+                    "total_input_tokens": getattr(agent_usage, "input_tokens", 0),
+                    "total_output_tokens": getattr(agent_usage, "output_tokens", 0),
+                    "total_tokens": (getattr(agent_usage, "input_tokens", 0)
+                                     + getattr(agent_usage, "output_tokens", 0)),
+                    "reasoning_tokens": getattr(agent_usage, "reasoning_tokens", 0),
+                    "cache_write_tokens": getattr(agent_usage, "cache_write_tokens", 0),
+                    "cache_read_tokens": getattr(agent_usage, "cache_read_tokens", 0),
+                    "total_cost_usd": round(getattr(agent_usage, "cost", 0) or 0, 6),
+                    "total_duration_seconds": round(getattr(agent_usage, "duration", 0) or 0, 3),
+                    "model_execution_time": round(getattr(agent_usage, "model_execution_time", 0) or 0, 3),
+                    "tool_execution_time": round(getattr(agent_usage, "tool_execution_time", 0) or 0, 3),
+                }
+                fw_time = getattr(agent_usage, "upsonic_execution_time", None)
+                if fw_time is not None:
+                    agent_metrics["framework_overhead_time"] = round(fw_time, 3)
+
+            # ── Build nodes ──────────────────────────────────────────
+            nodes: List[Dict[str, Any]] = []
+            last_step_node: Optional[str] = None
+
+            # 1. Input node
+            nodes.append({
+                "name": "input_node",
+                "node_type": "VARIABLE",
+                "configuration": {
+                    "value": {"type": "string", "value": task_description},
+                },
+                "dependencies": [],
+                "is_output_node": False,
+            })
+            last_step_node = "input_node"
+
+            # 2. System prompt node (if present) — connects to first step like input_node
+            if self.system_prompt:
+                nodes.append({
+                    "name": "system_prompt_node",
+                    "node_type": "VARIABLE",
+                    "configuration": {
+                        "value": {"type": "string", "value": self.system_prompt},
+                    },
+                    "dependencies": [],
+                    "is_output_node": False,
+                })
+
+            # 3. Pipeline step nodes — one per executed step
+            #    The first step depends on both input_node and system_prompt_node (if present)
+            first_step: bool = True
+            for step in step_results:
+                step_name_raw: str = getattr(step, "name", "unknown")
+                step_status_val: Any = getattr(step, "status", None)
+                step_status_str: str = step_status_val.value if hasattr(step_status_val, "value") else str(step_status_val or "UNKNOWN")
+                step_time: float = getattr(step, "execution_time", 0.0)
+                step_msg: str = getattr(step, "message", "") or ""
+
+                step_info: Dict[str, Any] = {
+                    "step": step_name_raw,
+                    "status": step_status_str,
+                    "execution_time": f"{step_time:.4f}s",
+                }
+                if step_msg:
+                    step_info["message"] = step_msg
+
+                node_name: str = f"step_{step_name_raw}"
+                step_deps: List[str] = [last_step_node] if last_step_node else []
+                if first_step and self.system_prompt:
+                    step_deps.append("system_prompt_node")
+                    first_step = False
+                elif first_step:
+                    first_step = False
+                nodes.append({
+                    "name": node_name,
+                    "node_type": "VARIABLE",
+                    "configuration": {
+                        "value": {"type": "json", "value": step_info},
+                    },
+                    "dependencies": step_deps,
+                    "is_output_node": False,
+                })
+                last_step_node = node_name
+
+            # 4. Tool call nodes — separate branches off step_model_execution
+            #    Each tool node depends ONLY on step_model_execution.
+            #    Nothing depends on tool nodes — they are dead-end branches,
+            #    isolated from the main pipeline.
+            model_exec_node: str = "step_model_execution"
+            model_exec_exists: bool = any(
+                n["name"] == model_exec_node for n in nodes
+            )
+
+            if pl_tool_calls and model_exec_exists:
+                for idx, tc in enumerate(pl_tool_calls):
+                    func_info = tc.get("function", {})
+                    tool_name: str = func_info.get("name", f"tool_{idx}")
+                    node_name: str = f"tool_{tool_name}_{idx}"
+
+                    tool_data: Dict[str, Any] = {
+                        "tool_name": tool_name,
+                        "arguments": _json.loads(func_info.get("arguments", "{}")),
+                    }
+                    if pl_tool_results and idx < len(pl_tool_results):
+                        tool_data["result"] = pl_tool_results[idx].get("content", "")
+
+                    nodes.append({
+                        "name": node_name,
+                        "node_type": "VARIABLE",
+                        "configuration": {
+                            "value": {"type": "json", "value": tool_data},
+                        },
+                        "dependencies": [model_exec_node],
+                        "is_output_node": False,
+                    })
+
+            # 5. Output node — shows the agent's last result
+            nodes.append({
+                "name": "output",
+                "node_type": "VARIABLE",
+                "configuration": {
+                    "value": {"type": "string", "value": output_text},
+                },
+                "dependencies": [last_step_node] if last_step_node else [],
+                "is_output_node": True,
+            })
+
+            # ── Required input variables ─────────────────────────────
+            required_input_variables: Dict[str, str] = {
+                "task_description": "string",
+            }
+            if self.system_prompt:
+                required_input_variables["system_prompt"] = "string"
+
+            # ── Build commit message with agent-level usage ──────────
+            run_latency: float = round(end_time - start_time, 3)
+            total_cost: float = agent_metrics.get("total_cost_usd", price)
+            total_reqs: int = agent_metrics.get("total_requests", 1)
+            total_dur: float = agent_metrics.get("total_duration_seconds", run_latency)
+            commit_message: str = (
+                f"Agent: {agent_name} | model={model_name} | "
+                f"{'streaming' if is_streaming else 'sync'} | "
+                f"requests={total_reqs} | "
+                f"tokens={agent_metrics.get('total_input_tokens', input_tokens)}"
+                f"+{agent_metrics.get('total_output_tokens', output_tokens)} | "
+                f"cost=${total_cost:.4f} | duration={total_dur:.3f}s | "
+                f"latency={run_latency}s"
+            )
+
+            # ── Release labels ───────────────────────────────────────
+            release_labels: List[str] = list(tags)
+
+            # ── Create or patch the workflow ──────────────────────────
+            existing_id: Optional[int] = self.promptlayer._created_workflows.get(workflow_display_name)
+
+            # If not cached locally, check if it already exists in PromptLayer
+            if existing_id is None:
+                try:
+                    wf_list = await self.promptlayer.alist_workflows(per_page=100)
+                    for item in wf_list.get("items", []):
+                        if item.get("name") == workflow_display_name:
+                            existing_id = item.get("id")
+                            self.promptlayer._created_workflows[workflow_display_name] = existing_id
+                            break
+                except Exception:
+                    pass
+
+            if existing_id is not None:
+                # Agent already registered — patch to update with latest run data
+                patch_nodes: Dict[str, Optional[Dict[str, Any]]] = {}
+                for node in nodes:
+                    patch_nodes[node["name"]] = {
+                        k: v for k, v in node.items() if k != "name"
+                    }
+                await self.promptlayer.apatch_workflow(
+                    workflow_id_or_name=existing_id,
+                    nodes=patch_nodes,
+                    required_input_variables=required_input_variables,
+                    commit_message=commit_message,
+                    release_labels=release_labels,
+                )
+            else:
+                # First time — create the workflow
+                wf_result = await self.promptlayer.acreate_workflow(
+                    name=workflow_display_name,
+                    nodes=nodes,
+                    required_input_variables=required_input_variables,
+                    commit_message=commit_message,
+                    release_labels=release_labels,
+                    folder_id=None,
+                )
+                wf_id = wf_result.get("workflow_id")
+                if wf_id:
+                    self.promptlayer._created_workflows[workflow_display_name] = wf_id
+        except Exception as e:
+            _pl_logger.warning("Error in _create_promptlayer_workflow: %s", e)
 
     def _apply_model_override(self, model: Optional[Union[str, "Model"]]) -> Optional["Model"]:
         """Apply a per-call model override and return the original model for restoration.
@@ -1999,12 +2401,13 @@ class Agent(BaseAgent):
             
             import time
             tool_start_time = time.time()
-            with self._otel.tool_span(tool_call.tool_name, tool_call.tool_call_id) as otel_tool_span:
+            _tool_args = tool_call.args_as_dict()
+            with self._otel.tool_span(tool_call.tool_name, tool_call.tool_call_id, tool_args=_tool_args) as otel_tool_span:
                 try:
                     target_manager = self._resolve_tool_manager(tool_call.tool_name)
                     result = await target_manager.execute_tool(
                         tool_name=tool_call.tool_name,
-                        args=tool_call.args_as_dict(),
+                        args=_tool_args,
                         metrics=self._tool_metrics,
                         tool_call_id=tool_call.tool_call_id
                     )
@@ -2019,7 +2422,7 @@ class Agent(BaseAgent):
                     if hasattr(self, '_agent_run_output') and self._agent_run_output is not None:
                         self._agent_run_output.tool_call_count = self._tool_call_count
                         self._agent_run_output.increment_tool_calls(1)
-                    
+
                     tool_return = ToolReturnPart(
                         tool_name=result.tool_name,
                         content=result.content,
@@ -2027,8 +2430,8 @@ class Agent(BaseAgent):
                         timestamp=now_utc()
                     )
                     results.append(tool_return)
-                    
-                    self._otel.set_tool_result(otel_tool_span, tool_execution_time, success=True)
+
+                    self._otel.set_tool_result(otel_tool_span, tool_execution_time, success=True, output=result.content)
                     
                     if hasattr(self, '_agent_run_output') and self._agent_run_output:
                         from upsonic.run.tools.tools import ToolExecution
@@ -2142,12 +2545,13 @@ class Agent(BaseAgent):
                 
                 import time as _time
                 _tool_start = _time.time()
-                with self._otel.tool_span(tool_call.tool_name, tool_call.tool_call_id) as otel_tool_span:
+                _tool_args2 = tool_call.args_as_dict()
+                with self._otel.tool_span(tool_call.tool_name, tool_call.tool_call_id, tool_args=_tool_args2) as otel_tool_span:
                     try:
                         target_manager = self._resolve_tool_manager(tool_call.tool_name)
                         result = await target_manager.execute_tool(
                             tool_name=tool_call.tool_name,
-                            args=tool_call.args_as_dict(),
+                            args=_tool_args2,
                             metrics=self._tool_metrics,
                             tool_call_id=tool_call.tool_call_id
                         )
@@ -2161,17 +2565,17 @@ class Agent(BaseAgent):
                             tool_exec = ToolExecution(
                                 tool_call_id=tool_call.tool_call_id,
                                 tool_name=tool_call.tool_name,
-                                tool_args=tool_call.args_as_dict(),
+                                tool_args=_tool_args2,
                                 result=str(result.content) if result.content else None,
                             )
                             if self._agent_run_output.tools is None:
                                 self._agent_run_output.tools = []
                             self._agent_run_output.tools.append(tool_exec)
-                        
+
                         if hasattr(self, '_agent_run_output') and self._agent_run_output:
                             self._drain_agent_tool_usage(tool_call.tool_name)
-                        
-                        self._otel.set_tool_result(otel_tool_span, _tool_elapsed, success=True)
+
+                        self._otel.set_tool_result(otel_tool_span, _tool_elapsed, success=True, output=result.content)
                         
                         return ToolReturnPart(
                             tool_name=result.tool_name,
@@ -3295,8 +3699,12 @@ class Agent(BaseAgent):
                         agent_user_id=self.user_id,
                         agent_session_id=self.session_id,
                         total_cost=self._calculate_aggregated_cost(),
+                        tool_definitions=self._get_combined_tool_definitions(),
                     )
-                    await self._log_to_promptlayer_unified(
+                    _trace_id = self._otel.extract_trace_id(otel_span)
+                    if _trace_id and self._agent_run_output is not None:
+                        self._agent_run_output.trace_id = _trace_id
+                    self._log_to_promptlayer_background(
                         task=task,
                         output=self._agent_run_output.output if self._agent_run_output else result,
                         start_time=_pl_start_time,
@@ -3942,18 +4350,22 @@ class Agent(BaseAgent):
                         agent_user_id=self.user_id,
                         agent_session_id=self.session_id,
                         total_cost=self._calculate_aggregated_cost(),
+                        tool_definitions=self._get_combined_tool_definitions(),
                     )
+                    _trace_id = self._otel.extract_trace_id(otel_span)
+                    if _trace_id and self._agent_run_output is not None:
+                        self._agent_run_output.trace_id = _trace_id
                     if _stream_succeeded:
                         _stream_output: str = ""
                         if self._agent_run_output:
                             _stream_output = self._agent_run_output.accumulated_text or str(self._agent_run_output.output or "")
-                        await self._log_to_promptlayer_unified(
+                        self._log_to_promptlayer_background(
                             task=task,
                             output=_stream_output,
                             start_time=_pl_start_time,
                             end_time=time.time(),
                         )
-            
+
         finally:
             if original_model is not None:
                 self.model = original_model
@@ -4831,3 +5243,7 @@ class Agent(BaseAgent):
         if return_output:
             return result
         return result.output if hasattr(result, 'output') else result
+
+
+
+Clanker = Agent

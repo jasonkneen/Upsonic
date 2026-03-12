@@ -230,7 +230,7 @@ class TestCallManager:
     async def test_call_manager_show_tool_calls_false(
         self, mock_llm_usage, mock_tool_usage, mock_call_end
     ):
-        """Test CallManager with show_tool_calls=False does not call tool_usage and passes show_tool_calls=False to call_end."""
+        """Test CallManager with show_tool_calls=False still calls tool_usage (populate task._tool_calls) but passes show_tool_calls=False to call_end."""
         from upsonic.run.agent.output import AgentRunOutput
 
         model = MockModel()
@@ -248,12 +248,14 @@ class TestCallManager:
             output="Test output"
         )
 
+        mock_tool_usage.return_value = []
+
         async with manager.manage_call():
             manager.process_response(mock_response)
             await manager.alog_completion(context)
 
         mock_llm_usage.assert_called_once_with(context)
-        mock_tool_usage.assert_not_called()
+        mock_tool_usage.assert_called_once_with(context, task)
         mock_call_end.assert_called_once()
         assert mock_call_end.call_args[1]["show_tool_calls"] is False
 

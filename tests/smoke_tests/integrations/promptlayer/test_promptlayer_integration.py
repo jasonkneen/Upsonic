@@ -514,3 +514,112 @@ class TestTaskSerializationWithPromptLayer:
         task_dict: Dict[str, Any] = {"description": "Test task"}
         task: Task = Task.from_dict(task_dict)
         assert task._promptlayer_request_id is None
+
+
+# ===========================================================================
+# Agent with PromptLayer prompt + tools
+# ===========================================================================
+
+class TestAgentWithPromptLayerPromptAndTools:
+    """Fetch a prompt from PromptLayer registry and run an agent with tools."""
+
+    def test_get_prompt_and_run_agent_with_tools(self, pl: "PromptLayer") -> None:
+        from upsonic.tools.config import tool
+
+        @tool(docstring_format="google")
+        def add_numbers(a: int, b: int) -> int:
+            """Add two numbers together.
+
+            Args:
+                a: First number
+                b: Second number
+
+            Returns:
+                Sum of a and b
+            """
+            return a + b
+
+        @tool(docstring_format="google")
+        def multiply_numbers(a: int, b: int) -> int:
+            """Multiply two numbers together.
+
+            Args:
+                a: First number
+                b: Second number
+
+            Returns:
+                Product of a and b
+            """
+            return a * b
+
+        # Fetch the prompt from PromptLayer registry
+        prompt_text = pl.get_prompt("upsonic-test-prompt")
+        assert prompt_text is not None
+        assert isinstance(prompt_text, str)
+        assert len(prompt_text) > 0
+
+        # Use the fetched prompt as system_prompt and run agent with tools
+        agent = Agent(
+            MODEL,
+            name="PromptRegistryToolAgent",
+            system_prompt=prompt_text,
+            tools=[add_numbers, multiply_numbers],
+            promptlayer=pl,
+        )
+        task = Task(
+            description="Use the add_numbers tool to add 15 and 25, then use the multiply_numbers tool to multiply 6 and 7. Return both results."
+        )
+        result = agent.do(task)
+
+        assert result is not None
+        assert task._promptlayer_request_id is not None
+        assert task._promptlayer_request_id > 0
+
+    def test_get_prompt_with_metadata_and_run_agent(self, pl: "PromptLayer") -> None:
+        from upsonic.tools.config import tool
+
+        @tool(docstring_format="google")
+        def get_length(text: str) -> int:
+            """Get the length of a text string.
+
+            Args:
+                text: The text to measure
+
+            Returns:
+                Number of characters in the text
+            """
+            return len(text)
+
+        # Fetch prompt with metadata
+        prompt_text, metadata = pl.get_prompt(
+            "upsonic-test-prompt", return_metadata=True
+        )
+        assert prompt_text is not None
+        assert isinstance(prompt_text, str)
+        assert len(prompt_text) > 0
+        assert isinstance(metadata, dict)
+        assert "id" in metadata
+        assert "version" in metadata
+
+        agent = Agent(
+            MODEL,
+            name="PromptMetadataToolAgent",
+            system_prompt=prompt_text,
+            tools=[get_length],
+            promptlayer=pl,
+        )
+        task = Task(description="Use the get_length tool to find the length of the word 'hello'.")
+        result = agent.do(task)
+
+        assert result is not None
+        assert task._promptlayer_request_id is not None
+
+        # Score and add metadata linking back to the prompt version
+        pl.score(task._promptlayer_request_id, score=9, name="quality")
+        pl.add_metadata(
+            task._promptlayer_request_id,
+            {
+                "prompt_name": "upsonic-test-prompt",
+                "prompt_version": metadata.get("version"),
+            },
+        )

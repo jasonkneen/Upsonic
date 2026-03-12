@@ -723,8 +723,11 @@ class TestFinalizeAgentRun:
         assert span.attrs["gen_ai.usage.output_tokens"] == 50
         assert span.attrs["upsonic.tool_call_count"] == 2
         assert span.attrs["upsonic.total_cost"] == 0.003
-        assert span.attrs["upsonic.user_id"] == "user-42"
-        assert span.attrs["upsonic.session_id"] == "session-7"
+        # set_run_attributes uses langfuse.* + user.id / session.id (no upsonic.user_id)
+        assert span.attrs["langfuse.user.id"] == "user-42"
+        assert span.attrs["user.id"] == "user-42"
+        assert span.attrs["langfuse.session.id"] == "session-7"
+        assert span.attrs["session.id"] == "session-7"
 
     def test_finalize_noop_when_disabled(self) -> None:
         otel = _make_otel(instrument=False)
@@ -745,8 +748,10 @@ class TestFinalizeAgentRun:
         otel.finalize_agent_run(
             span, output, agent_user_id="fallback-user", agent_session_id="fallback-session",
         )
-        assert span.attrs["upsonic.user_id"] == "fallback-user"
-        assert span.attrs["upsonic.session_id"] == "fallback-session"
+        assert span.attrs["langfuse.user.id"] == "fallback-user"
+        assert span.attrs["user.id"] == "fallback-user"
+        assert span.attrs["langfuse.session.id"] == "fallback-session"
+        assert span.attrs["session.id"] == "fallback-session"
 
 
 class TestAttributeConstants:
@@ -755,18 +760,23 @@ class TestAttributeConstants:
     def test_constants_importable(self) -> None:
         from upsonic.agent.otel_manager import (
             ATTR_RUN_ID, ATTR_AGENT_NAME, ATTR_AGENT_MODEL,
-            ATTR_TASK_DESCRIPTION, ATTR_TOOL_CALL_COUNT, ATTR_TOTAL_COST,
+            ATTR_TOOL_CALL_COUNT, ATTR_TOTAL_COST,
             ATTR_EXECUTION_TIME, ATTR_MODEL_EXECUTION_TIME,
-            ATTR_INPUT, ATTR_OUTPUT, ATTR_USER_ID, ATTR_SESSION_ID,
+            ATTR_INPUT, ATTR_OUTPUT,
             ATTR_TOOL_NAME, ATTR_TOOL_CALL_ID, ATTR_TOOL_EXECUTION_TIME,
             ATTR_TOOL_SUCCESS, ATTR_PIPELINE_TOTAL_STEPS,
             ATTR_PIPELINE_STREAMING, ATTR_PIPELINE_DEBUG,
             ATTR_STEP_NAME, ATTR_STEP_DESCRIPTION, ATTR_STEP_STATUS,
             ATTR_STEP_EXECUTION_TIME,
+            LF_USER_ID, LF_SESSION_ID, GENERIC_USER_ID, GENERIC_SESSION_ID,
         )
         assert ATTR_RUN_ID == "upsonic.run_id"
         assert ATTR_TOOL_CALL_COUNT == "upsonic.tool_call_count"
         assert ATTR_TOTAL_COST == "upsonic.total_cost"
+        assert LF_USER_ID == "langfuse.user.id"
+        assert GENERIC_USER_ID == "user.id"
+        assert LF_SESSION_ID == "langfuse.session.id"
+        assert GENERIC_SESSION_ID == "session.id"
 
     def test_no_agent_pipeline_constants_in_instrumented(self) -> None:
         """instrumented.py should NOT have agent/pipeline OTel constants."""
