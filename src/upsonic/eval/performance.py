@@ -1,5 +1,8 @@
 from __future__ import annotations
+import asyncio
 import copy
+import logging
+import threading
 import time
 import tracemalloc
 import statistics
@@ -14,6 +17,8 @@ from upsonic.eval._pl_helpers import extract_model_parameters, accumulate_agent_
 from upsonic.utils.printing import console, debug_log
 
 from rich.table import Table
+
+_logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from upsonic.integrations.promptlayer import PromptLayer
@@ -103,7 +108,7 @@ class PerformanceEvaluator:
             self._print_formatted_results(final_result)
 
         if self.promptlayer is not None:
-            await self._log_eval_to_promptlayer(
+            self._log_eval_to_promptlayer_background(
                 final_result,
                 start_time=eval_start_time,
                 end_time=eval_end_time,
@@ -113,6 +118,33 @@ class PerformanceEvaluator:
             )
 
         return final_result
+
+    def _log_eval_to_promptlayer_background(
+        self,
+        result: PerformanceEvaluationResult,
+        *,
+        start_time: float,
+        end_time: float,
+        input_tokens: int,
+        output_tokens: int,
+        price: float,
+    ) -> None:
+        """Fire-and-forget: launches PromptLayer eval logging in a background thread."""
+        def _run():
+            try:
+                asyncio.run(self._log_eval_to_promptlayer(
+                    result,
+                    start_time=start_time,
+                    end_time=end_time,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    price=price,
+                ))
+            except Exception as e:
+                _logger.warning("Background PromptLayer eval logging failed: %s", e)
+
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
 
     async def _log_eval_to_promptlayer(
         self,

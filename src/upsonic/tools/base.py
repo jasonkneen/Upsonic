@@ -229,6 +229,7 @@ class ToolKit:
         requires_user_input_tools: Optional[List[str]] = None,
         user_input_fields: Optional[List[str]] = None,
         external_execution: Optional[bool] = None,
+        requires_external_execution_tools: Optional[List[str]] = None,
         show_result: Optional[bool] = None,
         stop_after_tool_call: Optional[bool] = None,
         sequential: Optional[bool] = None,
@@ -250,7 +251,8 @@ class ToolKit:
 
         self._requires_confirmation_tools: Optional[List[str]] = requires_confirmation_tools
         self._requires_user_input_tools: Optional[List[str]] = requires_user_input_tools
-
+        self._requires_external_execution_tools: Optional[List[str]] = requires_external_execution_tools
+        
         self._toolkit_defaults: Dict[str, Any] = {
             "requires_confirmation": requires_confirmation,
             "requires_user_input": requires_user_input,

@@ -343,6 +343,7 @@ class ToolProcessor:
         registered_callables: List[Any] = []
         confirmation_tools: Optional[List[str]] = getattr(toolkit, '_requires_confirmation_tools', None)
         user_input_tools: Optional[List[str]] = getattr(toolkit, '_requires_user_input_tools', None)
+        external_execution_tools: Optional[List[str]] = getattr(toolkit, '_requires_external_execution_tools', None)
 
         for name, method in candidates.items():
             decorator_config: ToolConfig = getattr(
@@ -356,6 +357,8 @@ class ToolProcessor:
                 config.requires_confirmation = True
             if user_input_tools and name in user_input_tools:
                 config.requires_user_input = True
+            if external_execution_tools and name in external_execution_tools:
+                config.external_execution = True
 
             wrapper = self._make_tool_wrapper(method, name, config)
             tool = self._process_function_tool(wrapper)

@@ -82,6 +82,7 @@ class AgentRunOutput:
     session_id: Optional[str] = None
     parent_run_id: Optional[str] = None
     user_id: Optional[str] = None
+    trace_id: Optional[str] = None
     
     # --- Task (embedded for single source of truth) ---
     task: Optional["Task"] = None
@@ -659,6 +660,7 @@ class AgentRunOutput:
             "thinking_content": self.thinking_content,
             "_context_window_full": self._context_window_full,
             "print_flag": self.print_flag,
+            "trace_id": self.trace_id,
         }
         
         # task: use to_dict with serialize_flag
@@ -1045,6 +1047,7 @@ class AgentRunOutput:
             session_id=data.get("session_id"),
             parent_run_id=data.get("parent_run_id"),
             user_id=data.get("user_id"),
+            trace_id=data.get("trace_id"),
             task=task,
             status=status,
             created_at=data.get("created_at", int(current_time())),

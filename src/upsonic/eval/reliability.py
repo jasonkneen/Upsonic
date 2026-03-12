@@ -1,4 +1,6 @@
 from __future__ import annotations
+import logging
+import threading
 import time
 from typing import Any, Dict, List, Optional, Union, TYPE_CHECKING
 
@@ -8,6 +10,8 @@ from upsonic.graph.graph import Graph, TaskNode
 from upsonic.eval.models import ReliabilityEvaluationResult, ToolCallCheck
 from upsonic.eval._pl_helpers import extract_model_parameters
 from upsonic.utils.printing import console
+
+_logger = logging.getLogger(__name__)
 
 from rich.table import Table
 from rich.panel import Panel
@@ -103,7 +107,7 @@ class ReliabilityEvaluator:
             output_tokens: int
             price: float
             input_tokens, output_tokens, price = self._extract_task_usage(run_result)
-            self._log_eval_to_promptlayer(
+            self._log_eval_to_promptlayer_background(
                 final_result,
                 start_time=eval_start_time,
                 end_time=eval_end_time,
@@ -144,6 +148,33 @@ class ReliabilityEvaluator:
                 total_cost += cost
 
         return total_input, total_output, total_cost
+
+    def _log_eval_to_promptlayer_background(
+        self,
+        result: ReliabilityEvaluationResult,
+        *,
+        start_time: float,
+        end_time: float,
+        input_tokens: int,
+        output_tokens: int,
+        price: float,
+    ) -> None:
+        """Fire-and-forget: launches PromptLayer eval logging in a background thread."""
+        def _run():
+            try:
+                self._log_eval_to_promptlayer(
+                    result,
+                    start_time=start_time,
+                    end_time=end_time,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    price=price,
+                )
+            except Exception as e:
+                _logger.warning("Background PromptLayer eval logging failed: %s", e)
+
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
 
     def _log_eval_to_promptlayer(
         self,

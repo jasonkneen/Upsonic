@@ -99,7 +99,10 @@ def _poll_single_trace(
     trace_id: str = traces[0]["id"]
     try:
         detail: Dict[str, Any] = _langfuse_api_get(f"/traces/{trace_id}")
-        if not detail.get("observations"):
+        raw_obs = detail.get("observations", [])
+        # The /traces/{id} endpoint may return observation IDs as strings
+        # instead of full observation objects. Always fetch full objects.
+        if not raw_obs or not isinstance(raw_obs[0], dict):
             obs = _poll_observations(trace_id, max_wait=10.0)
             detail["observations"] = obs
         return detail

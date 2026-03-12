@@ -1,5 +1,7 @@
 from __future__ import annotations
 import asyncio
+import logging
+import threading
 import time
 from typing import Union, Optional, List, Dict, Any, TYPE_CHECKING
 
@@ -14,8 +16,11 @@ from upsonic.eval.models import EvaluationScore, AccuracyEvaluationResult
 from upsonic.eval._pl_helpers import extract_model_parameters, accumulate_agent_usage
 from upsonic.utils.printing import console
 
+_logger = logging.getLogger(__name__)
+
 if TYPE_CHECKING:
     from upsonic.integrations.promptlayer import PromptLayer
+    from upsonic.integrations.langfuse import Langfuse
 
 
 class AccuracyEvaluator:
@@ -33,6 +38,11 @@ class AccuracyEvaluator:
         additional_guidelines: Optional[str] = None,
         num_iterations: int = 1,
         promptlayer: Optional["PromptLayer"] = None,
+        promptlayer_dataset_name: Optional[str] = None,
+        promptlayer_dataset_mode: str = "log_only",
+        langfuse: Optional["Langfuse"] = None,
+        langfuse_dataset_name: Optional[str] = None,
+        langfuse_run_name: Optional[str] = None,
     ):
         if not isinstance(judge_agent, Agent):
             raise TypeError("The `judge_agent` must be an instance of the `Agent` agent class.")
@@ -48,11 +58,17 @@ class AccuracyEvaluator:
         self.additional_guidelines: str = additional_guidelines or "No additional guidelines provided."
         self.num_iterations: int = num_iterations
         self.promptlayer: Optional["PromptLayer"] = promptlayer
+        self.promptlayer_dataset_name: Optional[str] = promptlayer_dataset_name
+        self.promptlayer_dataset_mode: str = promptlayer_dataset_mode
+        self.langfuse: Optional["Langfuse"] = langfuse
+        self.langfuse_dataset_name: Optional[str] = langfuse_dataset_name
+        self.langfuse_run_name: Optional[str] = langfuse_run_name
         self._results: List[EvaluationScore] = []
 
     async def run(self, print_results: bool = True) -> AccuracyEvaluationResult:
         self._results = []
         last_generated_output: str = ""
+        last_trace_id: Optional[str] = None
         eval_start_time: float = time.time()
         total_input_tokens: int = 0
         total_output_tokens: int = 0
@@ -72,17 +88,20 @@ class AccuracyEvaluator:
                 total_input_tokens += in_tok
                 total_output_tokens += out_tok
                 total_price += cost
+                run_output = getattr(self.agent_under_test, '_agent_run_output', None)
+                if run_output is not None:
+                    last_trace_id = getattr(run_output, 'trace_id', None)
             elif isinstance(self.agent_under_test, Graph):
                 state = await self.agent_under_test.run_async(verbose=False)
                 generated_output_obj = state.get_latest_output()
             elif isinstance(self.agent_under_test, Team):
                 generated_output_obj = await asyncio.to_thread(self.agent_under_test.complete, task)
-            
+
             if generated_output_obj is None:
                 raise ValueError("The agent under test produced a None output, cannot proceed with evaluation.")
-            
+
             last_generated_output = str(generated_output_obj)
-            
+
             score_object: EvaluationScore = await self._get_judge_score(last_generated_output)
             in_tok_j, out_tok_j, cost_j = accumulate_agent_usage(self.judge_agent)
             total_input_tokens += in_tok_j
@@ -90,12 +109,12 @@ class AccuracyEvaluator:
             total_price += cost_j
 
             self._results.append(score_object)
-        
+
         eval_end_time: float = time.time()
         final_result: AccuracyEvaluationResult = self._aggregate_and_present_results(last_generated_output, print_results)
 
         if self.promptlayer is not None:
-            await self._log_eval_to_promptlayer(
+            self._log_eval_to_promptlayer_background(
                 final_result,
                 start_time=eval_start_time,
                 end_time=eval_end_time,
@@ -103,11 +122,20 @@ class AccuracyEvaluator:
                 output_tokens=total_output_tokens,
                 price=total_price,
             )
+            self._log_to_promptlayer_dataset_background(final_result)
+
+        if self.langfuse is not None:
+            self._log_to_langfuse_dataset_background(
+                final_result,
+                trace_id=last_trace_id,
+            )
 
         return final_result
 
-    async def run_with_output(self, output: str, print_results: bool = True) -> AccuracyEvaluationResult:
-        self._results = [] 
+    async def run_with_output(
+        self, output: str, print_results: bool = True, trace_id: Optional[str] = None,
+    ) -> AccuracyEvaluationResult:
+        self._results = []
         eval_start_time: float = time.time()
         total_input_tokens: int = 0
         total_output_tokens: int = 0
@@ -129,7 +157,7 @@ class AccuracyEvaluator:
         final_result: AccuracyEvaluationResult = self._aggregate_and_present_results(output, print_results)
 
         if self.promptlayer is not None:
-            await self._log_eval_to_promptlayer(
+            self._log_eval_to_promptlayer_background(
                 final_result,
                 start_time=eval_start_time,
                 end_time=eval_end_time,
@@ -137,8 +165,42 @@ class AccuracyEvaluator:
                 output_tokens=total_output_tokens,
                 price=total_price,
             )
+            self._log_to_promptlayer_dataset_background(final_result)
+
+        if self.langfuse is not None:
+            self._log_to_langfuse_dataset_background(
+                final_result,
+                trace_id=trace_id,
+            )
 
         return final_result
+
+    def _log_eval_to_promptlayer_background(
+        self,
+        final_result: AccuracyEvaluationResult,
+        *,
+        start_time: float,
+        end_time: float,
+        input_tokens: int,
+        output_tokens: int,
+        price: float,
+    ) -> None:
+        """Fire-and-forget: launches PromptLayer eval logging in a background thread."""
+        def _run():
+            try:
+                asyncio.run(self._log_eval_to_promptlayer(
+                    final_result,
+                    start_time=start_time,
+                    end_time=end_time,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    price=price,
+                ))
+            except Exception as e:
+                _logger.warning("Background PromptLayer eval logging failed: %s", e)
+
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
 
     async def _log_eval_to_promptlayer(
         self,
@@ -195,6 +257,164 @@ class AccuracyEvaluator:
             function_name=f"accuracy_eval:{agent_model}",
             scores=per_iteration_scores,
         )
+
+    def _log_to_promptlayer_dataset_background(
+        self,
+        final_result: AccuracyEvaluationResult,
+    ) -> None:
+        """Fire-and-forget: launches PromptLayer dataset/report creation in a background thread."""
+        def _run():
+            try:
+                self._log_to_promptlayer_dataset_sync(final_result)
+            except Exception as e:
+                _logger.warning("Background PromptLayer dataset logging failed: %s", e)
+
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
+
+    def _log_to_promptlayer_dataset_sync(
+        self,
+        final_result: AccuracyEvaluationResult,
+    ) -> None:
+        """Create/find PromptLayer dataset group and optionally upload eval data.
+
+        Behavior depends on ``self.promptlayer_dataset_mode``:
+          - ``"log_only"`` (default): Create/find the dataset group only.
+            Eval data is already logged via ``alog()`` with tags
+            ``["upsonic-eval", "accuracy-eval"]``. Use the PromptLayer UI
+            or ``create_dataset_version_from_filter`` to pull logged
+            requests into a dataset version when ready.
+          - ``"new_version"``: Upload eval data as a new CSV dataset version
+            each time the evaluator runs.
+        """
+        if self.promptlayer is None:
+            return
+
+        dataset_name: str = self.promptlayer_dataset_name or "accuracy-eval"
+
+        # 1. Find or create the dataset group (idempotent)
+        dataset_group_id: Optional[int] = None
+        existing = self.promptlayer.list_datasets(name=dataset_name, per_page=100)
+        for ds in existing.get("datasets", []):
+            group = ds.get("dataset_group", {})
+            if group.get("name") == dataset_name:
+                dataset_group_id = group.get("id")
+                break
+
+        if dataset_group_id is None:
+            result = self.promptlayer.create_dataset_group(dataset_name)
+            dataset_group_id = result.get("dataset_group", {}).get("id")
+
+        if dataset_group_id is None:
+            _logger.warning("Failed to create/find PromptLayer dataset group: %s", dataset_name)
+            return
+
+        # 2. If mode is "new_version", upload eval data as a CSV
+        if self.promptlayer_dataset_mode == "new_version":
+            import base64
+            import csv
+            import io
+
+            buf = io.StringIO()
+            writer = csv.writer(buf)
+            writer.writerow(["query", "expected_output", "generated_output", "score", "reasoning"])
+            for eval_score in final_result.evaluation_scores:
+                writer.writerow([
+                    final_result.user_query,
+                    final_result.expected_output,
+                    final_result.generated_output,
+                    eval_score.score,
+                    eval_score.reasoning,
+                ])
+            csv_bytes: bytes = buf.getvalue().encode("utf-8")
+            b64_content: str = base64.b64encode(csv_bytes).decode("ascii")
+
+            upload_result = self.promptlayer.create_dataset_version_from_file(
+                dataset_group_id,
+                file_name=f"accuracy-eval-{int(time.time())}.csv",
+                file_content_base64=b64_content,
+            )
+
+            if not upload_result.get("success"):
+                _logger.warning("Failed to upload PromptLayer dataset CSV: %s", upload_result)
+
+    def _log_to_langfuse_dataset_background(
+        self,
+        final_result: AccuracyEvaluationResult,
+        *,
+        trace_id: Optional[str] = None,
+    ) -> None:
+        """Fire-and-forget: launches Langfuse dataset logging in a background thread."""
+        def _run():
+            try:
+                self._log_to_langfuse_dataset_sync(final_result, trace_id=trace_id)
+            except Exception as e:
+                _logger.warning("Background Langfuse dataset logging failed: %s", e)
+
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
+
+    def _log_to_langfuse_dataset_sync(
+        self,
+        final_result: AccuracyEvaluationResult,
+        *,
+        trace_id: Optional[str] = None,
+    ) -> None:
+        if self.langfuse is None:
+            return
+
+        dataset_name: str = self.langfuse_dataset_name or "accuracy-eval"
+        run_name: str = self.langfuse_run_name or f"accuracy-run-{int(time.time())}"
+
+        # Ensure the dataset exists (create is idempotent by name)
+        self.langfuse.create_dataset(
+            dataset_name,
+            description="Accuracy evaluation dataset created by Upsonic",
+        )
+
+        avg_score: float = final_result.average_score
+
+        item = self.langfuse.create_dataset_item(
+            dataset_name,
+            input=final_result.user_query,
+            expected_output=final_result.expected_output,
+        )
+
+        # Link to trace via a run item if we have a trace_id.
+        # Run-specific results (score, generated output) go on the run item.
+        if trace_id is not None and item.get("id"):
+            # Flush pending OTel spans and wait for Langfuse to ingest
+            # the trace before linking the run item.
+            self.langfuse.flush()
+            time.sleep(10)
+
+            # Override the trace output so the Langfuse "Output" column
+            # shows the agent's generated output directly.
+            self.langfuse.update_trace(
+                trace_id,
+                output=final_result.generated_output,
+            )
+
+            self.langfuse.create_dataset_run_item(
+                run_name=run_name,
+                dataset_item_id=item["id"],
+                trace_id=trace_id,
+                metadata={
+                    "eval_type": "accuracy",
+                    "generated_output": final_result.generated_output,
+                    "average_score": avg_score,
+                    "num_iterations": len(final_result.evaluation_scores),
+                },
+            )
+
+            # Score the trace with the evaluation result
+            self.langfuse.score(
+                trace_id=trace_id,
+                name="accuracy_eval_score",
+                value=avg_score,
+                data_type="NUMERIC",
+                comment=f"Accuracy eval avg score: {avg_score:.2f}/10",
+            )
 
     async def _get_judge_score(self, generated_output: str) -> EvaluationScore:
         judge_prompt = self._construct_judge_prompt(generated_output)

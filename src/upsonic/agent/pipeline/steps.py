@@ -1628,7 +1628,8 @@ class CallManagementStep(Step):
                         from upsonic.utils.llm_usage import llm_usage
                         usage = llm_usage(context) if context else None
 
-                    tool_usage_result = tool_usage(context, task) if agent.show_tool_calls and context else None
+                    # Always populate task._tool_calls; display is gated by show_tool_calls
+                    tool_usage_result = tool_usage(context, task) if context else None
 
                     debug_log_level2(
                         "Call management processed",
