@@ -95,8 +95,119 @@ def prune_actor_input_schema(input_schema: Dict[str, Any]) -> Tuple[Dict[str, An
             properties_out[item]["description"] = (
                 desc[:MAX_DESCRIPTION_LEN] + "..." if len(desc) > MAX_DESCRIPTION_LEN else desc
             )
-        for key_name in ("type", "default", "prefill", "enum"):
+        for key_name in ("type", "default", "prefill", "enum", "editor", "items", "properties"):
             if value := meta.get(key_name):
                 properties_out[item][key_name] = value
 
     return properties_out, required
+
+
+def _infer_array_item_type(prop: Dict[str, Any]) -> str:
+    """Infer the item type for an array property from schema hints."""
+    type_map = {
+        "string": "string",
+        "int": "number",
+        "float": "number",
+        "dict": "object",
+        "list": "array",
+        "bool": "boolean",
+        "none": "null",
+    }
+    if prop.get("items", {}).get("type"):
+        return prop["items"]["type"]
+    if "prefill" in prop and prop["prefill"] and len(prop["prefill"]) > 0:
+        return type_map.get(type(prop["prefill"][0]).__name__.lower(), "string")
+    if "default" in prop and prop["default"] and len(prop["default"]) > 0:
+        return type_map.get(type(prop["default"][0]).__name__.lower(), "string")
+    return "string"
+
+
+def props_to_json_schema(
+    input_dict: Dict[str, Any],
+    required_fields: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Convert pruned Apify actor properties to a proper JSON schema.
+
+    Handles Apify-specific editors (proxy, requestListSources), array item
+    types, nested object properties, and enum values — producing a richer
+    schema than basic Python type-hint mapping alone.
+
+    Args:
+        input_dict: Pruned properties dict from ``prune_actor_input_schema``.
+        required_fields: List of required field names.
+
+    Returns:
+        A JSON schema dict suitable for LLM tool definitions.
+    """
+    schema: Dict[str, Any] = {
+        "type": "object",
+        "properties": {},
+        "required": required_fields or [],
+    }
+
+    for key, value in input_dict.items():
+        prop_schema: Dict[str, Any] = {}
+        prop_type = value.get("type")
+
+        if "enum" in value:
+            prop_schema["enum"] = value["enum"]
+
+        if "default" in value:
+            prop_schema["default"] = value["default"]
+        elif "prefill" in value:
+            prop_schema["default"] = value["prefill"]
+
+        if "description" in value:
+            prop_schema["description"] = value["description"]
+
+        # Handle Apify special editor types
+        if prop_type == "object" and value.get("editor") == "proxy":
+            prop_schema["type"] = "object"
+            prop_schema["properties"] = {
+                "useApifyProxy": {
+                    "type": "boolean",
+                    "description": "Whether to use Apify Proxy - ALWAYS SET TO TRUE.",
+                    "default": True,
+                }
+            }
+            prop_schema["required"] = ["useApifyProxy"]
+            if "default" in value:
+                prop_schema["default"] = value["default"]
+
+        elif prop_type == "array" and value.get("editor") == "requestListSources":
+            prop_schema["type"] = "array"
+            prop_schema["items"] = {
+                "type": "object",
+                "description": "Request list source",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "URL of the request list source",
+                    }
+                },
+            }
+
+        elif prop_type == "array":
+            prop_schema["type"] = "array"
+            prop_schema["items"] = {
+                "type": _infer_array_item_type(value),
+                "description": "Item",
+            }
+
+        elif prop_type == "object":
+            prop_schema["type"] = "object"
+            if "default" in value:
+                prop_schema["default"] = value["default"]
+                prop_schema["properties"] = {}
+                for k, v in value.get("properties", value["default"]).items():
+                    inner_type = v["type"] if isinstance(v, dict) else type(v).__name__.lower()
+                    if inner_type == "bool":
+                        inner_type = "boolean"
+                    prop_schema["properties"][k] = {"type": inner_type}
+
+        else:
+            prop_schema["type"] = prop_type
+
+        schema["properties"][key] = prop_schema
+
+    return schema

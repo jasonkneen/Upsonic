@@ -28,10 +28,11 @@ Example Usage:
     ```
 """
 
+import inspect
 import json
 import types
 from os import getenv
-from typing import Any, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from upsonic.tools.base import ToolKit
 from upsonic.tools.config import ToolConfig
@@ -40,6 +41,7 @@ from upsonic.utils.integrations.apify import (
     actor_id_to_tool_name,
     create_apify_client,
     get_actor_latest_build,
+    props_to_json_schema,
     prune_actor_input_schema,
 )
 from upsonic.utils.printing import error_log
@@ -52,12 +54,57 @@ except ImportError:
     _APIFY_AVAILABLE = False
 
 
-def _make_actor_function(actor_id: str, client):
-    """Create a tool function for an Apify Actor.
+_SCHEMA_TYPE_MAP: Dict[str, type] = {
+    "string": str,
+    "integer": int,
+    "number": float,
+    "boolean": bool,
+    "array": list,
+    "object": dict,
+}
 
-    Returns a function with `self` as first param so it can be bound as a method.
+
+def _make_actor_function(
+    actor_id: str,
+    client,
+    properties: Dict[str, Any],
+    required: List[str],
+):
+    """Create a tool function for an Apify Actor with a proper typed signature.
+
+    Builds a real Python function whose ``inspect.signature`` contains one
+    ``Parameter`` per schema property (with correct type annotations and
+    defaults).  This lets ``function_schema`` generate the right JSON schema
+    so the LLM knows which arguments to pass.
     """
 
+    # -- 1.  Build inspect.Parameter list --------------------------------
+    # Note: `self` is NOT included here. The function uses `self` as a
+    # positional arg in the body, but `types.MethodType` binds it.
+    # `inspect.signature` on a bound method automatically strips `self`.
+    # However the wrapper created by `_make_tool_wrapper` uses
+    # `functools.wraps` which copies `__signature__` — so we must NOT
+    # include `self` or the schema generator will complain about missing
+    # type annotations.
+    params: List[inspect.Parameter] = []
+    for name, meta in properties.items():
+        annotation = _SCHEMA_TYPE_MAP.get(meta.get("type", ""), Any)
+        if name in required:
+            default = inspect.Parameter.empty
+        else:
+            default = meta.get("default", meta.get("prefill", None))
+        params.append(
+            inspect.Parameter(
+                name,
+                inspect.Parameter.KEYWORD_ONLY,
+                default=default,
+                annotation=annotation,
+            )
+        )
+
+    sig = inspect.Signature(params, return_annotation=str)
+
+    # -- 2.  The actual implementation -----------------------------------
     def actor_function(self, **kwargs: Any) -> str:
         """Run an Apify Actor."""
         try:
@@ -79,6 +126,15 @@ def _make_actor_function(actor_id: str, client):
         except Exception as e:
             error_log(f"Error running Apify Actor {actor_id}: {e}")
             return json.dumps([{"error": f"Error running Apify Actor {actor_id}: {e}"}])
+
+    # -- 3.  Patch the signature so schema generation works --------------
+    actor_function.__signature__ = sig
+    # Also set __annotations__ for _typing_extra.get_function_type_hints
+    annotations: Dict[str, type] = {"return": str}
+    for p in params:
+        if p.name != "self" and p.annotation is not inspect.Parameter.empty:
+            annotations[p.name] = p.annotation
+    actor_function.__annotations__ = annotations
 
     return actor_function
 
@@ -153,7 +209,7 @@ class ApifyTools(ToolKit):
             docstring += "\nReturns:\n    str: JSON string containing the Actor's output dataset\n"
 
             # Create the function and set metadata
-            func = _make_actor_function(actor_id, self.client)
+            func = _make_actor_function(actor_id, self.client, properties, required)
             func.__name__ = tool_name
             func.__qualname__ = f"ApifyTools.{tool_name}"
             func.__doc__ = docstring
@@ -161,6 +217,9 @@ class ApifyTools(ToolKit):
             # Mark as tool (same attributes the @tool decorator sets)
             func._upsonic_tool_config = ToolConfig()
             func._upsonic_is_tool = True
+            # Provide a rich JSON schema override so the LLM gets accurate
+            # array item types, enums, nested objects, and Apify editor types.
+            func._json_schema_override = props_to_json_schema(properties, required)
 
             # Bind as a method on this instance so inspect.ismethod picks it up
             bound_method = types.MethodType(func, self)
