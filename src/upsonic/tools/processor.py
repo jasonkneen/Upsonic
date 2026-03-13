@@ -230,6 +230,12 @@ class ToolProcessor:
             config=config
         )
 
+        # Allow tools to provide a pre-built JSON schema (e.g. Apify actors
+        # whose input schema is richer than what Python type hints express).
+        json_override = getattr(func, '_json_schema_override', None)
+        if json_override is not None:
+            tool_obj.schema.json_schema = json_override
+
         if config.requires_confirmation:
             confirm_suffix: str = (
                 "\n\nIMPORTANT: This tool requires confirmation before execution. "
