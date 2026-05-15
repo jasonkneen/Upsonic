@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.77.1](https://github.com/Upsonic/Upsonic/compare/v0.77.0...v0.77.1) (2026-05-15)
+
+
+### Bug Fixes
+
+* **ci:** use uv publish instead of pypa action ([f0277e8](https://github.com/Upsonic/Upsonic/commit/f0277e8292f0f1484bdfb8933787a85bcc9d73a1))
+
 ## [0.77.0](https://github.com/Upsonic/Upsonic/compare/v0.76.2...v0.77.0) (2026-05-15)
 
 
