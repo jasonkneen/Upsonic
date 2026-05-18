@@ -111,6 +111,11 @@ class AgentRunOutput:
     # response: Current ModelResponse
     response: Optional["ModelResponse"] = None
     usage: Optional["TaskUsage"] = None
+    # Snapshot of ``usage`` at the moment it was last accumulated into
+    # agent-level usage. Subsequent accumulations subtract this baseline
+    # (delta) so retry / HITL resume can't double-count. None until first
+    # accumulation.
+    _agent_usage_baseline: Optional["TaskUsage"] = None
     additional_input_message: Optional[List["ModelRequest"]] = None
     
     # Memory tracking
@@ -745,7 +750,15 @@ class AgentRunOutput:
             result["usage"] = self.usage.to_dict()
         else:
             result["usage"] = None
-        
+
+        # _agent_usage_baseline: snapshot taken at last accumulation into
+        # agent-level usage. Carries across storage so cross-process resume
+        # can correctly compute the delta.
+        if self._agent_usage_baseline is not None:
+            result["_agent_usage_baseline"] = self._agent_usage_baseline.to_dict()
+        else:
+            result["_agent_usage_baseline"] = None
+
         # additional_input_message: ModelMessagesTypeAdapter
         if self.additional_input_message:
             result["additional_input_message"] = ModelMessagesTypeAdapter.dump_python(
@@ -953,7 +966,13 @@ class AgentRunOutput:
             usage = TaskUsage.from_dict(usage_data)
         else:
             usage = usage_data
-        
+
+        baseline_data = data.get("_agent_usage_baseline")
+        if baseline_data and isinstance(baseline_data, dict):
+            agent_usage_baseline = TaskUsage.from_dict(baseline_data)
+        else:
+            agent_usage_baseline = baseline_data
+
         # Handle additional_input_message: ModelMessagesTypeAdapter
         additional_input_message_data = data.get("additional_input_message")
         if additional_input_message_data and isinstance(additional_input_message_data, list):
@@ -1076,6 +1095,7 @@ class AgentRunOutput:
             messages=messages,
             response=response,
             usage=usage,
+            _agent_usage_baseline=agent_usage_baseline,
             additional_input_message=additional_input_message,
             memory_message_count=data.get("memory_message_count", 0),
             tools=tools,
