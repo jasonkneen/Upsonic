@@ -248,6 +248,7 @@ class Agent(BaseAgent):
         context_management_model: Optional[str] = None,
         reliability_layer: Optional[Any] = None,
         agent_id_: Optional[str] = None,
+        agent_usage_id: Optional[str] = None,
         canvas: Optional["Canvas"] = None,
         retry: int = 1,
         mode: RetryMode = "raise",
@@ -391,7 +392,8 @@ class Agent(BaseAgent):
 
         self.name = name
         self.agent_id_ = agent_id_
-        
+        self._agent_usage_id = agent_usage_id
+
         # Session/user overrides
         self._override_session_id = session_id
         self._override_user_id = user_id
@@ -578,8 +580,6 @@ class Agent(BaseAgent):
         self._tool_call_count = 0
         self._tool_limit_reached = False
         
-        # Agent-level accumulated usage across all tasks
-        self.usage: Optional["AgentUsage"] = None
         
         # Run cancellation tracking
         self.run_id: Optional[str] = None
@@ -779,7 +779,31 @@ class Agent(BaseAgent):
         if self.agent_id_ is None:
             self.agent_id_ = str(uuid.uuid4())
         return self.agent_id_
-    
+
+    @property
+    def agent_usage_id(self) -> str:
+        """Stable id used by the usage registry to tag every ledger entry
+        produced by this agent. Lazily generated; distinct from
+        :attr:`agent_id` so callers can scope usage across many agents that
+        share the same logical agent_id (e.g. recreated per-request)."""
+        if self._agent_usage_id is None:
+            from upsonic.usage_registry import new_usage_id
+            self._agent_usage_id = new_usage_id("agent")
+        return self._agent_usage_id
+
+    @property
+    def usage(self) -> Any:
+        """Aggregated token / cost / timing for every ledger entry
+        recorded under this agent's scope.
+
+        Returns an :class:`AggregatedUsage` view derived from the
+        usage registry. Shape is API-compatible with the previous
+        ``AgentUsage`` (input_tokens, output_tokens, requests, cost,
+        duration, ...) so callers don't need to know it's now derived.
+        """
+        from upsonic.usage_registry import get_default_registry
+        return get_default_registry().by_agent(self.agent_usage_id)
+
     @property
     def session_id(self) -> Optional[str]:
         """Get session_id from override, memory, or db."""
@@ -885,56 +909,6 @@ class Agent(BaseAgent):
 
         return TaskUsageCls()
 
-    @property
-    def cost(self) -> Optional[Dict[str, Any]]:
-        """
-        Aggregated token usage and estimated cost across every task this
-        agent has executed.
-
-        Mirrors the shape of :meth:`Task.get_total_cost` but accumulates
-        across all ``do`` / ``do_async`` / ``run`` / ``run_async`` calls
-        on this agent instance. Autonomous agents (and prebuilts like
-        :class:`AppliedScientist`) frequently dispatch several tasks per
-        run — bootstrap, workspace greeting, the user's prompt, internal
-        sub-agents — so ``autonomous_agent.cost`` reports the full session
-        spend, not just the last task.
-
-        Returns:
-            Dict with ``input_tokens``, ``output_tokens``, ``total_tokens``,
-            ``estimated_cost`` (USD), ``requests``, ``tool_calls``,
-            ``cache_read_tokens``, ``cache_write_tokens``, and
-            ``reasoning_tokens``. ``estimated_cost`` is ``None`` when the
-            model's pricing cannot be resolved. Returns ``None`` if no
-            tasks have been executed yet.
-        """
-        usage = self.usage
-        if usage is None:
-            return None
-
-        input_tokens: int = usage.input_tokens or 0
-        output_tokens: int = usage.output_tokens or 0
-
-        estimated_cost: Optional[float] = usage.cost
-        if estimated_cost is None:
-            try:
-                from upsonic.utils.usage import calculate_cost_from_usage
-                model = self.model or self.model_name
-                if model is not None:
-                    estimated_cost = calculate_cost_from_usage(usage, model)
-            except Exception:
-                estimated_cost = None
-
-        return {
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "total_tokens": input_tokens + output_tokens,
-            "estimated_cost": float(estimated_cost) if estimated_cost is not None else None,
-            "requests": usage.requests,
-            "tool_calls": usage.tool_calls,
-            "cache_read_tokens": usage.cache_read_tokens,
-            "cache_write_tokens": usage.cache_write_tokens,
-            "reasoning_tokens": usage.reasoning_tokens,
-        }
 
     def _create_agent_run_input(self, task: "Task") -> AgentRunInput:
         """
@@ -2409,13 +2383,12 @@ class Agent(BaseAgent):
                     tool_call_info=tool_call_info,
                     check_type="Post-Execution Tool Call Validation"
                 )
-                
-                # Drain and aggregate sub-agent usage from tool policy LLM calls
-                tool_policy_usage = self.tool_policy_post_manager.drain_accumulated_usage()
-                if tool_policy_usage is not None and hasattr(self, '_agent_run_output') and self._agent_run_output:
-                    usage = self._agent_run_output._ensure_usage()
-                    usage.incr(tool_policy_usage)
-                
+
+                # Tool policy's internal LLM calls already landed in the
+                # usage registry under the inherited agent_usage_id /
+                # task_usage_id, so no manual roll-up onto the run's
+                # legacy snapshot is needed.
+
                 if validation_result.should_block():
                     # Handle blocking based on action type
                     # If DisallowedOperation was raised by a RAISE action policy, re-raise it
@@ -2476,10 +2449,7 @@ class Agent(BaseAgent):
                         if self._agent_run_output.tools is None:
                             self._agent_run_output.tools = []
                         self._agent_run_output.tools.append(tool_exec)
-                    
-                    if hasattr(self, '_agent_run_output') and self._agent_run_output:
-                        self._drain_agent_tool_usage(tool_call.tool_name)
-                    
+
                     if self.debug and self.debug_level >= 2:
                         from upsonic.utils.printing import debug_log_level2
                         tool_def = tool_defs.get(tool_call.tool_name)
@@ -2554,13 +2524,10 @@ class Agent(BaseAgent):
                         tool_call_info=tool_call_info,
                         check_type="Post-Execution Tool Call Validation"
                     )
-                    
-                    # Drain and aggregate sub-agent usage from tool policy LLM calls (parallel path)
-                    tool_policy_usage = self.tool_policy_post_manager.drain_accumulated_usage()
-                    if tool_policy_usage is not None and hasattr(self, '_agent_run_output') and self._agent_run_output:
-                        usage = self._agent_run_output._ensure_usage()
-                        usage.incr(tool_policy_usage)
-                    
+
+                    # See the sync path: tool-policy LLM usage is already
+                    # in the registry under the parent's scope tags.
+
                     if validation_result.should_block():
                         # Handle blocking based on action type
                         # If DisallowedOperation was raised by a RAISE action policy, re-raise it
@@ -2600,9 +2567,6 @@ class Agent(BaseAgent):
                             if self._agent_run_output.tools is None:
                                 self._agent_run_output.tools = []
                             self._agent_run_output.tools.append(tool_exec)
-
-                        if hasattr(self, '_agent_run_output') and self._agent_run_output:
-                            self._drain_agent_tool_usage(tool_call.tool_name)
 
                         self._otel.set_tool_result(otel_tool_span, _tool_elapsed, success=True, output=result.content)
                         
@@ -2715,12 +2679,10 @@ class Agent(BaseAgent):
                     # Ensure culture is prepared
                     if not self._culture_manager.prepared:
                         await self._culture_manager.aprepare()
-                        
-                        # Drain culture extraction LLM usage into run output
-                        if hasattr(self, '_agent_run_output') and self._agent_run_output:
-                            culture_usage = self._culture_manager.drain_accumulated_usage()
-                            if culture_usage:
-                                self._agent_run_output.usage.incr(culture_usage)
+                        # Culture's own LLM call was emitted into the usage
+                        # registry under the active agent_usage_id by the
+                        # Phase-2 hook, so no manual roll-up onto
+                        # ``_agent_run_output.usage`` is needed.
                     
                     culture_formatted = self._culture_manager.format_for_system_prompt()
                     if culture_formatted:
@@ -2802,15 +2764,15 @@ class Agent(BaseAgent):
             
             if hasattr(self, '_agent_run_output') and self._agent_run_output:
                 self._agent_run_output.add_model_execution_time(_retry_model_elapsed)
-                if hasattr(retry_response, 'usage') and retry_response.usage:
-                    self._agent_run_output._ensure_usage().incr(retry_response.usage)
-                    try:
-                        from upsonic.utils.usage import calculate_cost_from_usage
-                        cost_value: float = calculate_cost_from_usage(retry_response.usage, self.model)
-                        self._agent_run_output.set_usage_cost(cost_value)
-                    except Exception:
-                        pass
-            
+                from upsonic.usage_registry import record_response_usage
+                record_response_usage(
+                    retry_response,
+                    model=self.model,
+                    pipeline_step="model_call_retry",
+                    model_execution_time=_retry_model_elapsed,
+                    run_output=self._agent_run_output,
+                )
+
             return await self._handle_model_response(retry_response, messages)
         
         if regular_tool_calls:
@@ -2890,14 +2852,14 @@ class Agent(BaseAgent):
                 
                 if hasattr(self, '_agent_run_output') and self._agent_run_output:
                     self._agent_run_output.add_model_execution_time(_limit_model_elapsed)
-                    if hasattr(final_response, 'usage') and final_response.usage:
-                        self._agent_run_output._ensure_usage().incr(final_response.usage)
-                        try:
-                            from upsonic.utils.usage import calculate_cost_from_usage
-                            cost_value: float = calculate_cost_from_usage(final_response.usage, self.model)
-                            self._agent_run_output.set_usage_cost(cost_value)
-                        except Exception:
-                            pass
+                    from upsonic.usage_registry import record_response_usage
+                    record_response_usage(
+                        final_response,
+                        model=self.model,
+                        pipeline_step="model_call_final",
+                        model_execution_time=_limit_model_elapsed,
+                        run_output=self._agent_run_output,
+                    )
                 
                 return final_response
             
@@ -2963,14 +2925,14 @@ class Agent(BaseAgent):
             
             if hasattr(self, '_agent_run_output') and self._agent_run_output:
                 self._agent_run_output.add_model_execution_time(_followup_model_elapsed)
-                if hasattr(follow_up_response, 'usage') and follow_up_response.usage:
-                    self._agent_run_output._ensure_usage().incr(follow_up_response.usage)
-                    try:
-                        from upsonic.utils.usage import calculate_cost_from_usage
-                        cost_value: float = calculate_cost_from_usage(follow_up_response.usage, self.model)
-                        self._agent_run_output.set_usage_cost(cost_value)
-                    except Exception:
-                        pass
+                from upsonic.usage_registry import record_response_usage
+                record_response_usage(
+                    follow_up_response,
+                    model=self.model,
+                    pipeline_step="model_call_follow_up",
+                    model_execution_time=_followup_model_elapsed,
+                    run_output=self._agent_run_output,
+                )
             
             return await self._handle_model_response(follow_up_response, messages)
         
@@ -2992,28 +2954,15 @@ class Agent(BaseAgent):
                 summarization_model: "Model" = self._context_management_middleware._get_summarization_model()
                 cost_value: float = calculate_cost_from_usage(summarization_usage, summarization_model)
                 self._agent_run_output.set_usage_cost(cost_value)
+                # Note: summarization's own model.request inside the
+                # context-management middleware emits its own UsageEntry
+                # under the inherited scope tags. Recording here would
+                # double-count, so this site only updates the per-run
+                # snapshot — the registry already has the row.
             except Exception:
                 pass
             # Reset to prevent double-counting on next apply() call
             self._context_management_middleware._last_summarization_usage = None
-    
-    def _drain_agent_tool_usage(self, tool_name: str) -> None:
-        """Drain accumulated usage from AgentTool sub-agent executions into the parent AgentRunOutput.
-        
-        Args:
-            tool_name: The name of the tool that was just executed
-        """
-        from upsonic.tools.wrappers import AgentTool
-        
-        registered_tool = self.tool_manager.registry.registered_tools.get(tool_name)
-        if registered_tool is None:
-            current_task = getattr(self, 'current_task', None)
-            if current_task is not None and current_task.tool_manager is not None:
-                registered_tool = current_task.tool_manager.registry.registered_tools.get(tool_name)
-        if registered_tool and isinstance(registered_tool, AgentTool):
-            agent_tool_usage = registered_tool.drain_accumulated_usage()
-            if agent_tool_usage is not None:
-                self._agent_run_output.usage.incr(agent_tool_usage)
     
     async def _handle_cache(self, task: "Task") -> Optional[Any]:
         """Handle cache operations for the task."""
@@ -3158,10 +3107,9 @@ class Agent(BaseAgent):
             agent=self,
         )
 
-        user_policy_usage = self.user_policy_manager.drain_accumulated_usage()
-        if user_policy_usage is not None:
-            usage = context._ensure_usage()
-            usage.incr(user_policy_usage)
+        # User-policy LLM usage is recorded directly into the registry
+        # under the active scope tags by its own emission hook, so no
+        # rollup onto the run's legacy snapshot is needed.
 
         # ----- 3. Emit streaming events -----
         action_mapping = {
@@ -3353,15 +3301,15 @@ class Agent(BaseAgent):
             
             if hasattr(self, '_agent_run_output') and self._agent_run_output:
                 self._agent_run_output.add_model_execution_time(_guardrail_model_elapsed)
-                if hasattr(response, 'usage') and response.usage:
-                    self._agent_run_output._ensure_usage().incr(response.usage)
-                    try:
-                        from upsonic.utils.usage import calculate_cost_from_usage
-                        cost_value: float = calculate_cost_from_usage(response.usage, self.model)
-                        self._agent_run_output.set_usage_cost(cost_value)
-                    except Exception:
-                        pass
-            
+                from upsonic.usage_registry import record_response_usage
+                record_response_usage(
+                    response,
+                    model=self.model,
+                    pipeline_step="guardrail",
+                    model_execution_time=_guardrail_model_elapsed,
+                    run_output=self._agent_run_output,
+                )
+
             current_model_response = await self._handle_model_response(response, messages)
             
             if task.guardrail is None:
@@ -3791,18 +3739,12 @@ class Agent(BaseAgent):
             return validation_error.output
 
         if not is_resuming and effective_retry > 1 and task.is_problematic:
-            # Capture the failed attempt's partial usage into agent-level
-            # before reset_run_state drops it; _finalize_agent_usage skipped
-            # this on error (is_paused=True). Retry path only — resume goes
-            # through continue_run_async, which accumulates after completion.
-            prev_output = getattr(self, '_agent_run_output', None)
-            prev_usage = getattr(prev_output, 'usage', None) if prev_output else None
-            if prev_usage is not None:
-                self._accumulate_run_usage(prev_usage)
-
-            # Clear per-attempt task state for a clean retry — especially
-            # is_paused=True (set on error), which would otherwise keep
-            # _finalize_agent_usage from accumulating on a successful retry.
+            # Clear per-attempt task state for a clean retry. Failed-attempt
+            # usage doesn't need a separate "capture before reset" step
+            # anymore — every model.request response was already written to
+            # the usage registry under this agent_usage_id at emission time
+            # (Phase 2), so the agent.usage view rolls them up regardless
+            # of whether the run paused / errored / cancelled.
             task.reset_run_state()
             # Clear the stale output from the previous failed attempt so no code
             # can accidentally read its error status before the new output is created.
@@ -3811,11 +3753,22 @@ class Agent(BaseAgent):
         # Only reset per-run agent state for fresh runs — HITL resume should
         # keep existing state so cost and tool counts aggregate correctly.
         if not is_resuming:
-            import uuid as _uuid
-            task.price_id_ = str(_uuid.uuid4())
             self._tool_call_count = 0
             self._tool_limit_reached = False
         self._last_built_system_prompt = None
+
+        # Push agent + task scope onto the usage-registry contextvars so the
+        # Phase-2 emission point at the model call sees them. Sub-agent runs
+        # (memory summarisation, reliability validator/editor, tool-driven
+        # nested agents) INHERIT the parent's scope rather than pushing a
+        # fresh one — per the agreed "no separate structure, write to the
+        # active id" default. Tokens reset in the finally below.
+        from upsonic.usage_registry import push_scope_tags
+        _scope_tokens = push_scope_tags(
+            agent_usage_id=self.agent_usage_id,
+            task_usage_id=getattr(task, "task_usage_id", None),
+            inherit=True,
+        )
 
         if debug or self.debug:
             self.user_policy_manager.debug = True
@@ -3831,6 +3784,10 @@ class Agent(BaseAgent):
             run_id = str(uuid.uuid4())
             self.run_id = run_id
             register_run(run_id)
+
+        # Push run_id onto the scope contextvar — each agent.do_async
+        # invocation IS a distinct run, so no inherit semantics here.
+        _scope_tokens += push_scope_tags(run_id=run_id)
 
         original_model: Optional["Model"] = None
         try:
@@ -3892,12 +3849,25 @@ class Agent(BaseAgent):
         finally:
             if original_model is not None:
                 self.model = original_model
-            self._finalize_agent_usage(resolved_print_flag)
             # Keep run_id alive when task is paused (HITL) — the run is still active
             _output = getattr(self, '_agent_run_output', None)
             _is_paused = getattr(_output.task, 'is_paused', False) if _output and _output.task else False
+            if (
+                resolved_print_flag
+                and _output is not None
+                and _output.task is not None
+                and not getattr(_output.task, 'not_main_task', False)
+                and not _is_paused
+            ):
+                from upsonic.utils.printing import print_agent_metrics
+                print_agent_metrics(self, print_output=resolved_print_flag)
             if not _is_paused:
                 self.run_id = None
+            # Pop usage-registry scope tags pushed at function entry —
+            # only the ones we actually pushed (sub-agent runs inherit
+            # and leave the parent's tokens alone).
+            from upsonic.usage_registry import reset_scope_tags
+            reset_scope_tags(_scope_tokens)
 
     def _calculate_aggregated_cost(self) -> Optional[float]:
         """Calculate the aggregated monetary cost across the agent run.
@@ -4043,7 +4013,7 @@ class Agent(BaseAgent):
 
         The streaming pipeline lacks CallManagementStep, so when do_async()
         uses streaming internally (partial_on_timeout), we run it manually
-        so that task.total_input_token / total_output_token work.
+        so that task-level usage / metrics are recorded.
         """
         try:
             from upsonic.agent.pipeline.steps import CallManagementStep
@@ -4054,136 +4024,6 @@ class Agent(BaseAgent):
             )
         except Exception:
             pass  # Best-effort — don't let tracking errors mask the result
-
-    def _accumulate_run_usage(self, task_usage: Optional["TaskUsage"]) -> None:
-        """Accumulate a task's usage metrics into the agent-level usage.
-
-        Args:
-            task_usage: The TaskUsage from a completed task. If None, no-op.
-        """
-        if task_usage is None:
-            return
-
-        from upsonic.usage import AgentUsage
-
-        if self.usage is None:
-            self.usage = AgentUsage()
-
-        self.usage.incr(task_usage)
-
-    def _finalize_agent_usage(self, print_flag: bool) -> None:
-        """Accumulate current run usage into agent-level usage and optionally print agent metrics.
-
-        Should be called at the end of every do_async / astream execution.
-        Skips both accumulation AND printing when the task is paused
-        (``is_paused=True``, set for HITL pause, error, and cancellation
-        because all three may be resumed via ``continue_run_async`` — the
-        same ``TaskUsage`` instance persists across resume rounds and is
-        accumulated once the run finally completes).
-
-        Uses a baseline snapshot on the output (``_agent_usage_baseline``) to
-        avoid double-counting when the run has already been accumulated once
-        (e.g. by the retry-exhaustion hook before the user resumed via
-        ``continue_run_async``). When a baseline is present, only the delta
-        of work performed since the baseline is accumulated. The baseline is
-        refreshed after each accumulation so successive calls remain correct.
-
-        For the in-process retry path the failed attempt's usage is captured
-        separately by the retry block in ``do_async`` (before
-        ``reset_run_state`` discards the TaskUsage), so this method does not
-        need to special-case retry.
-
-        Args:
-            print_flag: Whether printing is enabled for this execution.
-        """
-        output = getattr(self, '_agent_run_output', None)
-        if output is None:
-            return
-
-        task = output.task
-        is_paused: bool = getattr(task, 'is_paused', False) if task else False
-
-        if not is_paused:
-            usage = getattr(output, 'usage', None)
-            if usage is not None:
-                baseline = getattr(output, '_agent_usage_baseline', None)
-                if baseline is None:
-                    self._accumulate_run_usage(usage)
-                else:
-                    delta = usage.subtract(baseline)
-                    self._accumulate_run_usage(delta)
-                # Refresh baseline so any subsequent finalize only counts new work.
-                output._agent_usage_baseline = usage.snapshot()
-
-        if print_flag and task and not getattr(task, 'not_main_task', False) and not is_paused:
-            from upsonic.utils.printing import print_agent_metrics
-            print_agent_metrics(self, print_output=print_flag)
-
-    async def _on_retries_exhausted(self) -> None:
-        """Hook invoked by ``@retryable`` after all retry attempts have failed.
-
-        Captures the final failed attempt's usage into agent-level usage so
-        retry metrics stay complete even when the user discards the failed
-        task. Records a baseline snapshot on the output so that any
-        subsequent ``continue_run_async`` (resume after retry exhaustion)
-        will only add the *delta* of post-resume work — preventing the
-        previously-captured portion from being double-counted.
-
-        Re-persists the *output state only* to storage (if memory is
-        configured) so the baseline survives a cross-process resume. The
-        pipeline's durable error save already wrote the session's messages
-        and the initial output before this hook ran, so we cannot call the
-        full ``save_session_async`` here — it would append the same
-        messages a second time. Instead we directly upsert the existing
-        session's run output through the storage layer, which is
-        idempotent for the run dict.
-        """
-        output = getattr(self, '_agent_run_output', None)
-        if output is None:
-            return
-        usage = getattr(output, 'usage', None)
-        if usage is None:
-            return
-        self._accumulate_run_usage(usage)
-        output._agent_usage_baseline = usage.snapshot()
-
-        if self.memory is None:
-            return
-
-        try:
-            from upsonic.session.base import SessionType
-            from upsonic.storage.memory.storage_dispatch import is_async_storage_backend
-
-            storage = self.memory.storage
-            session_id = self.memory.session_id
-            if storage is None or session_id is None:
-                return
-
-            if is_async_storage_backend(storage):
-                session = await storage.aget_session(
-                    session_id=session_id,
-                    session_type=SessionType.AGENT,
-                    deserialize=True,
-                )
-            else:
-                session = storage.get_session(
-                    session_id=session_id,
-                    session_type=SessionType.AGENT,
-                    deserialize=True,
-                )
-
-            if session is None:
-                return
-
-            # Idempotent: only updates the run dict's output, doesn't touch messages.
-            session.upsert_run(output)
-
-            if is_async_storage_backend(storage):
-                await storage.aupsert_session(session, deserialize=True)
-            else:
-                storage.upsert_session(session, deserialize=True)
-        except Exception:
-            pass  # Best-effort — don't let storage errors mask the original exception
 
     def _extract_output(self, task: "Task", response: "ModelResponse") -> Any:
         """Extract the output from a model response."""
@@ -4562,15 +4402,23 @@ class Agent(BaseAgent):
             return
 
         # Reset per-run state (same as do_async for fresh runs)
-        import uuid as _uuid
-        task.price_id_ = str(_uuid.uuid4())
         self._tool_call_count = 0
         self._tool_limit_reached = False
         self._last_built_system_prompt = None
 
+        # Push usage scope for the duration of the stream — symmetric with
+        # do_async, including the inherit-don't-override sub-agent rule.
+        from upsonic.usage_registry import push_scope_tags
+        _scope_tokens = push_scope_tags(
+            agent_usage_id=self.agent_usage_id,
+            task_usage_id=getattr(task, "task_usage_id", None),
+            inherit=True,
+        )
+
         run_id = str(uuid.uuid4())
         self.run_id = run_id
         register_run(run_id)
+        _scope_tokens += push_scope_tags(run_id=run_id)
         
         original_model: Optional["Model"] = None
         try:
@@ -4649,10 +4497,25 @@ class Agent(BaseAgent):
             if original_model is not None:
                 self.model = original_model
             stream_print_flag = self._resolve_print_flag(False)
-            self._finalize_agent_usage(stream_print_flag)
+            _stream_output_ref = getattr(self, '_agent_run_output', None)
+            _stream_is_paused = (
+                getattr(_stream_output_ref.task, 'is_paused', False)
+                if _stream_output_ref and _stream_output_ref.task else False
+            )
+            if (
+                stream_print_flag
+                and _stream_output_ref is not None
+                and _stream_output_ref.task is not None
+                and not getattr(_stream_output_ref.task, 'not_main_task', False)
+                and not _stream_is_paused
+            ):
+                from upsonic.utils.printing import print_agent_metrics
+                print_agent_metrics(self, print_output=stream_print_flag)
             cleanup_run(run_id)
             self.run_id = None
-    
+            from upsonic.usage_registry import reset_scope_tags
+            reset_scope_tags(_scope_tokens)
+
     def _extract_text_from_stream_event(self, event: Any) -> Optional[str]:
         """Extract text content from a streaming event.
         
@@ -4880,7 +4743,7 @@ class Agent(BaseAgent):
             CacheStorageStep(),                # 18
             StreamFinalizationStep(),          # 19
             StreamMemoryMessageTrackingStep(), # 20 <-- Saves AgentSession + task_end()
-            CallManagementStep(),              # 21 <-- LAST: Records usage to price_id_summary
+            CallManagementStep(),              # 21 <-- LAST: Records usage
         ]
     
     def _create_full_pipeline_steps(self, is_streaming: bool = False) -> List[Any]:
